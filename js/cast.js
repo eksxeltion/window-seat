@@ -15,12 +15,63 @@ const quietly = (fn) => {
 };
 
 let session = null;
-let remote = { camId: null, camTitle: "", mixId: null, mixTitle: "", pinned: false, interval: 60, volume: 60 };
+let remote = { camId: null, camTitle: "", mixId: null, mixTitle: "", pinned: false, interval: 60, volume: 60, muted: false, musicPaused: false };
+let lastReplyAt = 0; // last state message from the TV
+let replyTimer = 0;
+let warnedNoReply = false;
 let hooks = null;
 const ui = {};
 
-function send(cmd) {
-  if (session) quietly(() => session.sendMessage(RECEIVER_NAMESPACE, cmd));
+const SEND_ERRORS = {
+  timeout: "the TV did not answer in time",
+  channel_error: "the connection to the TV dropped",
+  session_error: "the Cast session ended",
+  invalid_parameter: "invalid message",
+  api_not_initialized: "Cast is still starting",
+};
+
+/* Send one command to the TV over the custom namespace. Errors and missing replies are shown, never swallowed. */
+function send(cmd, opts = {}) {
+  if (!session) {
+    if (!opts.silent) say("Not connected to the TV. Tap Cast again.");
+    return;
+  }
+  const sentAt = Date.now();
+  let p;
+  try {
+    // JSON text: the receiver declares this namespace as JSON and parses it.
+    p = session.sendMessage(RECEIVER_NAMESPACE, JSON.stringify(cmd));
+  } catch (e) {
+    say(`Could not send to the TV: ${(e && e.message) || e}`);
+    return;
+  }
+  Promise.resolve(p).then(
+    (code) => code && say(`Could not send to the TV: ${SEND_ERRORS[code] || code}`),
+    (code) => say(`Could not send to the TV: ${SEND_ERRORS[(code && code.code) || code] || (code && code.code) || code}`),
+  );
+  if (opts.silent) return;
+  clearTimeout(replyTimer);
+  replyTimer = setTimeout(() => {
+    if (lastReplyAt >= sentAt) return;
+    setRemoteStatus("Sent, but no reply from the TV yet");
+    if (!warnedNoReply) {
+      warnedNoReply = true;
+      say("Sent to the TV, but it has not replied. If nothing changes, tap Stop casting and cast again.");
+    }
+  }, 4000);
+}
+
+function setRemoteStatus(text) {
+  if (ui.status) ui.status.textContent = text;
+}
+
+/* Update the phone UI right away; the TV's state reply then confirms or corrects it. */
+function act(cmd, patch) {
+  if (patch) {
+    remote = { ...remote, ...patch };
+    renderRemote();
+  }
+  send(cmd);
 }
 
 function buildRemote() {
@@ -45,7 +96,16 @@ function buildRemote() {
       <output id="remote-vol">60</output>
       <button class="btn" type="button" data-cmd="vol-up">Volume +</button>
     </div>
+    <div class="remote-row">
+      <button class="btn" type="button" data-cmd="mute" id="remote-mute" aria-pressed="false">Mute</button>
+      <button class="btn" type="button" data-cmd="play" id="remote-play">Pause music</button>
+      <button class="btn" type="button" data-cmd="next-mix">Next mix</button>
+    </div>
+    <p class="remote-status" id="remote-status" role="status">Waiting for the TV...</p>
+    <h3 class="remote-head">Music</h3>
     <ol class="remote-mixes" id="remote-mixes"></ol>
+    <h3 class="remote-head">Show a cam now</h3>
+    <ol class="remote-mixes" id="remote-cams"></ol>
     <button class="btn btn-primary" type="button" data-cmd="stop">Stop casting</button>`;
   document.body.append(root);
   ui.root = root;
@@ -54,6 +114,9 @@ function buildRemote() {
   ui.vol = $("#remote-vol");
   ui.pin = $("#remote-pin");
   ui.device = $("#remote-device");
+  ui.mute = $("#remote-mute");
+  ui.play = $("#remote-play");
+  ui.status = $("#remote-status");
   const list = $("#remote-mixes");
   for (const m of MIXES) {
     const li = document.createElement("li");
@@ -65,25 +128,53 @@ function buildRemote() {
     li.append(b);
     list.append(li);
   }
+  const camList = $("#remote-cams");
+  for (const c of CAMS) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn";
+    b.dataset.cam = c.id;
+    b.textContent = `${c.title} (${c.place})`;
+    li.append(b);
+    camList.append(li);
+  }
   root.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b) return;
-    if (b.dataset.mix) return send({ type: "mix", id: b.dataset.mix });
+    if (b.dataset.mix) {
+      const m = MIXES.find((x) => x.id === b.dataset.mix);
+      return act({ type: "mix", id: b.dataset.mix }, { mixId: b.dataset.mix, mixTitle: m ? m.en : "", musicPaused: false });
+    }
+    if (b.dataset.cam) {
+      const c = CAMS.find((x) => x.id === b.dataset.cam);
+      return act({ type: "cam", id: b.dataset.cam }, { camId: b.dataset.cam, camTitle: c ? c.title : "" });
+    }
     switch (b.dataset.cmd) {
       case "prev":
-        return send({ type: "prev" });
+        return act({ type: "prev" });
       case "next":
-        return send({ type: "next" });
+        return act({ type: "next" });
       case "pin":
-        return send({ type: "pin", value: !remote.pinned });
+        return act({ type: "pin", value: !remote.pinned }, { pinned: !remote.pinned });
       case "i30":
-        return send({ type: "interval", value: 30 });
+        return act({ type: "interval", value: 30 }, { interval: 30 });
       case "i60":
-        return send({ type: "interval", value: 60 });
-      case "vol-down":
-        return send({ type: "volume", value: Math.max(0, remote.volume - 10) });
-      case "vol-up":
-        return send({ type: "volume", value: Math.min(100, remote.volume + 10) });
+        return act({ type: "interval", value: 60 }, { interval: 60 });
+      case "vol-down": {
+        const v = Math.max(0, remote.volume - 10);
+        return act({ type: "volume", value: v }, { volume: v, muted: v === 0 ? remote.muted : false });
+      }
+      case "vol-up": {
+        const v = Math.min(100, remote.volume + 10);
+        return act({ type: "volume", value: v }, { volume: v, muted: false });
+      }
+      case "mute":
+        return act({ type: "mute", value: !remote.muted }, { muted: !remote.muted });
+      case "play":
+        return act({ type: "playMusic", value: remote.musicPaused }, { musicPaused: !remote.musicPaused });
+      case "next-mix":
+        return act({ type: "nextMix" });
       case "stop":
         return quietly(() => cast.framework.CastContext.getInstance().endCurrentSession(true));
       default:
@@ -99,12 +190,19 @@ function renderRemote() {
   ui.root.querySelector('[data-cmd="i30"]').setAttribute("aria-pressed", String(remote.interval === 30));
   ui.root.querySelector('[data-cmd="i60"]').setAttribute("aria-pressed", String(remote.interval !== 30));
   ui.root.querySelectorAll("[data-mix]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mix === remote.mixId)));
+  ui.root.querySelectorAll("[data-cam]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.cam === remote.camId)));
+  ui.mute.setAttribute("aria-pressed", String(!!remote.muted));
+  ui.mute.textContent = remote.muted ? "Unmute" : "Mute";
+  ui.play.textContent = remote.musicPaused ? "Play music" : "Pause music";
 }
 
 function onMessage(_ns, raw) {
   const msg = typeof raw === "string" ? quietly(() => JSON.parse(raw)) : raw;
   if (!msg || msg.type !== "state") return;
+  lastReplyAt = Date.now();
+  warnedNoReply = false;
   remote = { ...remote, ...msg };
+  setRemoteStatus("Connected. The TV confirms each tap.");
   renderRemote();
 }
 
@@ -114,6 +212,9 @@ function onSessionStarted(s, resumed) {
   ui.device.textContent = quietly(() => s.getCastDevice().friendlyName) || "TV";
   document.body.classList.add("casting");
   ui.root.hidden = false;
+  lastReplyAt = 0;
+  warnedNoReply = false;
+  setRemoteStatus("Waiting for the TV...");
   hooks.onStart();
   renderRemote();
   if (resumed) {
@@ -121,11 +222,17 @@ function onSessionStarted(s, resumed) {
     return;
   }
   const local = hooks.getLocal();
-  if (local.camId && CAMS.some((c) => c.id === local.camId)) send({ type: "cam", id: local.camId });
-  send({ type: "pin", value: false });
-  send({ type: "interval", value: local.interval });
-  send({ type: "volume", value: local.volume });
-  send({ type: "mix", id: local.mixId });
+  const mix = MIXES.find((m) => m.id === local.mixId);
+  remote = { ...remote, interval: local.interval, volume: local.volume, muted: !!local.muted, mixId: local.mixId, mixTitle: mix ? mix.en : "", pinned: false, musicPaused: false };
+  renderRemote();
+  const quiet = { silent: true };
+  if (Array.isArray(local.camIds)) send({ type: "cams", ids: local.camIds, silent: true }, quiet);
+  if (local.camId && CAMS.some((c) => c.id === local.camId)) send({ type: "cam", id: local.camId, silent: true }, quiet);
+  send({ type: "pin", value: false, silent: true }, quiet);
+  send({ type: "interval", value: local.interval, silent: true }, quiet);
+  send({ type: "volume", value: local.volume, silent: true }, quiet);
+  send({ type: "mute", value: !!local.muted, silent: true }, quiet);
+  send({ type: "mix", id: local.mixId, silent: true }, quiet);
   send({ type: "getState" });
 }
 

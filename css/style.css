@@ -548,4 +548,6 @@ body.casting #bar, body.casting #stage, body.casting #caption, body.casting #tap
 .remote-row output { min-width: 2.6rem; text-align: center; font-size: 1.2rem; }
 .remote-mixes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
 .remote-mixes .btn { width: 100%; text-align: left; padding: 0.8rem 1rem; }
+.remote-status { margin: 0; font-size: 0.95rem; color: var(--fg-dim, #aaa); }
+.remote-head { margin: 0.4rem 0 0; font-size: 1rem; font-weight: 500; color: var(--fg-dim, #aaa); }
 #remote [aria-pressed="true"] { color: var(--accent, #ffd27f); border-color: currentColor; }
