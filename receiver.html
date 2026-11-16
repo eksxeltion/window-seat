@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Window Seat Receiver</title>
+  <meta name="color-scheme" content="dark">
+  <link rel="stylesheet" href="css/receiver.css">
+  <!-- The Cast receiver framework is injected by js/receiver.js (skipped with ?debug=1) so it can never block the page. -->
+  <script type="module" src="js/receiver.js"></script>
+</head>
+<body>
+  <div id="cam"><div id="cam-player"></div></div>
+  <div id="blackout" class="on"></div>
+
+  <div id="safe">
+    <div id="caption">
+      <div id="cap-title"></div>
+      <div id="cap-meta"></div>
+      <div id="cap-brand">Window Seat</div>
+    </div>
+    <div id="music">
+      <div id="music-frame"><div id="music-player"></div></div>
+      <div id="music-title"></div>
+    </div>
+  </div>
+</body>
+</html>
