@@ -259,7 +259,7 @@ function liveCastState() {
 
 function renderDebug() {
   if (!ui.debug) return;
-  ui.debug.textContent = `Phone build ${BUILD} | TV build ${dbg.tvBuild} | cast ${liveCastState()} | session ${dbg.sessionState} | last: ${dbg.last}`;
+  ui.debug.textContent = `Phone build ${BUILD} | TV build ${dbg.tvBuild} | cast ${liveCastState()} | session ${dbg.sessionState} | last: ${dbg.last}${lastAttempt ? ` | ${lastAttempt}` : ""}`;
 }
 
 function renderRemote() {
@@ -427,10 +427,24 @@ const ERROR_TEXT = {
 };
 const UNAVAILABLE = "Cast not available in this browser";
 
+/* The last requestSession result stays visible (Start screen, menu bar, remote debug line). */
+let lastAttempt = ""; // e.g. "Last cast attempt 14:31: session_error (TV found, but the receiver failed to load)"
+let statusText = "";
+
+function recordAttempt(code) {
+  const hhmm = new Date().toTimeString().slice(0, 5);
+  const reason = code ? String(ERROR_TEXT[code] || "").replace(/^Cast:\s*/, "").replace(/\s*\([a-z_]+\)$/, "") : "";
+  lastAttempt = `Last cast attempt ${hhmm}: ${code || "ok"}${reason ? ` (${reason})` : ""}`;
+  setStatus(statusText);
+  renderDebug();
+}
+
 function setStatus(text) {
+  statusText = text;
+  const line = text && lastAttempt ? `${text} | ${lastAttempt}` : text || lastAttempt;
   document.querySelectorAll(".cast-status").forEach((el) => {
-    el.textContent = text;
-    el.hidden = !text;
+    el.textContent = line;
+    el.hidden = !line;
   });
   document.querySelectorAll("[data-cast]").forEach((b) => (b.title = text));
 }
@@ -455,15 +469,19 @@ function onCastTap() {
   try {
     p = ctx.requestSession();
   } catch (e) {
-    return say(`Cast error: ${(e && e.message) || e}`);
+    const msg = (e && e.message) || e;
+    recordAttempt(`exception: ${msg}`);
+    return say(`Cast error: ${msg}`);
   }
   Promise.resolve(p).then(
     (code) => {
+      recordAttempt(code || "");
       if (code) say(ERROR_TEXT[code] || `Cast: ${code}`);
       else say(STATE_TEXT[ctx.getCastState()] || "Cast: connected");
     },
     (code) => {
       const c = (code && code.code) || code;
+      recordAttempt(String(c));
       say(ERROR_TEXT[c] || `Cast: ${c}`);
     },
   );

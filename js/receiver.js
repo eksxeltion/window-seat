@@ -3,9 +3,9 @@
 import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 
-export const BUILD = "2026-11-16.2"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.3"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
-const CAF_URL = "//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
+const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
 const YS = { ENDED: 0, PLAYING: 1, BUFFERING: 3 };
 
@@ -72,7 +72,10 @@ function snapshot() {
 let context = null; // CastReceiverContext, only when running on a Cast device
 /* ---------------------------------------------------------------- on-TV debug strip */
 
-const dbg = { caf: "loading", listener: "no", senders: 0, lastIn: "none", lastOut: "none", error: "" };
+// cafError is its own field: later errors (broadcast, handle, sheet) never overwrite the CAF start failure.
+const dbg = { caf: "loading", cafError: "", listener: "no", senders: 0, lastIn: "none", lastOut: "none", error: "" };
+let injected = false; // test hook: a mocked context stands in for CAF
+let cafStarted = false; // context.start() returned without throwing (or a test injected a context)
 let stripOn = new URLSearchParams(location.search).get("strip") !== "0";
 function hhmmss() {
   return new Date().toTimeString().slice(0, 8);
@@ -81,9 +84,11 @@ function renderStrip() {
   const el = $("debug-strip");
   if (!el) return;
   el.hidden = !stripOn;
+  const caf = dbg.cafError ? `CAF FAILED (${dbg.cafError})` : `CAF ${dbg.caf}`;
+  const out = !cafStarted && dbg.lastOut === "none" ? "none (CAF not started)" : dbg.lastOut;
   el.textContent =
-    `build ${BUILD} | list ${listInfo.source} ${listInfo.cams}/${listInfo.mixes} | CAF ${dbg.caf} | listener ${dbg.listener} | senders ${dbg.senders} | ` +
-    `last in: ${dbg.lastIn} | last reply: ${dbg.lastOut}` + (dbg.error ? ` | error: ${dbg.error}` : "");
+    `build ${BUILD} | list ${listInfo.source} ${listInfo.cams}/${listInfo.mixes} | ${caf} | listener ${dbg.listener} | senders ${dbg.senders} | ` +
+    `last in: ${dbg.lastIn} | last reply: ${out}` + (dbg.error ? ` | error: ${dbg.error}` : "");
 }
 function setDbg(patch) {
   Object.assign(dbg, patch);
@@ -92,7 +97,9 @@ function setDbg(patch) {
 
 /* Replies go out as JSON text: the namespace is declared as STRING (see startCast). */
 function reply(senderId) {
-  if (!context) return;
+  if (!context || !cafStarted) return; // no sends before CAF started: they would only add noise
+  // The real framework throws on a broadcast before READY (its transport is not up yet); the next one works.
+  if (!senderId && dbg.caf !== "ready" && !injected) return;
   const kind = senderId ? "direct" : "broadcast";
   try {
     context.sendCustomMessage(NAMESPACE, senderId, JSON.stringify(snapshot()));
@@ -539,9 +546,8 @@ function startCast() {
     // STRING: CAF hands us the raw text and we parse it ourselves (parseCommand accepts objects too),
     // so a JSON parse quirk in the framework can never drop a command.
     options.customNamespaces = { [NAMESPACE]: cast.framework.system.MessageType.STRING };
-    // The listener is registered before start(), and before anything YouTube related.
-    context.addCustomMessageListener(NAMESPACE, onCustomMessage);
-    setDbg({ listener: "registered" });
+    // NOTE: the custom message listener goes on AFTER start() (see below). In the real framework a listener
+    // added before start() creates the namespace as JSON, and start() then throws "Invalid messageType".
     // A sender leaving (phone asleep, app closed, user disconnects) never stops playback.
     // Only an explicit {type:'stop'} command calls context.stop().
     context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, (event) => {
@@ -563,9 +569,17 @@ function startCast() {
     }
     setDbg({ caf: "starting" });
     context.start(options);
+    cafStarted = true;
+    // Same synchronous block as start(): no message can arrive before the listener exists.
+    context.addCustomMessageListener(NAMESPACE, onCustomMessage);
+    setDbg({ listener: dbg.caf === "ready" ? "ready" : "registered" });
     if (dbg.caf === "starting") setDbg({ caf: "started (waiting for ready)" });
+    setTimeout(() => {
+      if (dbg.caf !== "ready") setDbg({ caf: "started, no READY after 10s" });
+    }, 10000);
   } catch (e) {
-    setDbg({ caf: "FAILED", error: `start: ${String((e && e.message) || e).slice(0, 80)}` });
+    const name = (e && e.name) || "Error";
+    setDbg({ caf: "FAILED", cafError: `${name}: ${String((e && e.message) || e).slice(0, 80)}` });
   }
 }
 
@@ -666,6 +680,8 @@ if (DEBUG) {
       message: (event) => onCustomMessage(event),
       useContext: (ctx) => {
         context = ctx;
+        cafStarted = true;
+        injected = true;
       },
       log,
       // Test probes for the soak run.

@@ -26,9 +26,9 @@ Remote:
 - OK: choose
 - Back: close a panel
 
-Bar buttons: Previous cam, Pin, Next cam, rotation every 30s or 60s, Lite, Cams, Music, Play or Pause music, Vol down, Vol up, Fullscreen, Send to TV, About.
+Bar buttons: Previous cam, Pin, Next cam, rotation every 30s or 60s, Lite, Cams, Music, Play or Pause music, Vol down, Vol up, Fullscreen, Open in TV browser, About.
 
-Send to TV: opens a panel with a QR code and the address `https://window-seat-lemon.vercel.app/?tv=1` in large text. Scan it with your phone, then cast, or type the address in your TV browser. The QR code is drawn in your browser by `js/qr.js` (no external service). The same button is on the Start screen.
+Open in TV browser: opens a panel with a QR code and the address `https://window-seat-lemon.vercel.app/?tv=1` in large text. Scan it with your phone, then cast, or type the address in your TV browser. The QR code is drawn in your browser by `js/qr.js` (no external service). The same button is on the Start screen.
 
 Lite mode: the Lite button (saved in your browser, off by default) makes the page much lighter on a laptop. It asks for lower quality where YouTube allows (YouTube makes the final choice) and renders the cam in a smaller 1280x720 viewport that is scaled up to fill the screen, which nudges automatic quality down. It also fixes rotation at 60s (the 30s/60s button is disabled), and turns off all animations, transitions and gradient overlays.
 

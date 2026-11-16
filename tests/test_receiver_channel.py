@@ -1,5 +1,5 @@
 """Receiver message channel with a mocked CAF framework (the real receiver.html, not debug mode).
-Proves: listener registered before start(), namespace declared, string/object/double-encoded
+Proves: listener registered right after start() (the real CAF rejects the other order), namespace declared, string/object/double-encoded
 commands applied, direct and broadcast replies sent as JSON text, debug strip updated, and all of it
 works even when YouTube is blocked."""
 import sys, os, json
@@ -21,7 +21,7 @@ with sync_playwright() as p:
     calls = pg.evaluate("()=>__caf.calls")
     print("calls:", calls)
     check("listener registered", f"addCustomMessageListener:{NS}" in calls)
-    check("listener registered before start()", calls.index(f"addCustomMessageListener:{NS}") < calls.index("start"))
+    check("listener registered right after start()", calls.index(f"addCustomMessageListener:{NS}") == calls.index("start") + 1)
     check("namespace declared in options", pg.evaluate("()=>__caf.options.customNamespaces")== {NS: "STRING"})
     check("idle timeout disabled", pg.evaluate("()=>__caf.options.disableIdleTimeout") is True)
     strip = lambda: pg.text_content("#debug-strip")

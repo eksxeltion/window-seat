@@ -79,7 +79,7 @@
     <button class="bar-btn" type="button" data-action="vol-up"><svg class="icon" aria-hidden="true"><use href="#i-vol-up"></use></svg><span class="label">Vol up</span></button>
     <button class="bar-btn" type="button" data-action="fullscreen"><svg class="icon" aria-hidden="true"><use href="#i-fullscreen"></use></svg><span class="label">Fullscreen</span></button>
     <button class="bar-btn cast-launcher" type="button" data-cast hidden><google-cast-launcher></google-cast-launcher><span class="label">Cast</span></button>
-    <button class="bar-btn" type="button" data-action="open-tv" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-tv"></use></svg><span class="label">Send to TV</span></button>
+    <button class="bar-btn" type="button" data-action="open-tv" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-tv"></use></svg><span class="label">Open in TV browser</span></button>
     <button class="bar-btn" type="button" data-action="open-about" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg><span class="label">About</span></button>
     <button class="bar-btn bar-close" type="button" data-action="close-menu"><span class="close-x" aria-hidden="true">&times;</span><span class="label">Close</span></button>
     <p class="cast-status bar-status" role="status" hidden></p>
@@ -126,12 +126,13 @@
   <!-- Send to TV panel -->
   <section id="panel-tv" class="panel glass" role="dialog" aria-modal="true" aria-labelledby="tv-title" hidden>
     <header class="panel-head">
-      <h2 id="tv-title">Send to TV</h2>
+      <h2 id="tv-title">Open in TV browser</h2>
       <button class="btn" type="button" data-action="close-panel">Close</button>
     </header>
     <div class="panel-body tv-send">
       <div class="qr-box"><canvas id="tv-qr" aria-label="QR code for the TV address"></canvas></div>
       <p class="tv-url" id="tv-url"></p>
+      <p class="tv-hint">This plays in the TV's own browser. To use your phone as a remote, use Cast instead.</p>
       <p class="tv-hint">Scan with your phone, then cast, or type this URL in your TV browser</p>
     </div>
   </section>
@@ -183,7 +184,7 @@
         <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg><span>Start</span>
       </button>
       <button class="btn btn-ghost cast-launcher cast-start" type="button" data-cast hidden><google-cast-launcher></google-cast-launcher><span>Cast to TV</span></button>
-      <button id="start-tv" class="btn btn-ghost" type="button" data-action="open-tv" aria-haspopup="dialog">Send to TV</button>
+      <button id="start-tv" class="btn btn-ghost" type="button" data-action="open-tv" aria-haspopup="dialog">Open in TV browser</button>
       <button id="start-about" class="btn btn-ghost" type="button" data-action="open-about" aria-haspopup="dialog">About and credits</button>
       <p id="start-status" class="start-status" role="status"></p>
       <p class="cast-status" role="status" hidden></p>
