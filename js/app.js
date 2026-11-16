@@ -1,7 +1,8 @@
 // Window Seat: rotating Japan live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
 import qrcode from "./qr.js";
-import { initCast, castConfigured } from "./cast.js";
+import { initCast, castConfigured, sendConfigToTv } from "./cast.js";
+import { refreshFromSheet, listLabel } from "./config.js";
 
 /* ---------------------------------------------------------------- config */
 
@@ -1030,6 +1031,49 @@ function buildMusicPanel() {
   credit.textContent = MUSIC_CHANNEL.name;
 }
 
+/* Rebuild every list-driven part of the page after the cam or mix list changed (sheet config). */
+function rebuildLists() {
+  el.camsList.textContent = "";
+  el.mixList.textContent = "";
+  $("#credits-cams").textContent = "";
+  $("#credits-music").textContent = "";
+  buildCamsPanel();
+  buildMusicPanel();
+  buildCredits();
+  // The playing mix left the list: switch the player too, keeping play or pause as it was.
+  if (!mixById(state.mixId)) {
+    if (state.musicWantsPlay) playMix(MIXES[0].id);
+    else {
+      state.mixId = MIXES[0].id;
+      store.set("mix", state.mixId);
+      if (musicReady) quietly(() => musicPlayer.cueVideoById(state.mixId));
+    }
+  }
+  // The showing or loading cam left the list (even if pinned): move to one that exists.
+  const gone = state.pending ? !camById(state.pending.camId) : state.currentCamId && !camById(state.currentCamId);
+  if (gone && state.started && state.apiReady && !state.casting) {
+    const t = pickCam(null, 1);
+    if (t) beginLoad(t, 1);
+  }
+  render();
+}
+
+function showListStatus(error) {
+  document.querySelectorAll(".list-status").forEach((n) => {
+    n.textContent = listLabel();
+    n.title = error ? `Sheet not loaded: ${error}` : "";
+  });
+}
+
+function loadSheetConfig() {
+  showListStatus();
+  refreshFromSheet().then((r) => {
+    if (r.changed) rebuildLists();
+    showListStatus(r.ok ? "" : r.error);
+    if (r.ok) sendConfigToTv(); // keep a casting TV on the same list
+  });
+}
+
 function buildCredits() {
   const byChannel = new Map();
   for (const cam of CAMS) {
@@ -1697,6 +1741,7 @@ function boot() {
   document.addEventListener("visibilitychange", onVisibility);
   loadYouTubeApi();
   setupCast();
+  loadSheetConfig();
 
   window.__windowSeat = {
     state,

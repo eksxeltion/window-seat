@@ -208,6 +208,7 @@ button { font: inherit; color: inherit; }
   pointer-events: none;
 }
 .bar-status { flex-basis: 100%; text-align: center; margin: 0.2rem 0 0; }
+.list-status.bar-status { font-size: 0.8rem; color: var(--fg-faint, #888); margin: 0; }
 .close-x { font-size: 1.6rem; line-height: 1.2rem; height: 1.6rem; }
 
 /* Always-visible, quiet Menu button; it toggles the control bar */
