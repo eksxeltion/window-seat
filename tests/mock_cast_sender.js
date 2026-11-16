@@ -4,7 +4,12 @@
   const sent = [];
   const msgListeners = [];
   const session = {
-    sendMessage(ns, data) { sent.push({ ns, data: JSON.parse(JSON.stringify(data)) }); return Promise.resolve(); },
+    sendMessage(ns, data) {
+      sent.push({ ns, data: JSON.parse(JSON.stringify(data)) });
+      if (window.__mockFail) return Promise.reject(window.__mockFail);
+      return Promise.resolve();
+    },
+    getSessionObj() { return { appId: window.__mockAppId || "48BEB59E", namespaces: window.__mockNs || [{ name: "urn:x-cast:com.windowseat" }] }; },
     addMessageListener(ns, fn) { msgListeners.push(fn); },
     getCastDevice() { return { friendlyName: "Mock TV" }; },
   };
