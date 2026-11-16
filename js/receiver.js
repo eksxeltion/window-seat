@@ -31,6 +31,9 @@ const s = {
   interval: 60,
   mixId: MIXES[0].id,
   volume: 60,
+  muted: false,
+  musicPaused: false,
+  poolIds: null, // cam ids chosen on the phone (Cams filters); null = the default cams
   failed: new Set(),
 };
 const log = [];
@@ -55,6 +58,9 @@ function snapshot() {
     pinned: s.pinned,
     interval: s.interval,
     volume: s.volume,
+    muted: s.muted,
+    musicPaused: s.musicPaused,
+    poolIds: s.poolIds,
     failedCams: Array.from(s.failed),
   };
 }
@@ -63,6 +69,17 @@ let context = null; // CastReceiverContext, only when running on a Cast device
 function broadcast() {
   if (!context) return;
   quietly(() => context.sendCustomMessage(NAMESPACE, undefined, snapshot()));
+}
+
+/* Small on-TV confirmation for every phone command, so a tap is visibly received. */
+let cmdTimer = 0;
+function flash(text) {
+  const el = $("cmd-toast");
+  if (!el || !text) return;
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(cmdTimer);
+  cmdTimer = setTimeout(() => el.classList.remove("show"), 1800);
 }
 
 /* ---------------------------------------------------------------- cam */
@@ -82,7 +99,8 @@ const blackout = $("blackout");
 const fadeTo = (on) => blackout.classList.toggle("on", on);
 
 function pool() {
-  return CAMS.filter((c) => c.default && !s.failed.has(c.id));
+  const chosen = s.poolIds && s.poolIds.length ? CAMS.filter((c) => s.poolIds.includes(c.id)) : CAMS.filter((c) => c.default);
+  return chosen.filter((c) => !s.failed.has(c.id));
 }
 
 /** Next usable cam after fromId in the given direction (1 or -1). */
@@ -236,9 +254,9 @@ function playMix(id) {
   clearTimeout(musicRetryTimer); // a newer selection supersedes any pending all-failed retry
   s.mixId = id;
   showMixTitle();
+  s.musicPaused = false;
   if (musicReady) {
-    quietly(() => musicPlayer.unMute());
-    quietly(() => musicPlayer.setVolume(s.volume));
+    applyAudio();
     quietly(() => musicPlayer.loadVideoById(id));
   }
   broadcast();
@@ -262,6 +280,7 @@ function onMusicState(e) {
 
 function onMusicError(e) {
   note("mixError", { mixId: s.mixId, code: e.data });
+  if (s.musicPaused) return; // paused: Play restarts the mix
   musicErrors++;
   if (musicErrors >= MIXES.length) {
     // Every mix failed in a row: wait a minute before trying again.
@@ -282,7 +301,11 @@ function createMusicPlayer() {
     events: {
       onReady: () => {
         musicReady = true;
-        playMix(s.mixId);
+        if (s.musicPaused) {
+          // Paused from the phone before the player was ready: load the mix without starting it.
+          applyAudio();
+          quietly(() => musicPlayer.cueVideoById(s.mixId));
+        } else playMix(s.mixId);
       },
       onStateChange: onMusicState,
       onError: onMusicError,
@@ -296,45 +319,89 @@ function setVolume(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return;
   s.volume = Math.min(100, Math.max(0, Math.round(n)));
-  if (musicReady) {
-    quietly(() => musicPlayer.setVolume(s.volume));
-    if (s.volume > 0) quietly(() => musicPlayer.unMute());
-  }
+  if (s.volume > 0) s.muted = false;
+  applyAudio();
   note("volume", { value: s.volume });
 }
 
+function applyAudio() {
+  if (!musicReady) return;
+  quietly(() => musicPlayer.setVolume(s.volume));
+  if (s.muted || s.volume === 0) quietly(() => musicPlayer.mute());
+  else quietly(() => musicPlayer.unMute());
+}
+
+function prevMix() {
+  const i = MIXES.findIndex((m) => m.id === s.mixId);
+  playMix(MIXES[(i - 1 + MIXES.length) % MIXES.length].id);
+}
+
 function handle(cmd) {
+  if (typeof cmd === "string") cmd = quietly(() => JSON.parse(cmd));
   if (!cmd || typeof cmd !== "object") return;
   note("command", cmd);
+  const quiet = cmd.silent === true; // setup messages sent on connect: no on-TV flash
   switch (cmd.type) {
     case "next":
     case "prev": {
       const dir = cmd.type === "next" ? 1 : -1;
       const target = pick(pending ? pending.camId : s.camId, dir);
       if (target) beginLoad(target, cmd.type);
+      if (!quiet) flash(cmd.type === "next" ? "Next cam" : "Previous cam");
       break;
     }
     case "pin":
       s.pinned = !!cmd.value;
       if (!s.pinned) nextSwapAt = Date.now() + s.interval * 1000;
+      if (!quiet) flash(s.pinned ? "Pinned" : "Rotation on");
       break;
     case "mix":
       playMix(cmd.id);
+      if (!quiet) flash(`Music: ${(mixById(cmd.id) || {}).en || ""}`);
       break;
     case "nextMix":
-      nextMix();
+    case "prevMix":
+      if (cmd.type === "nextMix") nextMix();
+      else prevMix();
+      if (!quiet) flash(`Music: ${(mixById(s.mixId) || {}).en || ""}`);
       break;
     case "interval":
       s.interval = Number(cmd.value) === 30 ? 30 : 60;
       nextSwapAt = Date.now() + s.interval * 1000;
+      if (!quiet) flash(`New cam every ${s.interval}s`);
       break;
     case "volume":
       setVolume(cmd.value);
+      if (!quiet) flash(`Volume ${s.volume}`);
       break;
+    case "mute":
+      s.muted = !!cmd.value;
+      applyAudio();
+      if (!quiet) flash(s.muted ? "Music muted" : `Music on, volume ${s.volume}`);
+      break;
+    case "playMusic":
+      s.musicPaused = !cmd.value;
+      if (s.musicPaused) {
+        clearTimeout(musicRetryTimer); // a paused player must not be restarted by an error retry
+        if (musicReady) quietly(() => musicPlayer.pauseVideo());
+      } else if (musicReady) {
+        const st = quietly(() => musicPlayer.getPlayerState());
+        if (st === 2 || st === 5) quietly(() => musicPlayer.playVideo());
+        else playMix(s.mixId); // nothing loaded (or it failed): start the mix again
+      }
+      if (!quiet) flash(s.musicPaused ? "Music paused" : "Music playing");
+      break;
+    case "cams": {
+      const ids = Array.isArray(cmd.ids) ? cmd.ids.filter((id) => camById(id)) : [];
+      s.poolIds = ids.length ? ids : null;
+      if (!quiet) flash(`${pool().length} cams in rotation`);
+      break;
+    }
     case "cam":
       if (camById(cmd.id)) {
         s.failed.delete(cmd.id);
         if (cmd.id !== s.camId || pending) beginLoad(cmd.id, "cam");
+        if (!quiet) flash(camById(cmd.id).title);
       }
       break;
     case "stop":
@@ -402,9 +469,9 @@ function startCast() {
   options.maxInactivity = 3600;
   options.customNamespaces = { [NAMESPACE]: cast.framework.system.MessageType.JSON };
   context.addCustomMessageListener(NAMESPACE, (event) => {
-    let data = event.data;
-    if (typeof data === "string") data = quietly(() => JSON.parse(data));
-    handle(data);
+    handle(event.data);
+    // Also answer the sender directly, in case a broadcast does not reach it.
+    if (event.senderId) quietly(() => context.sendCustomMessage(NAMESPACE, event.senderId, snapshot()));
   });
   // A sender leaving (phone asleep, app closed, user disconnects) never stops playback.
   // Only an explicit {type:'stop'} command calls context.stop().

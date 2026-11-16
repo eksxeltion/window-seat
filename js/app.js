@@ -1259,7 +1259,7 @@ function setupCast() {
   }
   if (note) note.textContent = "Tap the Cast button in Chrome and pick your TV. This page then becomes a remote.";
   initCast({
-    getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume }),
+    getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume, muted: state.muted, camIds: CAMS.filter((c) => isEnabled(c.id)).map((c) => c.id) }),
     onStart: pauseLocalForCast,
     onEnd: resumeAfterCast,
     toast: (text) => toast(text, 6000),
