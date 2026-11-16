@@ -1,22 +1,25 @@
 // Window Seat: rotating Japan live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
+import qrcode from "./qr.js";
 
 /* ---------------------------------------------------------------- config */
 
 const YT_API_URL = "https://www.youtube.com/iframe_api";
 const YT_HOST = "https://www.youtube-nocookie.com";
-const PRELOAD_LEAD_MS = 6000; // start loading the next cam this long before the switch
 const LOAD_TIMEOUT_MS = 15000; // a cam that is not PLAYING by then is marked unavailable
 const COLD_LOAD_TIMEOUT_MS = 8000; // same deadline while no cam is on screen (cold start or current cam failed)
 const STUCK_MS = 7000; // loaded but still UNSTARTED/CUED this long: treat as unplayable
 const COLD_STUCK_MS = 4000; // same, while no cam is on screen
-const FADE_MS = 1500;
+const FADE_MS = 400; // black overlay fade when switching cams
+const GRACE_MS = 8000; // stall watchdog stays quiet this long after the tab becomes visible
 const IDLE_MS = 4000;
 const PANEL_IDLE_MS = 45000;
 const MUSIC_CHECK_MS = 5000;
 const MUSIC_READY_MS = 15000; // music iframe must report ready by then
 const API_TIMEOUT_MS = 20000;
 const VOLUME_STEP = 10;
+const ERROR_CONFIRM_MS = 2500; // a player error only fails a cam if the requested video is still not playing this long after
+const TV_URL = "https://window-seat-lemon.vercel.app/?tv=1";
 
 const YS = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
 
@@ -56,6 +59,18 @@ function loadOverrides() {
   return out;
 }
 
+/** TV mode: ?tv=1 forces it on, ?tv=0 forces it off, otherwise guess from the user agent and screen. */
+function detectTv() {
+  const q = new URLSearchParams(location.search).get("tv");
+  if (q === "1") return true;
+  if (q === "0") return false;
+  if (/Android TV|GoogleTV|AFT|BRAVIA|SMART-TV|SmartTV|Tizen|Web0S|CrKey/i.test(navigator.userAgent || "")) return true;
+  const mq = (query) => !!(window.matchMedia && window.matchMedia(query).matches);
+  return window.screen.width >= 1600 && (mq("(pointer: coarse)") || mq("(hover: none)"));
+}
+const isTv = detectTv();
+const storedLite = store.get("lite", null); // null: the user never chose
+
 const savedInterval = store.get("interval", 60);
 const savedMix = store.get("mix", null);
 const savedVolume = Number(store.get("volume", 60));
@@ -72,9 +87,10 @@ const state = {
   failed: new Set(),
   pinned: false,
   currentCamId: null,
-  pending: null, // { camId, slot, startedAt, ready, swapNow, dir }
+  pending: null, // { camId, startedAt, dir, fails }
   nextSwapAt: 0,
   allFailed: false,
+  lite: storedLite === null ? isTv : storedLite === true,
   showCaption: store.get("caption", true) !== false,
   // music
   mixId: MIXES.some((m) => m.id === savedMix) ? savedMix : MIXES[0].id,
@@ -91,7 +107,6 @@ const state = {
 };
 
 const reducedMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
-const fadeMs = () => (reducedMotion.matches ? 0 : FADE_MS);
 
 /* ---------------------------------------------------------------- dom */
 
@@ -111,6 +126,7 @@ const el = {
   capMusic: $(".cap-music"),
   tapMusic: $("#tap-music"),
   tuning: $("#tuning"),
+  blackout: $("#blackout"),
   notice: $("#notice"),
   noticeTitle: $("#notice-title"),
   noticeText: $("#notice-text"),
@@ -120,7 +136,7 @@ const el = {
   mixList: $("#mix-list"),
   volume: $("#music-volume"),
   volumeOut: $("#music-volume-out"),
-  panels: { cams: $("#panel-cams"), music: $("#panel-music"), about: $("#panel-about") },
+  panels: { cams: $("#panel-cams"), music: $("#panel-music"), tv: $("#panel-tv"), about: $("#panel-about") },
 };
 
 const quietly = (fn) => {
@@ -157,25 +173,55 @@ function toast(text) {
 
 /* ================================================================ cams */
 
-const slots = [0, 1].map((i) => ({
-  index: i,
-  el: document.getElementById("cam-" + i),
-  player: null,
-  ready: false,
-  waiters: [],
-  camId: null,
-  seq: 0,
-  loadedAt: 0,
-  loadSeq: 0,
-}));
+// One cam player. To switch: fade a black overlay in, load the new cam, fade out once it is PLAYING.
+const cp = { el: $("#cam"), player: null, ready: false, waiters: [], camId: null, seq: 0, loadedAt: 0, loadSeq: 0, nudged: false, deferred: null, errSeq: 0, errAt: 0 };
 let activeStall = null; // { at, tried } while the on-screen cam is not PLAYING
-let activeSlot = null;
+let graceUntil = 0; // the stall watchdog stays quiet until then (right after the tab becomes visible)
+let covered = true; // black overlay is up (the HTML starts with it on)
+
+const rotateSec = () => (state.lite ? 60 : state.intervalSec);
+const camQuality = () => (state.lite ? "small" : "medium"); // best-effort hint only; YouTube decides the real quality
+const animMs = () => (reducedMotion.matches || state.lite ? 0 : FADE_MS);
+const watchdogOn = () => !document.hidden && Date.now() >= graceUntil;
 
 function playerOrigin() {
   return /^https?:$/.test(location.protocol) ? location.origin : undefined;
 }
 
-function createCamPlayer(slot) {
+function cover(on) {
+  if (covered === on) return;
+  covered = on;
+  el.blackout.classList.toggle("on", on);
+}
+
+/**
+ * Size the cam iframe to cover the viewport, but never render it larger than 1920x1080 CSS px
+ * (1280x720 in Lite). A smaller real viewport nudges YouTube's automatic quality choice down;
+ * the page scales it back up with a CSS transform.
+ */
+function sizeCam() {
+  const cap = state.lite ? 1280 : 1920;
+  const w = Math.max(window.innerWidth, (window.innerHeight * 16) / 9);
+  const s = Math.max(1, w / cap);
+  const root = document.documentElement.style;
+  root.setProperty("--cw", Math.round(w / s) + "px");
+  root.setProperty("--ch", Math.round(((w / s) * 9) / 16) + "px");
+  root.setProperty("--cs", String(s));
+}
+
+function setQuality() {
+  // Best effort: current players may ignore this.
+  quietly(() => cp.player.setPlaybackQuality(camQuality()));
+}
+
+function hardMute() {
+  quietly(() => {
+    cp.player.mute();
+    cp.player.setVolume(0);
+  });
+}
+
+function createCamPlayer() {
   const vars = {
     autoplay: 0,
     mute: 1,
@@ -186,82 +232,79 @@ function createCamPlayer(slot) {
     modestbranding: 1,
     rel: 0,
     playsinline: 1,
+    vq: camQuality(),
   };
   const origin = playerOrigin();
   if (origin) vars.origin = origin;
-  slot.player = new window.YT.Player(slot.el.querySelector(".cam-player"), {
+  cp.player = new window.YT.Player(cp.el.querySelector(".cam-player"), {
     host: YT_HOST,
     width: "1920",
     height: "1080",
     playerVars: vars,
     events: {
       onReady: () => {
-        slot.ready = true;
-        hardMute(slot);
-        const frame = quietly(() => slot.player.getIframe());
+        cp.ready = true;
+        hardMute();
+        setQuality();
+        const frame = quietly(() => cp.player.getIframe());
         if (frame) {
           frame.setAttribute("tabindex", "-1");
           frame.setAttribute("title", "Live cam");
         }
-        const waiters = slot.waiters.splice(0);
-        waiters.forEach((fn) => fn());
+        cp.waiters.splice(0).forEach((fn) => fn());
       },
-      onStateChange: (e) => onCamState(slot, e.data),
-      onError: (e) => onCamError(slot, e.data),
+      onStateChange: (e) => onCamState(e.data),
+      onError: () => onCamError(),
     },
   });
 }
 
-function hardMute(slot) {
-  quietly(() => {
-    slot.player.mute();
-    slot.player.setVolume(0);
-  });
+function loadCam(camId, delay) {
+  cp.camId = camId;
+  cp.loadedAt = 0;
+  cp.nudged = false;
+  cp.deferred = null;
+  cp.errSeq = 0;
+  const seq = ++cp.seq;
+  const go = () => {
+    if (cp.camId !== camId || cp.seq !== seq) return;
+    const run = () => {
+      if (cp.camId !== camId || cp.seq !== seq) return;
+      if (document.hidden) {
+        cp.deferred = run; // never start playback in a hidden tab; onVisibility issues it once
+        return;
+      }
+      cp.deferred = null;
+      if (state.pending && state.pending.camId === camId) state.pending.startedAt = Date.now();
+      cp.loadedAt = Date.now();
+      cp.loadSeq = seq; // load generation: terminal events are only trusted while no newer load was issued
+      cp.nudged = false;
+      hardMute();
+      quietly(() => cp.player.loadVideoById({ videoId: camId, suggestedQuality: camQuality() }));
+      hardMute();
+    };
+    if (cp.ready) run();
+    else cp.waiters.push(run);
+  };
+  if (delay > 0) setTimeout(go, delay);
+  else go();
 }
 
-function whenReady(slot, fn) {
-  if (slot.ready) fn();
-  else slot.waiters.push(fn);
-}
-
-function loadCamInto(slot, camId) {
-  slot.camId = camId;
-  slot.loadedAt = 0;
-  slot.nudged = false;
-  const seq = ++slot.seq;
-  whenReady(slot, () => {
-    if (slot.camId !== camId || slot.seq !== seq) return;
-    slot.loadedAt = Date.now();
-    slot.loadSeq = seq; // load generation: terminal events are only trusted while no newer load was issued
-    slot.nudged = false;
-    hardMute(slot);
-    quietly(() => slot.player.loadVideoById(camId));
-    hardMute(slot);
-  });
-}
-
-function stopSlot(slot) {
-  slot.seq++;
-  slot.loadedAt = 0;
-  slot.camId = null;
-  if (slot.ready) quietly(() => slot.player.stopVideo());
-}
-
-function slotShows(slot, camId) {
-  const data = quietly(() => slot.player.getVideoData());
+function shows(camId) {
+  const data = quietly(() => cp.player.getVideoData());
   return !data || !data.video_id || data.video_id === camId;
 }
 
-/** True when the slot's latest load call is still the newest one (no newer load or stop since). */
-function hasCurrentLoad(slot) {
-  return !!slot.camId && !!slot.loadedAt && slot.loadSeq === slot.seq;
+/** True when the latest load call is still the newest one. */
+function hasCurrentLoad() {
+  return !!cp.camId && !!cp.loadedAt && cp.loadSeq === cp.seq;
 }
 
-/** True when an ENDED event belongs to the video this slot is meant to show (current load and matching id). */
-function isCurrentLoad(slot) {
-  if (!hasCurrentLoad(slot)) return false;
-  const data = quietly(() => slot.player.getVideoData());
-  return !!data && data.video_id === slot.camId;
+/** True when an ENDED event belongs to the video we meant to show (current load and matching id). */
+function isCurrentLoad() {
+  if (!hasCurrentLoad()) return false;
+  const data = quietly(() => cp.player.getVideoData());
+  return !!data && data.video_id === cp.camId;
 }
 
 /** Pick the next cam id from `fromId` in direction `dir`, skipping failed ones. */
@@ -281,212 +324,198 @@ function pickCam(fromId, dir = 1) {
   return pool[0].id;
 }
 
-function inactiveSlot() {
-  return activeSlot === slots[0] ? slots[1] : slots[0];
+/** Start switching to `camId`: cover the screen, then load it on the single player. */
+function beginLoad(camId, dir = 1, fails = 0) {
+  const delay = covered ? 0 : animMs();
+  state.pending = { camId, startedAt: Date.now() + delay, dir, fails };
+  cover(true);
+  loadCam(camId, delay);
+  render();
 }
 
-function cancelPending() {
-  const p = state.pending;
-  if (!p) return;
-  state.pending = null;
-  if (p.slot !== activeSlot) stopSlot(p.slot);
-}
-
-function beginLoad(camId, swapNow, dir = 1) {
-  cancelPending();
-  const slot = inactiveSlot();
-  state.pending = { camId, slot, startedAt: Date.now(), ready: false, swapNow, dir };
-  loadCamInto(slot, camId);
-}
-
-function swapIn() {
-  const p = state.pending;
-  if (!p) return;
-  const live = quietly(() => p.slot.player.getPlayerState());
-  if (live !== YS.PLAYING || !slotShows(p.slot, p.camId)) {
-    // Not actually playing (anymore): wait for PLAYING, keeping the stall deadline.
-    if (p.ready) {
-      p.ready = false;
-      p.startedAt = Date.now();
-    }
-    return;
-  }
+function onCamPlaying(p) {
   state.pending = null;
   activeStall = null;
-  const incoming = p.slot;
-  const outgoing = activeSlot;
-  activeSlot = incoming;
   state.currentCamId = p.camId;
-  state.nextSwapAt = Date.now() + state.intervalSec * 1000;
+  state.nextSwapAt = Date.now() + rotateSec() * 1000;
   setAllFailed(false);
-
-  incoming.el.classList.remove("is-leaving");
-  if (outgoing && outgoing !== incoming) {
-    outgoing.el.classList.remove("is-active");
-    outgoing.el.classList.add("is-leaving");
-    const seq = outgoing.seq;
-    setTimeout(() => {
-      outgoing.el.classList.remove("is-leaving");
-      if (outgoing !== activeSlot && outgoing.seq === seq) stopSlot(outgoing);
-    }, fadeMs() + 100);
-  }
-  // Force a style flush so the opacity transition runs (rAF would stall in background tabs).
-  void incoming.el.offsetWidth;
-  incoming.el.classList.add("is-active");
+  setQuality();
+  cover(false);
   render();
 }
 
 function markFailed(camId) {
-  if (!camId) return;
-  state.failed.add(camId);
-}
-
-/** True while there is no usable cam on screen (nothing loaded yet, or the current cam failed). */
-function noCamVisible() {
-  return !activeSlot || !state.currentCamId || state.failed.has(state.currentCamId);
+  if (camId) state.failed.add(camId);
 }
 
 function everythingFailed() {
   return CAMS.every((c) => state.failed.has(c.id));
 }
 
-/** Pending load failed (error or timeout): mark it and move on. */
+/** Pending load failed (error or timeout): mark it, keep the overlay, try the next candidate. */
 function failPending() {
   const p = state.pending;
   if (!p) return;
   state.pending = null;
   markFailed(p.camId);
-  if (p.slot !== activeSlot) stopSlot(p.slot);
   const next = pickCam(p.camId, p.dir);
-  const currentOk = activeSlot && state.currentCamId && !state.failed.has(state.currentCamId);
   if (!next) {
-    if (!currentOk) setAllFailed(true);
+    state.currentCamId = null;
+    setAllFailed(true);
     render();
     return;
   }
-  if (next === state.currentCamId && currentOk) {
-    state.nextSwapAt = Date.now() + state.intervalSec * 1000;
-    render();
-    return;
-  }
-  beginLoad(next, p.swapNow || !currentOk, p.dir);
-  render();
+  beginLoad(next, p.dir, p.fails + 1);
 }
 
 /** The cam on screen broke (error or stream ended). */
 function failActive() {
   markFailed(state.currentCamId);
-  const p = state.pending;
-  if (p) {
-    p.swapNow = true;
-    if (p.ready) swapIn();
-    render();
-    return;
-  }
   activeStall = null;
   const next = pickCam(state.currentCamId, 1);
   if (!next || next === state.currentCamId) {
-    if (everythingFailed() || !next) setAllFailed(true);
+    state.currentCamId = null;
+    cover(true);
+    setAllFailed(true);
     render();
     return;
   }
-  beginLoad(next, true);
-  render();
+  beginLoad(next, 1, 1);
 }
 
-/** Unplayable-video check for a slot that was told to load a cam but is not progressing. */
-function slotLooksUnplayable(slot, limitMs) {
-  if (!slot.camId || !slot.loadedAt) return false;
-  const waited = Date.now() - slot.loadedAt;
+/** Unplayable-video check for a cam that was told to load but is not progressing. */
+function looksUnplayable(limitMs) {
+  if (!cp.camId || !cp.loadedAt) return false;
+  const waited = Date.now() - cp.loadedAt;
   if (waited < Math.min(limitMs, 2500)) return false;
-  const live = quietly(() => slot.player.getPlayerState());
+  const live = quietly(() => cp.player.getPlayerState());
   if (live !== YS.UNSTARTED && live !== YS.CUED) return false;
   if (waited < limitMs) {
     // Give a CUED video one nudge in case autoplay just needs a kick.
-    if (live === YS.CUED && !slot.nudged) {
-      slot.nudged = true;
-      quietly(() => slot.player.playVideo());
+    if (live === YS.CUED && !cp.nudged) {
+      cp.nudged = true;
+      quietly(() => cp.player.playVideo());
     }
     return false;
   }
   return true;
 }
 
-function onCamState(slot, s) {
-  if (s === YS.PLAYING || s === YS.BUFFERING) hardMute(slot);
-  const p = state.pending;
-  if (p && p.slot === slot) {
-    if (s === YS.PLAYING) {
-      if (slotShows(slot, p.camId)) {
-        p.ready = true;
-        if (p.swapNow) swapIn();
-      }
-    } else {
-      if (p.ready) {
-        // Lost playback after preloading: not ready any more, restart the stall deadline.
-        p.ready = false;
-        p.startedAt = Date.now();
-      }
-      if (s === YS.ENDED && isCurrentLoad(slot)) failPending();
-    }
-    return;
-  }
-  if (slot !== activeSlot) return;
-  if (s === YS.PLAYING) activeStall = null;
-  else if (s === YS.BUFFERING || s === YS.PAUSED) {
-    if (!activeStall) activeStall = { at: Date.now(), tried: false };
-  } else if (s === YS.ENDED && isCurrentLoad(slot)) failActive();
+// A matching cam that reached PLAYING proves any earlier error marker was stale.
+function clearStaleError() {
+  if (cp.errSeq && isCurrentLoad()) cp.errSeq = 0;
 }
 
-// YouTube error codes 2, 5, 100, 101, 150 and 153 all mean the video cannot be played here,
-// so any error for the video we just asked for is a prompt failure.
-function onCamError(slot) {
-  // Ownership is by identity, not timing. For an invalid id the player may report an empty or the
-  // previous video id, so a mismatch is fine as long as no newer load was issued since this one
-  // (a stale error from an older load always arrives after a newer load bumped slot.seq).
-  if (!hasCurrentLoad(slot)) return;
+function onCamState(s) {
+  if (s === YS.PLAYING || s === YS.BUFFERING) hardMute();
+  if (s === YS.PLAYING) clearStaleError();
   const p = state.pending;
-  if (p && p.slot === slot) failPending();
-  else if (slot === activeSlot) failActive();
+  if (p) {
+    if (s === YS.PLAYING && shows(p.camId)) onCamPlaying(p);
+    else if (s === YS.ENDED && isCurrentLoad()) failPending();
+    return;
+  }
+  if (!state.currentCamId) return;
+  if (s === YS.PLAYING) {
+    activeStall = null;
+    setQuality();
+  } else if (s === YS.BUFFERING || s === YS.PAUSED) {
+    if (!activeStall && watchdogOn()) activeStall = { at: Date.now(), tried: false };
+  } else if (s === YS.ENDED && isCurrentLoad()) failActive();
+}
+
+// YouTube error codes 2, 5, 100, 101, 150 and 153 all mean the video cannot be played here.
+// The error event carries no load generation, so a delayed error from an older cam could hit the one
+// that replaced it. Never fail on the event alone: only remember it, then confirm by polling that the
+// requested video is the one loaded and is still not playing (see errorConfirmed). Errors that cannot
+// be confirmed this way (an invalid id often reports an empty or old video id) fall to the load timeouts.
+function onCamError() {
+  if (!hasCurrentLoad()) return;
+  if (cp.errSeq !== cp.seq) {
+    cp.errSeq = cp.seq;
+    cp.errAt = Date.now();
+  }
+}
+
+function errorConfirmed() {
+  if (!hasCurrentLoad() || cp.errSeq !== cp.seq) return false;
+  if (Date.now() - cp.errAt < ERROR_CONFIRM_MS) return false;
+  const live = quietly(() => cp.player.getPlayerState());
+  if (live === YS.PLAYING || live === YS.BUFFERING) return false;
+  return isCurrentLoad();
 }
 
 function tick() {
-  if (!state.started || !state.apiReady) return;
+  if (!state.started || !state.apiReady || document.hidden) return;
   const now = Date.now();
   const p = state.pending;
-  if (p && !p.ready) {
-    const cold = noCamVisible();
+  if (p) {
+    if (now < graceUntil || cp.deferred) return; // grace after resume covers pending loads too
+    const cold = !state.currentCamId || p.fails > 0;
     const deadline = cold ? COLD_LOAD_TIMEOUT_MS : LOAD_TIMEOUT_MS;
-    if (now - p.startedAt > deadline || slotLooksUnplayable(p.slot, cold ? COLD_STUCK_MS : STUCK_MS)) {
-      failPending();
+    if (now - p.startedAt > deadline || errorConfirmed() || looksUnplayable(cold ? COLD_STUCK_MS : STUCK_MS)) failPending();
+    return;
+  }
+  if (!state.currentCamId || state.allFailed) return;
+  if (hasCurrentLoad() && now >= graceUntil) {
+    // Poll the visible cam: any non-PLAYING state (UNSTARTED, CUED, BUFFERING, PAUSED, ENDED) counts as a stall.
+    const live = quietly(() => cp.player.getPlayerState());
+    if (live === YS.PLAYING) {
+      activeStall = null;
+      clearStaleError();
+    } else if (live != null && !activeStall) activeStall = { at: now, tried: false };
+    if (errorConfirmed()) {
+      failActive();
       return;
     }
   }
-  if (activeSlot && !state.allFailed && hasCurrentLoad(activeSlot) && !(p && p.slot === activeSlot)) {
-    // Poll the visible cam: any non-PLAYING state (UNSTARTED, CUED, BUFFERING, PAUSED, ENDED) counts as a stall.
-    const live = quietly(() => activeSlot.player.getPlayerState());
-    if (live === YS.PLAYING) activeStall = null;
-    else if (live != null && !activeStall) activeStall = { at: now, tried: false };
-  }
-  if (activeStall && activeSlot && !state.allFailed && now - activeStall.at > LOAD_TIMEOUT_MS) {
+  if (activeStall && now - activeStall.at > LOAD_TIMEOUT_MS) {
     if (!activeStall.tried) {
       activeStall = { at: now, tried: true };
-      quietly(() => activeSlot.player.playVideo());
+      quietly(() => cp.player.playVideo());
     } else {
-      activeStall = null;
       failActive(); // works while pinned too
+    }
+    return;
+  }
+  if (state.pinned || now < state.nextSwapAt) return;
+  const next = pickCam(state.currentCamId, 1);
+  if (next && next !== state.currentCamId) beginLoad(next);
+  else state.nextSwapAt = now + rotateSec() * 1000;
+}
+
+/** Pause the cam while the tab is hidden (music keeps playing); resume it when visible again. */
+function onVisibility() {
+  if (!state.started || !state.apiReady) return;
+  if (document.hidden) {
+    activeStall = null;
+    quietly(() => cp.player.pauseVideo());
+    return;
+  }
+  const now = Date.now();
+  graceUntil = now + GRACE_MS;
+  activeStall = null;
+  state.nextSwapAt = now + rotateSec() * 1000;
+  const p = state.pending;
+  if (p) {
+    if (cp.deferred) {
+      cp.deferred(); // the load never started while hidden: issue it now (also resets the pending clock)
       return;
     }
+    beginLoad(p.camId, p.dir, p.fails); // it was paused mid-load: start it over
+    return;
   }
-  if (state.pinned || !activeSlot || state.allFailed) return;
-  if (!p && now >= state.nextSwapAt - PRELOAD_LEAD_MS) {
-    const next = pickCam(state.currentCamId, 1);
-    if (next && next !== state.currentCamId) beginLoad(next, false);
-    else state.nextSwapAt = now + state.intervalSec * 1000;
-  } else if (p && !p.swapNow && now >= state.nextSwapAt) {
-    p.swapNow = true;
-    if (p.ready) swapIn();
-  }
+  if (!state.currentCamId || state.allFailed) return;
+  quietly(() => cp.player.playVideo());
+  const seq = cp.seq;
+  // Destructive recovery waits for the grace period to end; a cam that is just buffering is left alone
+  // (the stall watchdog handles it after grace).
+  setTimeout(() => {
+    if (document.hidden || cp.seq !== seq || state.pending || !state.currentCamId) return;
+    if (Date.now() < graceUntil) return;
+    const live = quietly(() => cp.player.getPlayerState());
+    if (live !== YS.PLAYING && live !== YS.BUFFERING) beginLoad(state.currentCamId);
+  }, GRACE_MS + 250);
 }
 
 /* --- cam actions --- */
@@ -496,19 +525,12 @@ function skip(dir = 1) {
   const from = state.pending ? state.pending.camId : state.currentCamId;
   const target = pickCam(from, dir);
   if (!target) return;
-  if (target === state.currentCamId) {
-    cancelPending();
-    state.nextSwapAt = Date.now() + state.intervalSec * 1000;
-    render();
+  if (state.pending && state.pending.camId === target) return;
+  if (!state.pending && target === state.currentCamId) {
+    state.nextSwapAt = Date.now() + rotateSec() * 1000;
     return;
   }
-  if (state.pending && state.pending.camId === target) {
-    state.pending.swapNow = true;
-    if (state.pending.ready) swapIn();
-    return;
-  }
-  beginLoad(target, true, dir);
-  render();
+  beginLoad(target, dir);
 }
 
 function watchNow(camId) {
@@ -516,33 +538,34 @@ function watchNow(camId) {
   state.failed.delete(camId);
   setAllFailed(false);
   if (!state.started) return;
-  if (camId === state.currentCamId && !state.pending) return;
-  if (state.pending && state.pending.camId === camId) {
-    state.pending.swapNow = true;
-    if (state.pending.ready) swapIn();
-    return;
-  }
-  beginLoad(camId, true);
-  render();
+  if (state.pending ? state.pending.camId === camId : camId === state.currentCamId) return;
+  beginLoad(camId);
 }
 
 function togglePin() {
   state.pinned = !state.pinned;
-  if (state.pinned) {
-    if (state.pending && !state.pending.swapNow) cancelPending();
-  } else {
-    state.nextSwapAt = Date.now() + state.intervalSec * 1000;
-  }
+  if (!state.pinned) state.nextSwapAt = Date.now() + rotateSec() * 1000;
   toast(state.pinned ? "Pinned. This cam stays on." : "Unpinned. Rotation is back on.");
   render();
 }
 
 function toggleInterval() {
+  if (state.lite) return;
   state.intervalSec = state.intervalSec === 60 ? 30 : 60;
   store.set("interval", state.intervalSec);
-  state.nextSwapAt = Date.now() + state.intervalSec * 1000;
-  if (state.pending && !state.pending.swapNow) cancelPending();
+  state.nextSwapAt = Date.now() + rotateSec() * 1000;
   toast(`New cam every ${state.intervalSec} seconds`);
+  render();
+}
+
+function toggleLite() {
+  state.lite = !state.lite;
+  store.set("lite", state.lite);
+  body.classList.toggle("lite", state.lite);
+  sizeCam();
+  setQuality();
+  state.nextSwapAt = Date.now() + rotateSec() * 1000;
+  toast(state.lite ? "Lite mode on" : "Lite mode off");
   render();
 }
 
@@ -550,7 +573,6 @@ function setEnabled(camId, on) {
   state.enabledOverrides[camId] = on;
   if (on === !!camById(camId)?.default) delete state.enabledOverrides[camId];
   saveOverrides();
-  if (!on && state.pending && state.pending.camId === camId && !state.pending.swapNow) cancelPending();
   render();
 }
 
@@ -562,7 +584,6 @@ function saveOverrides() {
 function selectDefaults() {
   state.enabledOverrides = {};
   saveOverrides();
-  if (state.pending && !state.pending.swapNow && !isEnabled(state.pending.camId)) cancelPending();
   toast("Default cams selected");
   render();
 }
@@ -594,16 +615,13 @@ function setAllFailed(on) {
 function retryCams() {
   state.failed.clear();
   setAllFailed(false);
-  const first = pickCam(state.currentCamId, 1) || CAMS[0].id;
-  beginLoad(first, true);
-  render();
+  beginLoad(pickCam(state.currentCamId, 1) || CAMS[0].id);
 }
 
 function startCams() {
   const pool = CAMS.filter((c) => isEnabled(c.id));
   const list = pool.length ? pool : CAMS;
-  const first = list[Math.floor(Math.random() * list.length)].id;
-  beginLoad(first, true);
+  beginLoad(list[Math.floor(Math.random() * list.length)].id);
 }
 
 /* ================================================================ music */
@@ -624,6 +642,7 @@ function createMusicPlayer() {
     modestbranding: 1,
     rel: 0,
     playsinline: 1,
+    vq: "tiny",
   };
   const origin = playerOrigin();
   if (origin) vars.origin = origin;
@@ -631,7 +650,7 @@ function createMusicPlayer() {
   musicReadyTimer = setTimeout(onMusicReadyTimeout, MUSIC_READY_MS);
   musicPlayer = new window.YT.Player("music-player", {
     host: YT_HOST,
-    width: "200",
+    width: "200", // YouTube requires at least 200x200; CSS keeps it hidden behind the cam layer
     height: "200",
     videoId: state.mixId,
     playerVars: vars,
@@ -645,6 +664,7 @@ function createMusicPlayer() {
           frame.setAttribute("tabindex", "-1");
           frame.setAttribute("title", "Music player");
         }
+        quietly(() => musicPlayer.setPlaybackQuality("tiny"));
         applyVolume();
         if (state.started) startMusic();
       },
@@ -765,6 +785,7 @@ function nextMix() {
 function onMusicState(s) {
   state.musicState = s;
   if (s === YS.PLAYING) {
+    quietly(() => musicPlayer.setPlaybackQuality("tiny"));
     state.musicErrors = 0;
     state.musicUnavailable = false;
     showTapMusic(false);
@@ -848,9 +869,13 @@ function tapToPlay() {
 
 /* ================================================================ render */
 
+function setText(node, text) {
+  if (node.textContent !== text) node.textContent = text;
+}
+
 function setBarLabel(action, text) {
   const btn = $(`.bar-btn[data-action="${action}"]`, el.bar);
-  if (btn) $(".label", btn).textContent = text;
+  if (btn) setText($(".label", btn), text);
   return btn;
 }
 
@@ -863,13 +888,16 @@ function render() {
   // Bar
   const pinBtn = setBarLabel("pin", state.pinned ? "Unpin" : "Pin");
   pinBtn.setAttribute("aria-pressed", String(state.pinned));
-  setBarLabel("interval", `Every ${state.intervalSec}s`);
-  $("#cams-interval").textContent = `New cam every ${state.intervalSec}s`;
+  const secs = rotateSec();
+  for (const b of $$('[data-action="interval"]')) b.disabled = state.lite;
+  setBarLabel("interval", `Every ${secs}s`);
+  setText($("#cams-interval"), `New cam every ${secs}s`);
+  $('.bar-btn[data-action="lite"]', el.bar).setAttribute("aria-pressed", String(state.lite));
 
   const playing = musicIsPlaying() && state.musicWantsPlay;
   const ppBtn = setBarLabel("play-pause", playing ? "Pause" : "Play");
   $("use", ppBtn).setAttribute("href", playing ? "#i-pause" : "#i-play");
-  $("#music-play").textContent = playing ? "Pause music" : "Play music";
+  setText($("#music-play"), playing ? "Pause music" : "Play music");
 
   setBarLabel("fullscreen", isFullscreen() ? "Exit fullscreen" : "Fullscreen");
 
@@ -877,23 +905,17 @@ function render() {
   const cam = camById(state.currentCamId);
   if (cam && state.started) {
     el.caption.hidden = false;
-    el.capTitle.textContent = cam.title;
-    el.capMeta.textContent = `${cam.place} · ${cam.channel}`;
-    if (state.pinned) {
-      const pin = document.createElement("span");
-      pin.className = "cap-pin";
-      pin.textContent = " · Pinned";
-      el.capMeta.append(pin);
-    }
+    setText(el.capTitle, cam.title);
+    setText(el.capMeta, `${cam.place} · ${cam.channel}${state.pinned ? " · Pinned" : ""}`);
   } else {
     el.caption.hidden = true;
   }
   const mix = mixById(state.mixId);
-  el.capMusic.textContent = state.musicUnavailable ? "Music unavailable" : mix ? `♪ ${mix.en}` : "";
+  setText(el.capMusic, state.musicUnavailable ? "Music unavailable" : mix ? `♪ ${mix.en}` : "");
   body.classList.toggle("no-caption", !state.showCaption);
 
   // "Tuning in" indicator while no cam is on screen
-  el.tuning.hidden = !(state.started && !state.allFailed && noCamVisible());
+  el.tuning.hidden = !(state.started && !state.allFailed && covered && (!state.currentCamId || (state.pending && state.pending.fails > 0)));
 
   // Cams panel
   $$('[data-action="toggle-caption"]').forEach((b) => b.setAttribute("aria-pressed", String(state.showCaption)));
@@ -917,7 +939,7 @@ function render() {
   $("#music-mute").setAttribute("aria-pressed", String(state.muted));
   $("#music-shuffle").setAttribute("aria-pressed", String(state.shuffle));
   if (document.activeElement !== el.volume) el.volume.value = String(state.volume);
-  el.volumeOut.textContent = String(state.volume);
+  setText(el.volumeOut, String(state.volume));
   for (const btn of $$(".mix-btn", el.mixList)) {
     const current = btn.dataset.id === state.mixId;
     btn.classList.toggle("is-current", current);
@@ -1086,12 +1108,37 @@ function openPanel(name, opener) {
   let target = null;
   if (name === "cams") target = $(`.cam-row[data-id="${state.currentCamId}"] [data-action="watch"]`, panel);
   if (name === "music") target = $(`.mix-btn[data-id="${state.mixId}"]`, panel);
+  if (name === "tv") renderTvQr();
   if (!target) target = $(FOCUSABLE, panel);
   if (target) {
     target.focus();
     quietly(() => target.scrollIntoView({ block: "center" }));
   }
   showUI();
+}
+
+let qrDone = false;
+
+/** Draw the QR code for TV_URL into the panel canvas, with a white quiet zone of 4 modules. */
+function renderTvQr() {
+  $("#tv-url").textContent = TV_URL;
+  if (qrDone) return;
+  const qr = qrcode(0, "M");
+  qr.addData(TV_URL);
+  qr.make();
+  const n = qr.getModuleCount();
+  const cell = 8;
+  const quiet = 4;
+  const size = (n + quiet * 2) * cell;
+  const canvas = $("#tv-qr");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = "#000";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
+  qrDone = true;
 }
 
 function closePanel(restoreFocus = true) {
@@ -1143,6 +1190,11 @@ function start() {
     return;
   }
   state.started = true;
+  if (isTv) {
+    const docEl = document.documentElement;
+    const req = docEl.requestFullscreen || docEl.webkitRequestFullscreen;
+    if (req && !isFullscreen()) Promise.resolve(quietly(() => req.call(docEl))).catch(() => {});
+  }
   body.classList.remove("is-starting");
   el.start.classList.add("leaving");
   setTimeout(() => {
@@ -1178,7 +1230,7 @@ function onApiReady() {
     el.startStatus.textContent = "";
     el.startBtn.querySelector("span").textContent = "Start";
   }
-  slots.forEach(createCamPlayer);
+  createCamPlayer();
   createMusicPlayer();
   if (state.started) begin();
 }
@@ -1435,10 +1487,14 @@ function handleAction(action, btn) {
       return togglePin();
     case "interval":
       return toggleInterval();
+    case "lite":
+      return toggleLite();
     case "open-cams":
       return openPanel("cams", btn);
     case "open-music":
       return openPanel("music", btn);
+    case "open-tv":
+      return openPanel("tv", btn);
     case "open-about":
       return openPanel("about", btn);
     case "close-panel":
@@ -1529,12 +1585,22 @@ function bindInput() {
   );
 
   window.addEventListener("wheel", () => showUI(), { passive: true });
-  window.addEventListener("resize", measureBar);
+  window.addEventListener("resize", () => {
+    measureBar();
+    sizeCam();
+  });
   document.addEventListener("fullscreenchange", render);
   document.addEventListener("webkitfullscreenchange", render);
 }
 
 /* ================================================================ boot */
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
 
 function boot() {
   buildCamsPanel();
@@ -1542,8 +1608,22 @@ function boot() {
   buildCredits();
   bindInput();
   render();
+  body.classList.toggle("lite", state.lite);
+  if (isTv) {
+    body.classList.add("tv");
+    // Keep the Start button focused until the user starts (TV browsers sometimes drop initial focus).
+    const keepFocus = () => {
+      if (!state.started && !state.openPanel && document.activeElement !== el.startBtn) el.startBtn.focus();
+    };
+    window.addEventListener("load", keepFocus);
+    setTimeout(keepFocus, 300);
+    setTimeout(keepFocus, 1500);
+  }
   el.startBtn.focus();
-  setInterval(tick, 500);
+  registerServiceWorker();
+  sizeCam();
+  setInterval(tick, 1000);
+  document.addEventListener("visibilitychange", onVisibility);
   loadYouTubeApi();
 
   window.__windowSeat = {
@@ -1553,6 +1633,7 @@ function boot() {
     start,
     currentCamId: () => state.currentCamId,
     currentMixId: () => state.mixId,
+    isTv,
   };
 }
 
