@@ -7,10 +7,15 @@ const YT_API_URL = "https://www.youtube.com/iframe_api";
 const YT_HOST = "https://www.youtube-nocookie.com";
 const PRELOAD_LEAD_MS = 6000; // start loading the next cam this long before the switch
 const LOAD_TIMEOUT_MS = 15000; // a cam that is not PLAYING by then is marked unavailable
+const COLD_LOAD_TIMEOUT_MS = 8000; // same deadline while no cam is on screen (cold start or current cam failed)
+const STUCK_MS = 7000; // loaded but still UNSTARTED/CUED this long: treat as unplayable
+const COLD_STUCK_MS = 4000; // same, while no cam is on screen
 const FADE_MS = 1500;
 const IDLE_MS = 4000;
 const PANEL_IDLE_MS = 45000;
 const MUSIC_CHECK_MS = 5000;
+const MUSIC_READY_MS = 15000; // music iframe must report ready by then
+const STALE_EVENT_MS = 300; // ignore terminal events this soon after a load call (they belong to the old video)
 const API_TIMEOUT_MS = 20000;
 const VOLUME_STEP = 10;
 
@@ -106,6 +111,7 @@ const el = {
   capMeta: $(".cap-meta"),
   capMusic: $(".cap-music"),
   tapMusic: $("#tap-music"),
+  tuning: $("#tuning"),
   notice: $("#notice"),
   noticeTitle: $("#notice-title"),
   noticeText: $("#notice-text"),
@@ -160,7 +166,9 @@ const slots = [0, 1].map((i) => ({
   waiters: [],
   camId: null,
   seq: 0,
+  loadedAt: 0,
 }));
+let activeStall = null; // { at, tried } while the on-screen cam is not PLAYING
 let activeSlot = null;
 
 function playerOrigin() {
@@ -218,9 +226,15 @@ function whenReady(slot, fn) {
 
 function loadCamInto(slot, camId) {
   slot.camId = camId;
-  slot.seq++;
+  slot.loadedAt = 0;
+  slot.sawState = false;
+  slot.nudged = false;
+  const seq = ++slot.seq;
   whenReady(slot, () => {
-    if (slot.camId !== camId) return;
+    if (slot.camId !== camId || slot.seq !== seq) return;
+    slot.loadedAt = Date.now();
+    slot.sawState = false;
+    slot.nudged = false;
     hardMute(slot);
     quietly(() => slot.player.loadVideoById(camId));
     hardMute(slot);
@@ -236,6 +250,13 @@ function stopSlot(slot) {
 function slotShows(slot, camId) {
   const data = quietly(() => slot.player.getVideoData());
   return !data || !data.video_id || data.video_id === camId;
+}
+
+/** True when a terminal event (ended/error) really belongs to the video this slot is meant to show. */
+function isCurrentLoad(slot) {
+  if (!slot.camId || !slot.loadedAt) return false;
+  if (Date.now() - slot.loadedAt < STALE_EVENT_MS) return false;
+  return slotShows(slot, slot.camId);
 }
 
 /** Pick the next cam id from `fromId` in direction `dir`, skipping failed ones. */
@@ -276,7 +297,17 @@ function beginLoad(camId, swapNow, dir = 1) {
 function swapIn() {
   const p = state.pending;
   if (!p) return;
+  const live = quietly(() => p.slot.player.getPlayerState());
+  if (live !== YS.PLAYING || !slotShows(p.slot, p.camId)) {
+    // Not actually playing (anymore): wait for PLAYING, keeping the stall deadline.
+    if (p.ready) {
+      p.ready = false;
+      p.startedAt = Date.now();
+    }
+    return;
+  }
   state.pending = null;
+  activeStall = null;
   const incoming = p.slot;
   const outgoing = activeSlot;
   activeSlot = incoming;
@@ -303,6 +334,11 @@ function swapIn() {
 function markFailed(camId) {
   if (!camId) return;
   state.failed.add(camId);
+}
+
+/** True while there is no usable cam on screen (nothing loaded yet, or the current cam failed). */
+function noCamVisible() {
+  return !activeSlot || !state.currentCamId || state.failed.has(state.currentCamId);
 }
 
 function everythingFailed() {
@@ -342,6 +378,7 @@ function failActive() {
     render();
     return;
   }
+  activeStall = null;
   const next = pickCam(state.currentCamId, 1);
   if (!next || next === state.currentCamId) {
     if (everythingFailed() || !next) setAllFailed(true);
@@ -352,34 +389,85 @@ function failActive() {
   render();
 }
 
+/** Unplayable-video check for a slot that was told to load a cam but is not progressing. */
+function slotLooksUnplayable(slot, limitMs) {
+  if (!slot.camId || !slot.loadedAt) return false;
+  const waited = Date.now() - slot.loadedAt;
+  if (waited < Math.min(limitMs, 2500)) return false;
+  const live = quietly(() => slot.player.getPlayerState());
+  if (live !== YS.UNSTARTED && live !== YS.CUED) return false;
+  if (waited < limitMs) {
+    // Give a CUED video one nudge in case autoplay just needs a kick.
+    if (live === YS.CUED && !slot.nudged) {
+      slot.nudged = true;
+      quietly(() => slot.player.playVideo());
+    }
+    return false;
+  }
+  return true;
+}
+
 function onCamState(slot, s) {
+  if (slot.loadedAt && Date.now() - slot.loadedAt >= 20) slot.sawState = true;
   if (s === YS.PLAYING || s === YS.BUFFERING) hardMute(slot);
   const p = state.pending;
   if (p && p.slot === slot) {
-    if (s === YS.PLAYING && slotShows(slot, p.camId)) {
-      p.ready = true;
-      if (p.swapNow) swapIn();
-    } else if (s === YS.ENDED) {
-      failPending();
+    if (s === YS.PLAYING) {
+      if (slotShows(slot, p.camId)) {
+        p.ready = true;
+        if (p.swapNow) swapIn();
+      }
+    } else {
+      if (p.ready) {
+        // Lost playback after preloading: not ready any more, restart the stall deadline.
+        p.ready = false;
+        p.startedAt = Date.now();
+      }
+      if (s === YS.ENDED && isCurrentLoad(slot)) failPending();
     }
     return;
   }
-  if (slot === activeSlot && s === YS.ENDED) failActive();
+  if (slot !== activeSlot) return;
+  if (s === YS.PLAYING) activeStall = null;
+  else if (s === YS.BUFFERING || s === YS.PAUSED) {
+    if (!activeStall) activeStall = { at: Date.now(), tried: false };
+  } else if (s === YS.ENDED && isCurrentLoad(slot)) failActive();
 }
 
+// YouTube error codes 2, 5, 100, 101, 150 and 153 all mean the video cannot be played here,
+// so any error for the video we just asked for is a prompt failure.
 function onCamError(slot) {
+  // Not using slotShows(): for an invalid id the player may still report the previous video id.
+  // Invalid ids report the error within ~150ms of the load call, so the usual stale-event
+  // window is skipped once the slot has already reacted to the new load.
+  if (!slot.camId || !slot.loadedAt) return;
+  if (!slot.sawState && Date.now() - slot.loadedAt < STALE_EVENT_MS) return;
   const p = state.pending;
   if (p && p.slot === slot) failPending();
-  else if (slot === activeSlot && slot.camId) failActive();
+  else if (slot === activeSlot) failActive();
 }
 
 function tick() {
   if (!state.started || !state.apiReady) return;
   const now = Date.now();
   const p = state.pending;
-  if (p && !p.ready && now - p.startedAt > LOAD_TIMEOUT_MS) {
-    failPending();
-    return;
+  if (p && !p.ready) {
+    const cold = noCamVisible();
+    const deadline = cold ? COLD_LOAD_TIMEOUT_MS : LOAD_TIMEOUT_MS;
+    if (now - p.startedAt > deadline || slotLooksUnplayable(p.slot, cold ? COLD_STUCK_MS : STUCK_MS)) {
+      failPending();
+      return;
+    }
+  }
+  if (activeStall && activeSlot && !state.allFailed && now - activeStall.at > LOAD_TIMEOUT_MS) {
+    if (!activeStall.tried) {
+      activeStall = { at: now, tried: true };
+      quietly(() => activeSlot.player.playVideo());
+    } else {
+      activeStall = null;
+      failActive(); // works while pinned too
+      return;
+    }
   }
   if (state.pinned || !activeSlot || state.allFailed) return;
   if (!p && now >= state.nextSwapAt - PRELOAD_LEAD_MS) {
@@ -514,6 +602,8 @@ function startCams() {
 let musicPlayer = null;
 let musicReady = false;
 let musicCheckTimer = 0;
+let musicReadyTimer = 0;
+let musicStuck = false; // iframe never reported ready; Retry recreates it
 
 function createMusicPlayer() {
   const vars = {
@@ -528,6 +618,8 @@ function createMusicPlayer() {
   };
   const origin = playerOrigin();
   if (origin) vars.origin = origin;
+  clearTimeout(musicReadyTimer);
+  musicReadyTimer = setTimeout(onMusicReadyTimeout, MUSIC_READY_MS);
   musicPlayer = new window.YT.Player("music-player", {
     host: YT_HOST,
     width: "200",
@@ -536,7 +628,9 @@ function createMusicPlayer() {
     playerVars: vars,
     events: {
       onReady: () => {
+        clearTimeout(musicReadyTimer);
         musicReady = true;
+        musicStuck = false;
         const frame = quietly(() => musicPlayer.getIframe());
         if (frame) {
           frame.setAttribute("tabindex", "-1");
@@ -551,6 +645,46 @@ function createMusicPlayer() {
   });
 }
 
+function setTapMusicLabel(text) {
+  const span = el.tapMusic.querySelector("span");
+  if (span) span.textContent = text;
+}
+
+function onMusicReadyTimeout() {
+  if (musicReady) return;
+  musicStuck = true;
+  setTapMusicLabel("Music did not load. Retry");
+  if (state.started) showTapMusic(true);
+}
+
+/** Recreate the music iframe after it never became ready. */
+function retryMusicPlayer() {
+  const host = document.getElementById("music-wrap");
+  quietly(() => musicPlayer.destroy());
+  musicPlayer = null;
+  musicReady = false;
+  musicStuck = false;
+  if (host && !document.getElementById("music-player")) {
+    const d = document.createElement("div");
+    d.id = "music-player";
+    host.append(d);
+  }
+  state.musicWantsPlay = true;
+  state.musicErrors = 0;
+  state.musicUnavailable = false;
+  setTapMusicLabel("Tap to play music");
+  showTapMusic(false);
+  if (window.YT && window.YT.Player) createMusicPlayer();
+  render();
+}
+
+/** Explicit retry after every mix errored: reset the error state and load another mix. */
+function retryUnavailableMusic() {
+  state.musicUnavailable = false;
+  state.musicErrors = 0;
+  nextMix();
+}
+
 function applyVolume() {
   if (!musicReady) return;
   quietly(() => {
@@ -561,6 +695,7 @@ function applyVolume() {
 }
 
 function startMusic() {
+  if (musicStuck) showTapMusic(true);
   if (!musicReady) return; // onReady will call again
   applyVolume();
   if (state.musicWantsPlay) quietly(() => musicPlayer.playVideo());
@@ -622,6 +757,7 @@ function onMusicState(s) {
   state.musicState = s;
   if (s === YS.PLAYING) {
     state.musicErrors = 0;
+    state.musicUnavailable = false;
     showTapMusic(false);
   } else if (s === YS.ENDED) {
     nextMix();
@@ -647,7 +783,13 @@ function musicIsPlaying() {
 }
 
 function togglePlayMusic() {
+  if (musicStuck) return retryMusicPlayer();
   if (!musicReady) return;
+  if (state.musicUnavailable) {
+    state.musicWantsPlay = true;
+    retryUnavailableMusic();
+    return;
+  }
   if (musicIsPlaying() && state.musicWantsPlay) {
     state.musicWantsPlay = false;
     quietly(() => musicPlayer.pauseVideo());
@@ -686,8 +828,10 @@ function toggleShuffle() {
 }
 
 function tapToPlay() {
+  if (musicStuck) return retryMusicPlayer();
   state.musicWantsPlay = true;
   if (!musicReady) return;
+  if (state.musicUnavailable) return retryUnavailableMusic();
   applyVolume();
   quietly(() => musicPlayer.playVideo());
   scheduleMusicCheck();
@@ -738,6 +882,9 @@ function render() {
   const mix = mixById(state.mixId);
   el.capMusic.textContent = state.musicUnavailable ? "Music unavailable" : mix ? `♪ ${mix.en}` : "";
   body.classList.toggle("no-caption", !state.showCaption);
+
+  // "Tuning in" indicator while no cam is on screen
+  el.tuning.hidden = !(state.started && !state.allFailed && noCamVisible());
 
   // Cams panel
   $$('[data-action="toggle-caption"]').forEach((b) => b.setAttribute("aria-pressed", String(state.showCaption)));
@@ -908,6 +1055,11 @@ function hideNotice() {
 
 let panelOpener = null;
 
+/** Background controls cannot take focus while a dialog is open. */
+function setBackgroundInert(on) {
+  [el.bar, el.notice, el.tapMusic, el.start].forEach((n) => n && (n.inert = on));
+}
+
 function openPanel(name, opener) {
   if (state.openPanel === name) {
     closePanel();
@@ -920,6 +1072,7 @@ function openPanel(name, opener) {
   state.openPanel = name;
   panel.hidden = false;
   body.classList.add("panel-open");
+  setBackgroundInert(true);
   render();
   let target = null;
   if (name === "cams") target = $(`.cam-row[data-id="${state.currentCamId}"] [data-action="watch"]`, panel);
@@ -938,6 +1091,7 @@ function closePanel(restoreFocus = true) {
   el.panels[name].hidden = true;
   state.openPanel = null;
   body.classList.remove("panel-open");
+  setBackgroundInert(false);
   if (restoreFocus) {
     const target =
       panelOpener && isVisible(panelOpener)
@@ -1207,6 +1361,18 @@ function onKeyDown(e) {
     if (state.openPanel) {
       e.preventDefault();
       closePanel();
+    }
+    return;
+  }
+
+  if (key === "Tab" && state.openPanel) {
+    const items = focusablesIn([el.panels[state.openPanel]]);
+    if (items.length) {
+      const i = items.indexOf(document.activeElement);
+      if (i === -1 || (e.shiftKey && i === 0) || (!e.shiftKey && i === items.length - 1)) {
+        e.preventDefault();
+        (e.shiftKey ? items[items.length - 1] : items[0]).focus();
+      }
     }
     return;
   }
