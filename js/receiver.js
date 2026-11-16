@@ -424,7 +424,14 @@ startYouTube();
 if (DEBUG) {
   // No Cast context in debug mode: same player logic, driven through window.__receiver.send.
   Object.defineProperty(window, "__receiver", {
-    value: { get state() { return snapshot(); }, send: handle, log },
+    value: {
+      get state() { return snapshot(); },
+      send: handle,
+      log,
+      // Test probes for the soak run.
+      music: () => ({ state: quietly(() => musicPlayer.getPlayerState()), time: quietly(() => musicPlayer.getCurrentTime()), vol: quietly(() => musicPlayer.getVolume()), muted: quietly(() => musicPlayer.isMuted()) }),
+      cam: () => ({ state: quietly(() => camPlayer.getPlayerState()) }),
+    },
   });
 } else {
   loadScript(CAF_URL).then(startCast, () => note("castUnavailable"));
