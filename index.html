@@ -25,22 +25,23 @@
     <symbol id="i-vol-down" viewBox="0 0 24 24"><path d="M3.5 9h4l5-4v14l-5-4h-4z" fill="currentColor"/><path d="M16 12h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
     <symbol id="i-vol-up" viewBox="0 0 24 24"><path d="M3.5 9h4l5-4v14l-5-4h-4z" fill="currentColor"/><path d="M15.5 12h6M18.5 9v6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
     <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-lite" viewBox="0 0 24 24"><path d="M13 3L5 13.5h6L10 21l8-10.5h-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="7.6" r="1.3" fill="currentColor"/></symbol>
   </svg>
 
-  <!-- Music player: kept on screen but covered by the cam stage (never display:none) -->
+  <!-- Music player: a 2x2 px, nearly transparent iframe in a corner (never display:none) -->
   <div id="music-wrap" aria-hidden="true"><div id="music-player"></div></div>
 
   <!-- Cam layer -->
   <div id="stage" aria-hidden="true">
-    <div class="cam-slot" id="cam-0"><div class="cam-player"></div></div>
-    <div class="cam-slot" id="cam-1"><div class="cam-player"></div></div>
+    <div id="cam"><div class="cam-player"></div></div>
     <div class="vignette"></div>
     <div class="scrim"></div>
+    <div id="blackout" class="on"></div>
   </div>
 
   <!-- Shown only while no cam is on screen -->
-  <div id="tuning" class="tuning" role="status" aria-live="polite" hidden>Tuning in<span class="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></div>
+  <div id="tuning" class="tuning" role="status" aria-live="polite" hidden>Tuning in...</div>
 
   <!-- Caption -->
   <div id="caption" class="caption" hidden>
@@ -66,6 +67,7 @@
     <button class="bar-btn" type="button" data-action="pin" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg><span class="label">Pin</span></button>
     <button class="bar-btn" type="button" data-action="next" id="btn-next"><svg class="icon" aria-hidden="true"><use href="#i-next"></use></svg><span class="label">Next</span></button>
     <button class="bar-btn" type="button" data-action="interval"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg><span class="label">Every 60s</span></button>
+    <button class="bar-btn" type="button" data-action="lite" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-lite"></use></svg><span class="label">Lite</span></button>
     <button class="bar-btn" type="button" data-action="open-cams" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-cams"></use></svg><span class="label">Cams</span></button>
     <button class="bar-btn" type="button" data-action="open-music" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-music"></use></svg><span class="label">Music</span></button>
     <button class="bar-btn" type="button" data-action="play-pause"><svg class="icon" aria-hidden="true"><use href="#i-pause"></use></svg><span class="label">Pause</span></button>

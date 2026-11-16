@@ -7,11 +7,11 @@
   --accent: #ffd27f;
   --accent-ink: #1b1408;
   --focus: #ffe39a;
-  --glass: rgba(18, 18, 24, 0.55);
-  --glass-strong: rgba(14, 14, 20, 0.78);
+  --glass: rgba(18, 18, 24, 0.82);
+  --glass-strong: rgba(14, 14, 20, 0.92);
   --line: rgba(255, 255, 255, 0.14);
   --radius: 1.25rem;
-  --fade: 1.5s;
+  --fade: 0.4s;
   --ui: 0.45s;
   --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", Meiryo, Arial, sans-serif;
@@ -52,18 +52,19 @@ button { font: inherit; color: inherit; }
 }
 .kbd input[type="range"]:focus { outline-offset: 0.4rem; }
 
-/* ---------- Music player (covered, still playing) ---------- */
+/* ---------- Music player: tiny, nearly transparent, in a corner (not display:none) ---------- */
 #music-wrap {
   position: fixed;
-  left: 0;
+  right: 0;
   bottom: 0;
-  width: 200px;
-  height: 200px;
+  width: 2px;
+  height: 2px;
+  opacity: 0.01;
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
 }
-#music-wrap iframe { width: 200px; height: 200px; border: 0; }
+#music-wrap iframe { width: 2px; height: 2px; border: 0; }
 
 /* ---------- Cam stage ---------- */
 #stage {
@@ -74,28 +75,32 @@ button { font: inherit; color: inherit; }
   background: #000;
 }
 
-.cam-slot {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  z-index: 0;
-  transition: opacity var(--fade) ease;
-}
-.cam-slot.is-active { opacity: 1; z-index: 2; }
-.cam-slot.is-leaving { opacity: 1; z-index: 1; transition: none; }
-
-/* 16:9 scaled to cover, center cropped. */
-.cam-slot iframe,
-.cam-slot .cam-player {
+/* One cam iframe, sized by JS (capped near 1920x1080) and scaled up with a transform to cover the viewport. */
+#cam { position: absolute; inset: 0; overflow: hidden; }
+#cam iframe,
+#cam .cam-player {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: max(100vw, 177.7778vh);
-  height: max(100vh, 56.25vw);
-  transform: translate(-50%, -50%);
+  width: var(--cw, 1920px);
+  height: var(--ch, 1080px);
+  transform: translate(-50%, -50%) scale(var(--cs, 1));
+  transform-origin: center;
   border: 0;
   pointer-events: none;
 }
+
+/* Black overlay used to switch cams. */
+#blackout {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--fade) ease;
+}
+#blackout.on { opacity: 1; }
 
 .vignette {
   position: absolute;
@@ -121,9 +126,6 @@ button { font: inherit; color: inherit; }
   background: var(--glass);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  backdrop-filter: blur(18px) saturate(140%);
-  box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.35);
 }
 
 /* ---------- Caption ---------- */
@@ -131,20 +133,14 @@ button { font: inherit; color: inherit; }
   position: fixed;
   left: 50%;
   top: 50%;
-  z-index: 5;
+  z-index: 2;
   transform: translate(-50%, -50%);
   font-size: 1.2rem;
   letter-spacing: 0.08em;
   color: var(--fg-dim);
   text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
   pointer-events: none;
-  animation: tuning-breathe 3.2s ease-in-out infinite;
 }
-.tuning .dots i { font-style: normal; animation: tuning-dot 1.8s ease-in-out infinite; }
-.tuning .dots i:nth-child(2) { animation-delay: 0.25s; }
-.tuning .dots i:nth-child(3) { animation-delay: 0.5s; }
-@keyframes tuning-breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
-@keyframes tuning-dot { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
 
 .caption {
   position: fixed;
@@ -291,7 +287,6 @@ button { font: inherit; color: inherit; }
   font-size: 1.1rem;
   font-weight: 650;
   cursor: pointer;
-  box-shadow: 0 0.8rem 2.5rem rgba(0, 0, 0, 0.45);
   transition: opacity var(--ui) ease, transform var(--ui) ease;
   animation: fade-in 0.4s ease both;
 }
@@ -470,6 +465,11 @@ button { font: inherit; color: inherit; }
   :root { --fade: 0s; --ui: 0s; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Lite mode: no animations or transitions, no gradient overlays, static caption. */
+.lite *, .lite *::before, .lite *::after { animation: none !important; transition: none !important; }
+.lite .vignette, .lite .scrim { display: none; }
+.lite .caption, .lite.ui-hidden .caption { transform: none; }
 
 /* Small screens (phones): keep things usable. */
 @media (max-width: 700px) {

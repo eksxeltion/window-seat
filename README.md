@@ -26,7 +26,9 @@ Remote:
 - OK: choose
 - Back: close a panel
 
-Bar buttons: Previous cam, Pin, Next cam, rotation every 30s or 60s, Cams, Music, Play or Pause music, Vol down, Vol up, Fullscreen, About.
+Bar buttons: Previous cam, Pin, Next cam, rotation every 30s or 60s, Lite, Cams, Music, Play or Pause music, Vol down, Vol up, Fullscreen, About.
+
+Lite mode: the Lite button (saved in your browser, off by default) makes the page much lighter on a laptop. It asks YouTube for lower video quality, fixes rotation at 60s (the 30s/60s button is disabled), and turns off all animations, transitions and gradient overlays.
 
 Keyboard:
 
