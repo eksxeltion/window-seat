@@ -160,7 +160,12 @@ function onCamState(e) {
 
 function onCamError(e) {
   // 2, 5, 100, 101, 150, 153 and anything else: the cam cannot play, skip it.
+  // Ignore late errors while waiting out the all-failed backoff.
+  if (awaitingRetry) return;
   const camId = pending ? pending.camId : s.camId;
+  // Only fail the cam the player actually reports, so a late error from a replaced video is ignored.
+  const reported = quietly(() => camPlayer.getVideoData().video_id);
+  if (reported && camId && reported !== camId) return;
   if (camId) failCam(camId, "error " + e.data);
 }
 
