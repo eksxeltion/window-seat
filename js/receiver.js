@@ -228,6 +228,7 @@ let musicRetryTimer = 0;
 function showMixTitle() {
   const mix = mixById(s.mixId);
   $("music-title").textContent = mix ? mix.en : "";
+  $("cap-music").textContent = mix ? `Now playing: ${mix.en}` : "";
 }
 
 function playMix(id) {

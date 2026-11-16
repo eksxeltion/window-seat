@@ -1,14 +1,14 @@
 /* Window Seat Cast receiver. Designed for a 1920x1080 TV; sizes scale with the viewport. */
 html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: #fff; font-family: system-ui, "Segoe UI", Roboto, sans-serif; }
 
-#cam { position: fixed; inset: 0; background: #000; }
+#cam { position: fixed; inset: 0; background: #000; z-index: 1; }
 #cam iframe, #cam-player { width: 100%; height: 100%; border: 0; display: block; }
 
-#blackout { position: fixed; inset: 0; background: #000; opacity: 0; transition: opacity 0.4s ease; pointer-events: none; }
+#blackout { position: fixed; inset: 0; z-index: 2; background: #000; opacity: 0; transition: opacity 0.4s ease; pointer-events: none; }
 #blackout.on { opacity: 1; }
 
 /* TV safe area: 5% overscan margin on every side. */
-#safe { position: fixed; inset: 5%; pointer-events: none; }
+#safe { position: fixed; inset: 5%; pointer-events: none; z-index: 3; }
 
 #caption {
   position: absolute; left: 0; bottom: 0; max-width: 52%;
@@ -20,13 +20,11 @@ html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color:
 #cap-meta { margin-top: 0.3em; font-size: max(24px, 1.6vw); color: rgba(255, 255, 255, 0.88); }
 #cap-brand { margin-top: 0.6em; font-size: max(16px, 1vw); letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255, 255, 255, 0.55); }
 
-#music { position: absolute; right: 0; bottom: 0; width: 356px; text-align: center; }
-#music-frame {
-  width: 356px; height: 200px; overflow: hidden; background: #000;
-  border-radius: 14px; border: 2px solid rgba(255, 255, 255, 0.28); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
-}
+/* Music: kept in the DOM at 356x200 (above YouTube's 200x200 minimum) so it keeps playing, but hidden
+   behind the opaque cam layer and fully transparent. No display:none or visibility:hidden on purpose. */
+#music { position: fixed; left: 0; top: 0; z-index: 0; width: 356px; height: 200px; opacity: 0; pointer-events: none; }
+#music-frame { width: 356px; height: 200px; overflow: hidden; }
 #music-frame iframe, #music-player { width: 356px; height: 200px; border: 0; display: block; }
-#music-title {
-  margin-top: 10px; font-size: max(20px, 1.2vw); line-height: 1.25; color: rgba(255, 255, 255, 0.9);
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
-}
+#music-title { display: none; }
+#cap-music { margin-top: 0.4em; font-size: max(18px, 1.1vw); color: rgba(255, 255, 255, 0.75); }
+#cap-music:empty { display: none; }
