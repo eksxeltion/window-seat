@@ -1543,9 +1543,11 @@ function onKeyDown(e) {
     if (key === "MediaTrackNext") skip(1);
     else if (key === "MediaTrackPrevious") skip(-1);
     else if (key === "MediaPlay") {
-      if (!musicIsPlaying()) togglePlayMusic();
+      if (tv) remoteCmd("play-on");
+      else if (!musicIsPlaying()) togglePlayMusic();
     } else if (key === "MediaPause") {
-      if (musicIsPlaying()) togglePlayMusic();
+      if (tv) remoteCmd("play-off");
+      else if (musicIsPlaying()) togglePlayMusic();
     } else togglePlayMusic();
     return;
   }
@@ -1776,6 +1778,7 @@ function boot() {
     currentCamId: () => state.currentCamId,
     currentMixId: () => state.mixId,
     isTv,
+    isCasting,
   };
 }
 

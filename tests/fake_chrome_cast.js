@@ -26,7 +26,7 @@
   const sent = (window.__fakeSent = []);
   function makeSession() {
     const upd = [], msg = [];
-    return {
+    const o = {
       sessionId: "s1", appId: "48BEB59E", displayName: "Window Seat", statusText: "", namespaces: [{ name: "urn:x-cast:com.windowseat" }],
       status: "connected", media: [], receiver: { friendlyName: "Living Room TV", volume: { level: 1, muted: false } },
       addUpdateListener(f) { upd.push(f); }, addMediaListener() {}, loadMedia() {}, queueLoad() {}, addMessageListener(ns, f) { msg.push(f); }, removeMessageListener() {},
@@ -34,6 +34,8 @@
       leave(ok) { this.status = "disconnected"; upd.forEach((f) => f(true)); ok && ok(); }, stop(ok) { this.status = "stopped"; upd.forEach((f) => f(false)); ok && ok(); },
       _reply(o) { msg.forEach((f) => f("urn:x-cast:com.windowseat", JSON.stringify(o))); },
     };
+    o._upd = upd;
+    return o;
   }
   window.__fake = {
     // The user picks the TV in the native picker: receiver action, then the session arrives.

@@ -66,5 +66,22 @@ with sync_playwright() as p:
     check("C: Start creates no local iframe", pg.evaluate(YT) == 0)
     controls(pg, "C")
     pg.context.close()
+
+    # Flow D: Stop casting via the remote button (session.leave/stop), then Start is local again
+    # Flow E: the receiver side disconnects (session status -> disconnected, update listeners fire)
+    for flow in "DE":
+        pg = page()
+        pg.evaluate("()=>__fake.join()"); pg.wait_for_timeout(1000)
+        check(f"{flow}: remote shown", pg.is_visible("#remote"))
+        if flow == "D":
+            pg.locator('#remote [data-cmd="stop"]').tap()
+        else:
+            pg.evaluate("()=>{const s=__fakeSession; s.status='disconnected'; s._upd.forEach(f=>f(false));}")
+        pg.wait_for_timeout(800)
+        check(f"{flow}: remote hidden, Start screen back", (not pg.is_visible("#remote")) and pg.is_visible("#start-btn"))
+        check(f"{flow}: isCasting() false", pg.evaluate("()=>__windowSeat.isCasting()") is False)
+        pg.click("#start-btn"); pg.wait_for_timeout(4000)
+        check(f"{flow}: Start creates local YouTube iframes again", pg.evaluate(YT) == 2 and not pg.is_visible("#remote"))
+        pg.context.close()
     b.close()
 print(logs); sys.exit(1 if fails or logs else 0)

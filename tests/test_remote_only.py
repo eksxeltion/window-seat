@@ -42,10 +42,21 @@ with sync_playwright() as p:
         clear(pg); pg.keyboard.press(key); pg.wait_for_timeout(150)
         check(f"vi: key {key} -> {t}", types(pg) == [t])
     check("vi: still no local iframe", pg.evaluate(YT) == 0)
+    # explicit MediaPlay / MediaPause are absolute, whatever the remote's toggle state is
+    for key, val in [("MediaPlay", True), ("MediaPlay", True), ("MediaPause", False), ("MediaPause", False)]:
+        clear(pg); pg.evaluate("(k)=>document.dispatchEvent(new KeyboardEvent('keydown',{key:k,bubbles:true}))", key); pg.wait_for_timeout(150)
+        sent = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
+        check(f"vi: {key} sends playMusic {val}", len(sent) == 1 and sent[0]["type"] == "playMusic" and sent[0]["value"] is val)
     # (vii) build stamps
     pg.evaluate("()=>document.querySelector('[data-action=open-about]').click()"); pg.wait_for_timeout(200)
     check("vii: About shows the build", pg.text_content("#about-build") == "Build 2026-11-16.2")
     check("vii: window.__windowSeat.build", pg.evaluate("()=>__windowSeat.build") == "2026-11-16.2")
+    # (viii) ending the session (real CAF order) returns to the Start screen
+    pg.locator('#remote [data-cmd="stop"]').tap(); pg.wait_for_timeout(500)
+    check("viii: Stop casting hides the remote, Start screen back", (not pg.is_visible("#remote")) and pg.is_visible("#start-btn"))
+    check("viii: isCasting() false after end", pg.evaluate("()=>__windowSeat.isCasting()") is False)
+    pg.click("#start-btn", force=True); pg.wait_for_timeout(4000)
+    check("viii: Start creates local iframes again", pg.evaluate(YT) == 2)
     pg.context.close()
 
     # (iii) playing locally, then CONNECTING

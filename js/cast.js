@@ -136,6 +136,10 @@ function runCmd(name) {
     }
     case "mute":
       return act({ type: "mute", value: !remote.muted }, { muted: !remote.muted });
+    case "play-on":
+      return act({ type: "playMusic", value: true }, { musicPaused: false });
+    case "play-off":
+      return act({ type: "playMusic", value: false }, { musicPaused: true });
     case "play":
       return act({ type: "playMusic", value: remote.musicPaused }, { musicPaused: !remote.musicPaused });
     case "next-mix":
@@ -352,13 +356,26 @@ function onSessionStarted(s, resumed) {
   send({ type: "getState" });
 }
 
+/** CAF dispatches SESSION_ENDED while getCurrentSession() still returns the ending session, so a current
+ *  session only counts if its state is not terminal. */
+function liveSession(ctx) {
+  const cur = quietly(() => ctx.getCurrentSession());
+  if (!cur) return null;
+  if (quietly(() => cur.getSessionState()) === "SESSION_ENDED") return null;
+  const cs = quietly(() => ctx.getSessionState());
+  if (cs === "SESSION_ENDED" || cs === "NO_SESSION" || cs === "SESSION_START_FAILED") return null;
+  return cur;
+}
+
 /** The single source of truth: is a Cast session active or connecting? Safe before the SDK loads. */
 export function isCasting() {
-  if (session) return true;
-  if (!castConfigured) return false;
+  if (!castConfigured) return !!session;
   const ctx = quietly(() => cast.framework.CastContext.getInstance());
-  if (!ctx) return false;
-  if (quietly(() => ctx.getCurrentSession())) return true;
+  if (!ctx) return !!session;
+  if (session && quietly(() => session.getSessionState()) === "SESSION_ENDED") return false;
+  if (session) return true;
+  if (liveSession(ctx)) return true;
+  if (quietly(() => ctx.getSessionState()) === "SESSION_ENDED") return false;
   const st = quietly(() => ctx.getCastState());
   return st === "CONNECTING" || st === "CONNECTED";
 }
@@ -368,7 +385,7 @@ export function syncRemoteMode() {
   if (!hooks || !ui.root) return;
   const ctx = quietly(() => cast.framework.CastContext.getInstance());
   if (!ctx) return;
-  const cur = quietly(() => ctx.getCurrentSession());
+  const cur = liveSession(ctx);
   const st = quietly(() => ctx.getCastState());
   if (cur) {
     if (cur !== session) onSessionStarted(cur, true); // adopt a session we missed the event for
@@ -384,7 +401,8 @@ export function syncRemoteMode() {
 
 function onSessionEnded() {
   const ctx = quietly(() => cast.framework.CastContext.getInstance());
-  if (ctx && quietly(() => ctx.getCurrentSession())) return syncRemoteMode();
+  const other = ctx && liveSession(ctx);
+  if (other && other !== session) return syncRemoteMode(); // CAF reports a different live session
   leaveRemote();
 }
 
