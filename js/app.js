@@ -13,8 +13,6 @@ const STUCK_MS = 7000; // loaded but still UNSTARTED/CUED this long: treat as un
 const COLD_STUCK_MS = 4000; // same, while no cam is on screen
 const FADE_MS = 400; // black overlay fade when switching cams
 const GRACE_MS = 8000; // stall watchdog stays quiet this long after the tab becomes visible
-const IDLE_MS = 4000;
-const PANEL_IDLE_MS = 45000;
 const MUSIC_CHECK_MS = 5000;
 const MUSIC_READY_MS = 15000; // music iframe must report ready by then
 const API_TIMEOUT_MS = 20000;
@@ -103,7 +101,7 @@ const state = {
   musicErrors: 0,
   musicUnavailable: false,
   // ui
-  uiHidden: false,
+  uiHidden: !store.get("menuOpen", true), // "menu closed"; the control bar never auto-hides
   openPanel: null,
   casting: false,
 };
@@ -122,6 +120,7 @@ const el = {
   startStatus: $("#start-status"),
   bar: $("#bar"),
   nextBtn: $("#btn-next"),
+  menuBtn: $("#menu-btn"),
   caption: $("#caption"),
   capTitle: $(".cap-title"),
   capMeta: $(".cap-meta"),
@@ -166,11 +165,11 @@ function formatLength(minutes) {
 /* ---------------------------------------------------------------- toast */
 
 let toastTimer = 0;
-function toast(text) {
+function toast(text, ms = 2200) {
   el.toast.textContent = text;
   el.toast.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.toast.classList.remove("show"), 2200);
+  toastTimer = setTimeout(() => el.toast.classList.remove("show"), ms);
 }
 
 /* ================================================================ cams */
@@ -746,7 +745,6 @@ function showTapMusic(on) {
   const wasHidden = el.tapMusic.hidden;
   el.tapMusic.hidden = !on;
   if (on && wasHidden && !state.openPanel && state.started) {
-    showUI();
     el.tapMusic.focus();
   } else if (!on && document.activeElement === el.tapMusic) {
     el.nextBtn.focus();
@@ -1074,7 +1072,6 @@ function showNotice(title, text, buttonText, action) {
   noticeAction = action;
   el.notice.hidden = false;
   if (!state.openPanel && state.started) {
-    showUI();
     el.noticeBtn.focus();
   }
 }
@@ -1118,7 +1115,6 @@ function openPanel(name, opener) {
     target.focus();
     quietly(() => target.scrollIntoView({ block: "center" }));
   }
-  showUI();
 }
 
 let qrDone = false;
@@ -1162,7 +1158,6 @@ function closePanel(restoreFocus = true) {
     target?.focus();
   }
   panelOpener = null;
-  showUI();
 }
 
 /* ================================================================ fullscreen */
@@ -1205,9 +1200,9 @@ function start() {
     el.start.hidden = true;
   }, reducedMotion.matches ? 0 : 650);
   if (state.openPanel) closePanel(false);
-  el.nextBtn.focus();
+  syncMenu();
+  (state.uiHidden ? el.menuBtn : el.nextBtn).focus();
   measureBar();
-  showUI();
   if (state.apiReady) begin();
   else el.startStatus.textContent = "Connecting to YouTube...";
 }
@@ -1267,6 +1262,7 @@ function setupCast() {
     getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume }),
     onStart: pauseLocalForCast,
     onEnd: resumeAfterCast,
+    toast: (text) => toast(text, 6000),
   });
 }
 
@@ -1321,23 +1317,24 @@ function loadYouTubeApi() {
 
 /* ================================================================ ui visibility */
 
-let idleTimer = 0;
-
-function showUI() {
-  clearTimeout(idleTimer);
-  if (state.uiHidden) {
-    state.uiHidden = false;
-    body.classList.remove("ui-hidden");
-  }
-  idleTimer = setTimeout(hideUI, state.openPanel ? PANEL_IDLE_MS : IDLE_MS);
+// The control bar is opened and closed explicitly (Menu button, Enter/OK, M, Close, Escape/Back).
+// It never hides on a timer. The open/closed choice is remembered.
+function syncMenu() {
+  body.classList.toggle("ui-hidden", state.uiHidden);
+  el.menuBtn.setAttribute("aria-expanded", String(!state.uiHidden));
 }
 
-function hideUI() {
-  if (!state.started) return;
-  if (state.openPanel) closePanel();
-  clearTimeout(idleTimer);
-  state.uiHidden = true;
-  body.classList.add("ui-hidden");
+function setMenu(open) {
+  state.uiHidden = !open;
+  store.set("menuOpen", open);
+  if (!open && state.openPanel) closePanel(false);
+  syncMenu();
+  if (open) el.nextBtn.focus();
+  else el.menuBtn.focus();
+}
+
+function toggleMenu() {
+  setMenu(state.uiHidden);
 }
 
 /* ================================================================ focus / d-pad */
@@ -1356,7 +1353,8 @@ function currentScope() {
   const scopes = [];
   if (!el.notice.hidden) scopes.push(el.notice);
   if (!el.tapMusic.hidden) scopes.push(el.tapMusic);
-  scopes.push(el.bar);
+  scopes.push(el.menuBtn);
+  if (!state.uiHidden) scopes.push(el.bar);
   return scopes;
 }
 
@@ -1373,7 +1371,7 @@ function ensureFocus() {
   const scopes = currentScope();
   const active = document.activeElement;
   if (active && active !== body && scopes.some((s) => s.contains(active)) && isVisible(active)) return;
-  const fallback = state.started && !state.openPanel ? el.nextBtn : focusablesIn(scopes)[0];
+  const fallback = state.started && !state.openPanel ? (state.uiHidden ? el.menuBtn : el.nextBtn) : focusablesIn(scopes)[0];
   fallback?.focus();
 }
 
@@ -1458,25 +1456,23 @@ function onKeyDown(e) {
     } else if (key === "MediaPause") {
       if (musicIsPlaying()) togglePlayMusic();
     } else togglePlayMusic();
-    showUI();
     return;
   }
 
-  // First press while hidden only reveals the controls.
-  if (state.started && state.uiHidden) {
-    if (["Shift", "Control", "Alt", "Meta"].includes(key)) return;
+  // Enter/OK with nothing focused opens the menu (TV remotes).
+  if (state.started && state.uiHidden && !state.openPanel && key === "Enter" && !isInteractive(document.activeElement)) {
     e.preventDefault();
-    e.stopPropagation();
-    showUI();
-    ensureFocus();
+    setMenu(true);
     return;
   }
-  showUI();
 
   if (BACK_KEYS.has(key)) {
     if (state.openPanel) {
       e.preventDefault();
       closePanel();
+    } else if (state.started && !state.uiHidden) {
+      e.preventDefault();
+      setMenu(false);
     }
     return;
   }
@@ -1516,6 +1512,10 @@ function onKeyDown(e) {
       break;
     case "m":
       e.preventDefault();
+      toggleMenu();
+      break;
+    case "u":
+      e.preventDefault();
       toggleMute();
       break;
     case "f":
@@ -1552,6 +1552,10 @@ function handleAction(action, btn) {
       return openPanel("tv", btn);
     case "open-about":
       return openPanel("about", btn);
+    case "toggle-menu":
+      return toggleMenu();
+    case "close-menu":
+      return setMenu(false);
     case "close-panel":
       return closePanel();
     case "play-pause":
@@ -1589,19 +1593,12 @@ function handleAction(action, btn) {
   }
 }
 
-let suppressClick = false;
 let lastPointer = { x: -1, y: -1 };
 
 function bindInput() {
   window.addEventListener("keydown", onKeyDown, true);
 
   document.addEventListener("click", (e) => {
-    if (suppressClick) {
-      suppressClick = false;
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
     const btn = e.target.closest("[data-action]");
     if (!btn) return;
     handleAction(btn.dataset.action, btn);
@@ -1617,13 +1614,6 @@ function bindInput() {
     "pointerdown",
     (e) => {
       if (e.pointerType === "mouse") body.classList.remove("kbd");
-      if (state.started && state.uiHidden) {
-        suppressClick = true;
-        setTimeout(() => (suppressClick = false), 600);
-        showUI();
-        return;
-      }
-      showUI();
     },
     true,
   );
@@ -1634,12 +1624,10 @@ function bindInput() {
       if (Math.abs(e.clientX - lastPointer.x) + Math.abs(e.clientY - lastPointer.y) < 4) return;
       lastPointer = { x: e.clientX, y: e.clientY };
       body.classList.remove("kbd");
-      showUI();
     },
     { passive: true },
   );
 
-  window.addEventListener("wheel", () => showUI(), { passive: true });
   window.addEventListener("resize", () => {
     measureBar();
     sizeCam();

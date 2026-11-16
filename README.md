@@ -39,10 +39,13 @@ Keyboard:
 | N or Next track | Next cam |
 | Previous track | Previous cam |
 | P | Pin or unpin the current cam |
-| M | Mute or unmute music |
+| M, or Enter/OK with nothing focused | Open or close the menu |
+| U | Mute or unmute music |
 | Space | Play or pause music (when no button is focused) |
 | F | Fullscreen |
-| Esc or Backspace | Close a panel |
+| Esc, Backspace or Back | Close a panel, then the menu |
+
+The controls never hide on their own. Tap the quiet **Menu** button in the top right corner to open or close them; your choice is remembered.
 
 The Cams panel lets you choose which cams are in the rotation, watch any cam now, and turn the caption on or off. The Music panel lets you pick a mix, set the volume, and shuffle. Your choices are saved in the browser.
 
