@@ -3,6 +3,7 @@
   const listeners = {};
   const sent = [];
   const msgListeners = [];
+  const sessListeners = {};
   const session = {
     sendMessage(ns, data) {
       sent.push({ ns, data: JSON.parse(JSON.stringify(data)) });
@@ -13,6 +14,7 @@
     addMessageListener(ns, fn) { msgListeners.push(fn); },
     getCastDevice() { return { friendlyName: "Mock TV" }; },
     getSessionState() { return sessState; },
+    addEventListener(type, fn) { (sessListeners[type] = sessListeners[type] || []).push(fn); },
   };
   let sessState = "SESSION_STARTED";
   let hasSession = !!window.__mockResume;
@@ -38,6 +40,7 @@
   window.chrome.cast = { AutoJoinPolicy: { ORIGIN_SCOPED: "origin_scoped" } };
   window.cast = { framework: {
     CastContext: { getInstance: () => ctx },
+    SessionEventType: { APPLICATION_STATUS_CHANGED: "applicationstatuschanged", APPLICATION_METADATA_CHANGED: "applicationmetadatachanged" },
     SessionState: { SESSION_STARTED: "SESSION_STARTED", SESSION_RESUMED: "SESSION_RESUMED", SESSION_ENDED: "SESSION_ENDED", SESSION_STARTING: "SESSION_STARTING", SESSION_START_FAILED: "SESSION_START_FAILED", SESSION_ENDING: "SESSION_ENDING", NO_SESSION: "NO_SESSION" },
     CastContextEventType: { SESSION_STATE_CHANGED: "sessionstatechanged", CAST_STATE_CHANGED: "caststatechanged" },
     CastState: { NO_DEVICES_AVAILABLE: "NO_DEVICES_AVAILABLE", NOT_CONNECTED: "NOT_CONNECTED", CONNECTING: "CONNECTING", CONNECTED: "CONNECTED" },
@@ -50,6 +53,7 @@
     // CAF has the session but no event reaches the page.
     silent() { castState = "CONNECTED"; hasSession = true; sessState = ctxState = "SESSION_STARTED"; },
     fail() { castState = "NOT_CONNECTED"; hasSession = false; ctxState = "SESSION_START_FAILED"; fire("sessionstatechanged", { sessionState: "SESSION_START_FAILED", errorCode: "receiver_unavailable" }); fire("caststatechanged", { castState }); },
+    fireSession(type) { (sessListeners[type] || []).forEach((f) => f({ type })); },
     reply(obj) { msgListeners.forEach((f) => f("urn:x-cast:com.windowseat", JSON.stringify(obj))); },
   };
   setTimeout(() => window.__onGCastApiAvailable && window.__onGCastApiAvailable(true), 0);

@@ -23,7 +23,7 @@ let replyTimer = 0;
 let warnedNoReply = false;
 let hooks = null;
 let remoteOn = false; // remote mode is on (a session, or a connection in progress)
-const dbg = { last: "-", sessionState: "-", tvBuild: "?" };
+const dbg = { last: "-", sessionState: "-", tvBuild: "?", lastErr: "" };
 const ui = {};
 
 // Stage 2 failures: the TV app launched, but a command could not be delivered to it.
@@ -41,8 +41,24 @@ function channelCheck() {
   const appId = obj && obj.appId;
   const names = ((obj && obj.namespaces) || []).map((n) => n.name);
   if (appId && appId !== CAST_APP_ID) return `Connected to a different TV app (${appId}), not Window Seat (${CAST_APP_ID}).`;
-  if (obj && !names.includes(RECEIVER_NAMESPACE)) return "The TV app is running but has not opened the Window Seat channel yet (receiver not started, or an old version).";
+  if (obj && !names.includes(RECEIVER_NAMESPACE)) return "The TV app is running but has not opened the Window Seat channel yet (receiver not started, or an old version). The phone's Chrome does not list the Window Seat channel for this session yet.";
   return "";
+}
+
+/** Namespace view of the live session: ok, plus the names without the urn:x-cast: prefix. */
+function nsInfo() {
+  const obj = quietly(() => session.getSessionObj());
+  if (!obj) return { ok: false, names: [] };
+  const names = (obj.namespaces || []).map((n) => String((n && n.name) || n));
+  return { ok: names.includes(RECEIVER_NAMESPACE), names: names.map((n) => n.replace(/^urn:x-cast:/, "")) };
+}
+
+/** Compact text of a send rejection: code plus description/details when present. */
+function errText(raw) {
+  if (raw == null) return "";
+  if (typeof raw !== "object") return String(raw).slice(0, 80);
+  const parts = [raw.code, raw.description, raw.details].filter((x) => x != null && x !== "").map((x) => (typeof x === "object" ? quietly(() => JSON.stringify(x)) : String(x)));
+  return (parts.length ? parts.join(" / ") : quietly(() => JSON.stringify(raw)) || "?").slice(0, 120);
 }
 
 /* Send one command to the TV over the custom namespace. Errors and missing replies are shown, never swallowed. */
@@ -79,6 +95,7 @@ function send(cmd, opts = {}) {
       return;
     }
     dbg.last = `send ${code}`;
+    dbg.lastErr = errText(raw);
     renderDebug();
     const hint = channelCheck();
     say(`Send failed (${code}): ${SEND_ERRORS[code] || code}.${hint ? " " + hint : ""}`);
@@ -259,7 +276,10 @@ function liveCastState() {
 
 function renderDebug() {
   if (!ui.debug) return;
-  ui.debug.textContent = `Phone build ${BUILD} | TV build ${dbg.tvBuild} | cast ${liveCastState()} | session ${dbg.sessionState} | last: ${dbg.last}${lastAttempt ? ` | ${lastAttempt}` : ""}`;
+  const ns = session ? nsInfo() : null;
+  const nsText = ns ? ` | ns ${ns.ok ? "ok" : "missing"} [${ns.names.join(",")}]` : "";
+  const errPart = dbg.lastErr ? ` | err: ${dbg.lastErr}` : "";
+  ui.debug.textContent = `Phone build ${BUILD} | TV build ${dbg.tvBuild} | cast ${liveCastState()} | session ${dbg.sessionState} | last: ${dbg.last}${nsText}${errPart}${lastAttempt ? ` | ${lastAttempt}` : ""}`;
 }
 
 function renderRemote() {
@@ -313,6 +333,37 @@ function leaveRemote() {
   hooks.onEnd();
 }
 
+/* Initial setup is held back until the session lists our channel, then sent exactly once (never replayed). */
+function flushInit(s) {
+  if (session !== s || !s.__wsPending || !nsInfo().ok) return;
+  const mode = s.__wsPending;
+  s.__wsPending = null;
+  if (mode === "push") {
+    pushChoices();
+  } else {
+    sendConfigToTv();
+    send({ type: "getState" }); // reconnecting to a TV that is already playing: do not override it
+  }
+}
+
+/* Play services can refresh the app's namespace list after the session started. */
+function watchNamespaces(s) {
+  s.__wsNsOk = nsInfo().ok;
+  const onChange = () => {
+    if (session !== s) return;
+    const ok = nsInfo().ok;
+    const appeared = ok && !s.__wsNsOk;
+    s.__wsNsOk = ok;
+    renderDebug();
+    if (appeared) setRemoteStatus("Connected. The Window Seat channel is now open.");
+    flushInit(s);
+  };
+  const T = (window.cast && cast.framework && cast.framework.SessionEventType) || {};
+  for (const type of [T.APPLICATION_METADATA_CHANGED || "applicationmetadatachanged", T.APPLICATION_STATUS_CHANGED || "applicationstatuschanged"]) {
+    quietly(() => s.addEventListener(type, onChange));
+  }
+}
+
 function onSessionStarted(s, resumed) {
   if (!s) return;
   const same = session === s;
@@ -322,6 +373,7 @@ function onSessionStarted(s, resumed) {
     if (!s.__wsListener) {
       s.__wsListener = true;
       quietly(() => s.addMessageListener(RECEIVER_NAMESPACE, onMessage));
+      watchNamespaces(s);
     }
     ui.device.textContent = quietly(() => s.getCastDevice().friendlyName) || "TV";
     lastReplyAt = 0;
@@ -331,15 +383,20 @@ function onSessionStarted(s, resumed) {
     renderRemote();
   }
   if (resumed) {
-    if (s.__wsInit) return; // already asked
+    if (!s.__wsInit) {
+      s.__wsInit = true;
+      s.__wsPending = "resume";
+    }
+  } else if (!s.__wsPushed) {
+    s.__wsPushed = true; // a real start: push the phone's choices once, even if the session was adopted first
     s.__wsInit = true;
-    sendConfigToTv();
-    send({ type: "getState" }); // reconnecting to a TV that is already playing: do not override it
-    return;
+    s.__wsPending = "push";
   }
-  if (s.__wsPushed) return;
-  s.__wsPushed = true; // a real start: push the phone's choices once, even if the session was adopted first
-  s.__wsInit = true;
+  flushInit(s);
+}
+
+/** Push the phone's choices to the TV (first connect), then ask for its state. */
+function pushChoices() {
   const local = hooks.getLocal();
   const mix = MIXES.find((m) => m.id === local.mixId);
   remote = { ...remote, interval: local.interval, volume: local.volume, muted: !!local.muted, mixId: local.mixId, mixTitle: mix ? mix.en : "", pinned: false, musicPaused: false };

@@ -3,7 +3,7 @@
 import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 
-export const BUILD = "2026-11-16.3"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.4"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -73,7 +73,7 @@ let context = null; // CastReceiverContext, only when running on a Cast device
 /* ---------------------------------------------------------------- on-TV debug strip */
 
 // cafError is its own field: later errors (broadcast, handle, sheet) never overwrite the CAF start failure.
-const dbg = { caf: "loading", cafError: "", listener: "no", senders: 0, lastIn: "none", lastOut: "none", error: "" };
+const dbg = { caf: "loading", cafError: "", listener: "no", readyNs: "?", rx: 0, tx: 0, appState: "-", senders: 0, lastIn: "none", lastOut: "none", error: "" };
 let injected = false; // test hook: a mocked context stands in for CAF
 let cafStarted = false; // context.start() returned without throwing (or a test injected a context)
 let stripOn = new URLSearchParams(location.search).get("strip") !== "0";
@@ -88,7 +88,7 @@ function renderStrip() {
   const out = !cafStarted && dbg.lastOut === "none" ? "none (CAF not started)" : dbg.lastOut;
   el.textContent =
     `build ${BUILD} | list ${listInfo.source} ${listInfo.cams}/${listInfo.mixes} | ${caf} | listener ${dbg.listener} | senders ${dbg.senders} | ` +
-    `last in: ${dbg.lastIn} | last reply: ${out}` + (dbg.error ? ` | error: ${dbg.error}` : "");
+    `last in: ${dbg.lastIn} | last reply: ${out} | ns windowseat STRING | ready-ns ${dbg.readyNs} | rx ${dbg.rx} | tx ${dbg.tx} | appstate ${dbg.appState}` + (dbg.error ? ` | error: ${dbg.error}` : "");
 }
 function setDbg(patch) {
   Object.assign(dbg, patch);
@@ -103,6 +103,7 @@ function reply(senderId) {
   const kind = senderId ? "direct" : "broadcast";
   try {
     context.sendCustomMessage(NAMESPACE, senderId, JSON.stringify(snapshot()));
+    dbg.tx++;
     setDbg({ lastOut: `${kind} ${hhmmss()}` });
   } catch (e) {
     setDbg({ lastOut: `${kind} FAILED ${hhmmss()}`, error: String((e && e.message) || e).slice(0, 80) });
@@ -518,6 +519,7 @@ function prepareKeepAlive() {
 }
 
 function onCustomMessage(event) {
+  dbg.rx++;
   const raw = event && event.data;
   const cmd = parseCommand(raw);
   setDbg({ lastIn: `${cmd ? cmd.type : "unreadable " + typeof raw} ${hhmmss()}` });
@@ -528,6 +530,58 @@ function onCustomMessage(event) {
   }
   // Also answer the sender directly, in case a broadcast does not reach it.
   if (event && event.senderId) reply(event.senderId);
+}
+
+/* Ask the platform to send a fresh receiver status, so senders re-read the app's namespace list. */
+let appStateGeneration = 0;
+function refreshAppState() {
+  if (!context || !cafStarted) return;
+  try {
+    context.setApplicationState(`Window Seat ready ${++appStateGeneration}`);
+    setDbg({ appState: "ok" });
+  } catch (e) {
+    setDbg({ appState: "fail", error: `appstate: ${String((e && e.message) || e).slice(0, 60)}` });
+  }
+}
+
+/* Observe (never alter) the outgoing system "ready" message to see whether it lists our namespace. */
+function watchOutgoing() {
+  const look = (payload) => {
+    try {
+      const m = typeof payload === "string" ? JSON.parse(payload) : payload;
+      if (!m || typeof m.namespace !== "string" || !m.namespace.endsWith("com.google.cast.system")) return;
+      const d = typeof m.data === "string" ? JSON.parse(m.data) : m.data;
+      if (d && d.type === "ready") {
+        const list = Array.isArray(d.activeNamespaces) ? d.activeNamespaces : [];
+        setDbg({ readyNs: list.includes(NAMESPACE) ? "yes" : "no" });
+      }
+    } catch {
+      /* diagnostics only */
+    }
+  };
+  try {
+    const ch = window.cast && window.cast.__platform__ && window.cast.__platform__.channel;
+    if (ch && typeof ch.send === "function") {
+      const orig = ch.send;
+      ch.send = function (...args) {
+        look(args[0]);
+        return orig.apply(this, args);
+      };
+      return;
+    }
+    const proto = window.WebSocket && window.WebSocket.prototype;
+    const orig = proto.send;
+    proto.send = function (data) {
+      try {
+        if (String(this.url).includes("/v2/ipc")) look(data);
+      } catch {
+        /* ignore */
+      }
+      return orig.apply(this, arguments);
+    };
+  } catch {
+    /* diagnostics only */
+  }
 }
 
 function startCast() {
@@ -543,6 +597,7 @@ function startCast() {
     options.mediaElement = $("keepalive");
     options.disableIdleTimeout = true;
     options.maxInactivity = 3600;
+    options.statusText = "Window Seat";
     // STRING: CAF hands us the raw text and we parse it ourselves (parseCommand accepts objects too),
     // so a JSON parse quirk in the framework can never drop a command.
     options.customNamespaces = { [NAMESPACE]: cast.framework.system.MessageType.STRING };
@@ -556,9 +611,13 @@ function startCast() {
     });
     context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => {
       setDbg({ senders: quietly(() => context.getSenders().length) ?? dbg.senders + 1 });
+      refreshAppState();
       broadcast();
     });
-    context.addEventListener(cast.framework.system.EventType.READY, () => setDbg({ caf: "ready", listener: "ready" }));
+    context.addEventListener(cast.framework.system.EventType.READY, () => {
+      setDbg({ caf: "ready", listener: "ready" });
+      refreshAppState();
+    });
     // Keep-alive media element is optional: a failure here must never prevent start().
     try {
       const keepAlive = prepareKeepAlive();
@@ -568,6 +627,7 @@ function startCast() {
       setDbg({ error: `keepalive: ${String((e && e.message) || e).slice(0, 60)}` });
     }
     setDbg({ caf: "starting" });
+    watchOutgoing();
     context.start(options);
     cafStarted = true;
     // Same synchronous block as start(): no message can arrive before the listener exists.
