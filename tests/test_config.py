@@ -63,7 +63,8 @@ with sync_playwright() as p:
     pg.unroute("**/gviz/tq*"); sheet(pg.route, status=401)
     pg.reload(); pg.wait_for_timeout(2500)
     check(f"sheet unreachable, saved copy used: {label()!r}", label() == "List: Sheet (saved copy), 23 cams, 16 mixes")
-    check("error explained on hover", "Sheet not loaded" in (pg.get_attribute("#bar .list-status", "title") or ""))
+    hover = pg.get_attribute("#bar .list-status", "title") or ""
+    check(f"error explained on hover, with a sharing hint: {hover!r}", "Sheet not loaded" in hover and "Anyone with the link" in hover)
     pg.evaluate("()=>localStorage.clear()"); pg.reload(); pg.wait_for_timeout(2500)
     check(f"no sheet and no copy: built-in: {label()!r}", label() == "List: built-in" and pg.locator("#cams-list .cam-row").count() == 22)
 
