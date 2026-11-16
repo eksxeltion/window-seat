@@ -469,7 +469,9 @@ function onCastTap() {
   try {
     p = ctx.requestSession();
   } catch (e) {
-    return say(`Cast error: ${(e && e.message) || e}`);
+    const msg = (e && e.message) || e;
+    recordAttempt(`exception: ${msg}`);
+    return say(`Cast error: ${msg}`);
   }
   Promise.resolve(p).then(
     (code) => {
