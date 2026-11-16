@@ -54,6 +54,16 @@ Window Seat is an installable web app. In Chrome or Edge, use the install icon i
 
 TV mode turns on with `?tv=1`, and automatically on Android TV, Google TV and other smart TV browsers (or a large screen without a fine pointer). `?tv=0` forces it off. In TV mode the controls are larger, focus rings are thick and high contrast, Start is focused and tries fullscreen, and Lite mode is on by default (unless you have already chosen Lite on or off yourself).
 
+## Cast to TV (personal spike)
+
+Chrome on Android can cast Window Seat to a Google TV so the TV itself plays the cam and music (the phone can sleep) and the phone page becomes a remote.
+
+- Receiver URL: https://window-seat-lemon.vercel.app/receiver.html (registered as a Custom Receiver in the Google Cast SDK Developer Console).
+- It needs a registered Cast Application ID, and your Cast device must be registered as a test device until the app is published.
+- Put the App ID in `js/cast-config.js` (`CAST_APP_ID`). While it is still the placeholder, the Cast button is hidden and the Cast SDK is not loaded.
+- Debug the receiver in any browser with `receiver.html?debug=1`. It skips the Cast context and exposes `window.__receiver` (`state`, `send(cmd)`, `log`).
+- The service worker ignores the receiver files.
+
 ## Run locally
 
 It is a plain static site with no build step. Serve the folder with any static server:

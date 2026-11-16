@@ -77,6 +77,7 @@
     <button class="bar-btn" type="button" data-action="vol-down"><svg class="icon" aria-hidden="true"><use href="#i-vol-down"></use></svg><span class="label">Vol down</span></button>
     <button class="bar-btn" type="button" data-action="vol-up"><svg class="icon" aria-hidden="true"><use href="#i-vol-up"></use></svg><span class="label">Vol up</span></button>
     <button class="bar-btn" type="button" data-action="fullscreen"><svg class="icon" aria-hidden="true"><use href="#i-fullscreen"></use></svg><span class="label">Fullscreen</span></button>
+    <span class="bar-btn cast-launcher" hidden><google-cast-launcher></google-cast-launcher><span class="label">Cast</span></span>
     <button class="bar-btn" type="button" data-action="open-tv" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-tv"></use></svg><span class="label">Send to TV</span></button>
     <button class="bar-btn" type="button" data-action="open-about" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg><span class="label">About</span></button>
   </nav>
@@ -148,6 +149,9 @@
         <li><strong>Keyboard:</strong> N next cam, P pin, M mute music, Space play or pause music, F fullscreen.</li>
       </ul>
 
+      <h3>Cast to TV</h3>
+      <p id="about-cast">Coming soon.</p>
+
       <h3>About the video</h3>
       <p>All video and music are embedded with the official YouTube player. Nothing is downloaded, stored, or restreamed. All rights belong to the creators, so please visit and support their channels.</p>
 
@@ -169,6 +173,7 @@
       <button id="start-btn" class="btn btn-primary btn-start" type="button" autofocus>
         <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg><span>Start</span>
       </button>
+      <span class="cast-launcher cast-start" hidden><google-cast-launcher></google-cast-launcher></span>
       <button id="start-tv" class="btn btn-ghost" type="button" data-action="open-tv" aria-haspopup="dialog">Send to TV</button>
       <button id="start-about" class="btn btn-ghost" type="button" data-action="open-about" aria-haspopup="dialog">About and credits</button>
       <p id="start-status" class="start-status" role="status"></p>

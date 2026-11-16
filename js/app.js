@@ -1,6 +1,7 @@
 // Window Seat: rotating Japan live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
 import qrcode from "./qr.js";
+import { initCast, castConfigured } from "./cast.js";
 
 /* ---------------------------------------------------------------- config */
 
@@ -104,6 +105,7 @@ const state = {
   // ui
   uiHidden: false,
   openPanel: null,
+  casting: false,
 };
 
 const reducedMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
@@ -267,9 +269,9 @@ function loadCam(camId, delay) {
   cp.errSeq = 0;
   const seq = ++cp.seq;
   const go = () => {
-    if (cp.camId !== camId || cp.seq !== seq) return;
+    if (state.casting || cp.camId !== camId || cp.seq !== seq) return;
     const run = () => {
-      if (cp.camId !== camId || cp.seq !== seq) return;
+      if (state.casting || cp.camId !== camId || cp.seq !== seq) return;
       if (document.hidden) {
         cp.deferred = run; // never start playback in a hidden tab; onVisibility issues it once
         return;
@@ -446,7 +448,7 @@ function errorConfirmed() {
 }
 
 function tick() {
-  if (!state.started || !state.apiReady || document.hidden) return;
+  if (state.casting || !state.started || !state.apiReady || document.hidden) return;
   const now = Date.now();
   const p = state.pending;
   if (p) {
@@ -486,7 +488,7 @@ function tick() {
 
 /** Pause the cam while the tab is hidden (music keeps playing); resume it when visible again. */
 function onVisibility() {
-  if (!state.started || !state.apiReady) return;
+  if (state.casting || !state.started || !state.apiReady) return;
   if (document.hidden) {
     activeStall = null;
     quietly(() => cp.player.pauseVideo());
@@ -521,7 +523,7 @@ function onVisibility() {
 /* --- cam actions --- */
 
 function skip(dir = 1) {
-  if (!state.started || !state.apiReady) return;
+  if (state.casting || !state.started || !state.apiReady) return;
   const from = state.pending ? state.pending.camId : state.currentCamId;
   const target = pickCam(from, dir);
   if (!target) return;
@@ -537,7 +539,7 @@ function watchNow(camId) {
   if (!camById(camId)) return;
   state.failed.delete(camId);
   setAllFailed(false);
-  if (!state.started) return;
+  if (state.casting || !state.started) return;
   if (state.pending ? state.pending.camId === camId : camId === state.currentCamId) return;
   beginLoad(camId);
 }
@@ -760,6 +762,7 @@ function playMix(mixId, { userChoice = false } = {}) {
     state.musicErrors = 0;
     state.musicUnavailable = false;
   }
+  if (state.casting) return render();
   if (musicReady && state.started) {
     applyVolume();
     quietly(() => musicPlayer.loadVideoById(mixId));
@@ -813,6 +816,7 @@ function musicIsPlaying() {
 }
 
 function togglePlayMusic() {
+  if (state.casting) return;
   if (musicStuck) return retryMusicPlayer();
   if (!musicReady) return;
   if (state.musicUnavailable) {
@@ -1216,6 +1220,56 @@ function begin() {
   render();
 }
 
+/* ================================================================ cast */
+
+// While casting, this page is only a remote: local playback is stopped to save battery.
+function pauseLocalForCast() {
+  state.casting = true;
+  state.pending = null;
+  cp.seq++; // invalidate queued camera loads (delayed go() and waiters)
+  cp.waiters.length = 0;
+  cp.deferred = null;
+  clearTimeout(musicCheckTimer);
+  state.musicWantsPlay = false;
+  quietly(() => cp.player.pauseVideo());
+  quietly(() => cp.player.mute());
+  quietly(() => musicPlayer.pauseVideo());
+  quietly(() => musicPlayer.mute());
+  if (state.openPanel) closePanel(false);
+}
+
+// Back to the normal page at the Start screen; nothing plays until the user presses Start.
+function resumeAfterCast() {
+  state.casting = false;
+  state.started = false;
+  begun = false;
+  state.currentCamId = null;
+  state.pending = null;
+  state.musicWantsPlay = true;
+  quietly(() => cp.player.stopVideo());
+  quietly(() => musicPlayer.stopVideo());
+  body.classList.add("is-starting");
+  el.start.hidden = false;
+  el.start.classList.remove("leaving");
+  el.startStatus.textContent = "";
+  el.startBtn.focus();
+  render();
+}
+
+function setupCast() {
+  const note = $("#about-cast");
+  if (!castConfigured) {
+    if (note) note.textContent = "Cast to TV: coming soon.";
+    return;
+  }
+  if (note) note.textContent = "Tap the Cast button in Chrome and pick your TV. This page then becomes a remote.";
+  initCast({
+    getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume }),
+    onStart: pauseLocalForCast,
+    onEnd: resumeAfterCast,
+  });
+}
+
 /* ================================================================ api */
 
 let apiTimer = 0;
@@ -1391,6 +1445,7 @@ function isInteractive(node) {
 function onKeyDown(e) {
   const key = e.key;
   body.classList.add("kbd");
+  if (state.casting) return; // this page is only a remote while casting
 
   // Media keys work any time once started.
   if (MEDIA_KEYS.has(key)) {
@@ -1625,6 +1680,7 @@ function boot() {
   setInterval(tick, 1000);
   document.addEventListener("visibilitychange", onVisibility);
   loadYouTubeApi();
+  setupCast();
 
   window.__windowSeat = {
     state,
