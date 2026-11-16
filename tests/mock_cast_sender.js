@@ -13,14 +13,14 @@
     addMessageListener(ns, fn) { msgListeners.push(fn); },
     getCastDevice() { return { friendlyName: "Mock TV" }; },
   };
-  let castState = "NOT_CONNECTED";
+  let castState = window.__mockResume ? "CONNECTED" : "NOT_CONNECTED";
   const ctx = {
     setOptions() {},
     getCastState: () => castState,
     addEventListener(t, fn) { (listeners[t] = listeners[t] || []).push(fn); },
     requestSession() { return Promise.resolve(); },
     endCurrentSession() { (listeners.sessionstatechanged || []).forEach((f) => f({ sessionState: "SESSION_ENDED" })); },
-    getCurrentSession: () => session,
+    getCurrentSession: () => (castState === "CONNECTED" ? session : null),
   };
   window.chrome = window.chrome || {};
   window.chrome.cast = { AutoJoinPolicy: { ORIGIN_SCOPED: "origin_scoped" } };
