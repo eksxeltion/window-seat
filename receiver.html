@@ -11,6 +11,11 @@
 </head>
 <body>
   <video id="keepalive" loop muted autoplay playsinline style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none"></video>
+  <!-- Music sits under the cam layer at z-index 0, transparent, but still rendered so it keeps playing. -->
+  <div id="music">
+    <div id="music-frame"><div id="music-player"></div></div>
+    <div id="music-title"></div>
+  </div>
   <div id="cam"><div id="cam-player"></div></div>
   <div id="blackout" class="on"></div>
 
@@ -18,11 +23,8 @@
     <div id="caption">
       <div id="cap-title"></div>
       <div id="cap-meta"></div>
+      <div id="cap-music"></div>
       <div id="cap-brand">Window Seat</div>
-    </div>
-    <div id="music">
-      <div id="music-frame"><div id="music-player"></div></div>
-      <div id="music-title"></div>
     </div>
   </div>
 </body>
