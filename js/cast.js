@@ -2,6 +2,7 @@
 import { CAST_APP_ID, RECEIVER_NAMESPACE } from "./cast-config.js";
 import { CAMS, MIXES } from "./data.js";
 import { listInfo, currentConfig } from "./config.js";
+import { BUILD } from "./build.js";
 
 const SDK_URL = "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
 export const castConfigured = CAST_APP_ID !== "REPLACE_WITH_APP_ID";
@@ -21,6 +22,8 @@ let lastReplyAt = 0; // last state message from the TV
 let replyTimer = 0;
 let warnedNoReply = false;
 let hooks = null;
+let remoteOn = false; // remote mode is on (a session, or a connection in progress)
+const dbg = { last: "-", sessionState: "-", tvBuild: "?" };
 const ui = {};
 
 // Stage 2 failures: the TV app launched, but a command could not be delivered to it.
@@ -48,7 +51,7 @@ let sendGen = 0;
 
 function send(cmd, opts = {}) {
   if (!session) {
-    if (!opts.silent) say("Not connected to the TV. Tap Cast again.");
+    if (!opts.silent) say(remoteOn ? "Still connecting to the TV..." : "Not connected to the TV. Tap Cast again.");
     return;
   }
   const sentAt = Date.now();
@@ -75,6 +78,8 @@ function send(cmd, opts = {}) {
       }, 1000);
       return;
     }
+    dbg.last = `send ${code}`;
+    renderDebug();
     const hint = channelCheck();
     say(`Send failed (${code}): ${SEND_ERRORS[code] || code}.${hint ? " " + hint : ""}`);
     setRemoteStatus(`Send failed: ${code}${hint ? ". " + hint : ""}`);
@@ -106,6 +111,45 @@ function act(cmd, patch) {
   send(cmd);
 }
 
+/* One remote command by name: the panel buttons and the phone's own controls and keys all go through here. */
+function runCmd(name) {
+  switch (name) {
+    case "prev":
+      return act({ type: "prev" });
+    case "next":
+      return act({ type: "next" });
+    case "pin":
+      return act({ type: "pin", value: !remote.pinned }, { pinned: !remote.pinned });
+    case "i30":
+      return act({ type: "interval", value: 30 }, { interval: 30 });
+    case "i60":
+      return act({ type: "interval", value: 60 }, { interval: 60 });
+    case "interval":
+      return runCmd(remote.interval === 30 ? "i60" : "i30");
+    case "vol-down": {
+      const v = Math.max(0, remote.volume - 10);
+      return act({ type: "volume", value: v }, { volume: v, muted: v === 0 ? remote.muted : false });
+    }
+    case "vol-up": {
+      const v = Math.min(100, remote.volume + 10);
+      return act({ type: "volume", value: v }, { volume: v, muted: false });
+    }
+    case "mute":
+      return act({ type: "mute", value: !remote.muted }, { muted: !remote.muted });
+    case "play-on":
+      return act({ type: "playMusic", value: true }, { musicPaused: false });
+    case "play-off":
+      return act({ type: "playMusic", value: false }, { musicPaused: true });
+    case "play":
+      return act({ type: "playMusic", value: remote.musicPaused }, { musicPaused: !remote.musicPaused });
+    case "next-mix":
+      return act({ type: "nextMix" });
+    case "stop":
+      return quietly(() => cast.framework.CastContext.getInstance().endCurrentSession(true));
+    default:
+  }
+}
+
 function buildRemote() {
   const root = document.createElement("section");
   root.id = "remote";
@@ -134,6 +178,7 @@ function buildRemote() {
       <button class="btn" type="button" data-cmd="next-mix">Next mix</button>
     </div>
     <p class="remote-status" id="remote-status" role="status">Waiting for the TV...</p>
+    <p class="remote-debug" id="remote-debug" style="font-size:11px;opacity:.6;margin:4px 0"></p>
     <h3 class="remote-head">Music</h3>
     <ol class="remote-mixes" id="remote-mixes"></ol>
     <h3 class="remote-head">Show a cam now</h3>
@@ -149,6 +194,7 @@ function buildRemote() {
   ui.mute = $("#remote-mute");
   ui.play = $("#remote-play");
   ui.status = $("#remote-status");
+  ui.debug = $("#remote-debug");
   fillRemoteLists();
   root.addEventListener("click", (e) => {
     const b = e.target.closest("button");
@@ -161,35 +207,7 @@ function buildRemote() {
       const c = CAMS.find((x) => x.id === b.dataset.cam);
       return act({ type: "cam", id: b.dataset.cam }, { camId: b.dataset.cam, camTitle: c ? c.title : "" });
     }
-    switch (b.dataset.cmd) {
-      case "prev":
-        return act({ type: "prev" });
-      case "next":
-        return act({ type: "next" });
-      case "pin":
-        return act({ type: "pin", value: !remote.pinned }, { pinned: !remote.pinned });
-      case "i30":
-        return act({ type: "interval", value: 30 }, { interval: 30 });
-      case "i60":
-        return act({ type: "interval", value: 60 }, { interval: 60 });
-      case "vol-down": {
-        const v = Math.max(0, remote.volume - 10);
-        return act({ type: "volume", value: v }, { volume: v, muted: v === 0 ? remote.muted : false });
-      }
-      case "vol-up": {
-        const v = Math.min(100, remote.volume + 10);
-        return act({ type: "volume", value: v }, { volume: v, muted: false });
-      }
-      case "mute":
-        return act({ type: "mute", value: !remote.muted }, { muted: !remote.muted });
-      case "play":
-        return act({ type: "playMusic", value: remote.musicPaused }, { musicPaused: !remote.musicPaused });
-      case "next-mix":
-        return act({ type: "nextMix" });
-      case "stop":
-        return quietly(() => cast.framework.CastContext.getInstance().endCurrentSession(true));
-      default:
-    }
+    runCmd(b.dataset.cmd);
   });
 }
 
@@ -213,6 +231,21 @@ function fillRemoteLists() {
   fill($("#remote-cams"), CAMS, "cam", (c) => `${c.title} (${c.place})`);
 }
 
+/** Route a phone control to the TV: prev, next, pin, interval, vol-up, vol-down, mute, play, next-mix. */
+export function remoteCmd(name) {
+  runCmd(name);
+}
+
+export function remoteMix(id) {
+  const m = MIXES.find((x) => x.id === id);
+  act({ type: "mix", id }, { mixId: id, mixTitle: m ? m.en : "", musicPaused: false });
+}
+
+export function remoteCam(id) {
+  const c = CAMS.find((x) => x.id === id);
+  act({ type: "cam", id }, { camId: id, camTitle: c ? c.title : "" });
+}
+
 /** Send the current cam and mix lists to the TV (only when they come from the sheet). */
 export function sendConfigToTv() {
   if (ui.root) fillRemoteLists();
@@ -220,7 +253,17 @@ export function sendConfigToTv() {
   send({ type: "config", source: listInfo.source, ...currentConfig(), silent: true }, { silent: true });
 }
 
+function liveCastState() {
+  return quietly(() => cast.framework.CastContext.getInstance().getCastState()) || "?";
+}
+
+function renderDebug() {
+  if (!ui.debug) return;
+  ui.debug.textContent = `Phone build ${BUILD} | TV build ${dbg.tvBuild} | cast ${liveCastState()} | session ${dbg.sessionState} | last: ${dbg.last}`;
+}
+
 function renderRemote() {
+  renderDebug();
   ui.cam.textContent = remote.camTitle || "Tuning in...";
   ui.mix.textContent = remote.mixTitle || "...";
   ui.vol.textContent = remote.volume;
@@ -239,17 +282,16 @@ function onMessage(_ns, raw) {
   if (!msg || msg.type !== "state") return;
   lastReplyAt = Date.now();
   warnedNoReply = false;
+  if (msg.build) dbg.tvBuild = msg.build;
   remote = { ...remote, ...msg };
   setRemoteStatus(`Connected. The TV confirms each tap.${msg.build ? ` (TV build ${msg.build})` : ""}`);
   renderRemote();
 }
 
-function onSessionStarted(s, resumed) {
-  if (!s) return;
-  const same = session === s;
-  session = s;
-  // Remote mode first, unconditionally: stop local playback and show the remote,
-  // before anything that talks to the TV (which may fail or never answer).
+/* Remote mode first, unconditionally: stop local playback and show the remote,
+   before anything that talks to the TV (which may fail or never answer). */
+function enterRemote(status) {
+  remoteOn = true;
   document.body.classList.add("casting");
   ui.root.hidden = false;
   try {
@@ -257,22 +299,47 @@ function onSessionStarted(s, resumed) {
   } catch (e) {
     say(`Could not stop local playback: ${(e && e.message) || e}`);
   }
-  if (same) return; // the same session reported twice (resume plus our own check)
-  if (!s.__wsListener) {
-    s.__wsListener = true;
-    quietly(() => s.addMessageListener(RECEIVER_NAMESPACE, onMessage));
-  }
-  ui.device.textContent = quietly(() => s.getCastDevice().friendlyName) || "TV";
-  lastReplyAt = 0;
-  warnedNoReply = false;
-  const hint = quietly(channelCheck) || "";
-  setRemoteStatus(hint || "Waiting for the TV app to reply...");
+  if (status) setRemoteStatus(status);
   renderRemote();
+}
+
+function leaveRemote() {
+  if (!remoteOn && !session) return;
+  session = null;
+  remoteOn = false;
+  dbg.tvBuild = "?";
+  document.body.classList.remove("casting");
+  ui.root.hidden = true;
+  hooks.onEnd();
+}
+
+function onSessionStarted(s, resumed) {
+  if (!s) return;
+  const same = session === s;
+  session = s;
+  enterRemote();
+  if (!same) {
+    if (!s.__wsListener) {
+      s.__wsListener = true;
+      quietly(() => s.addMessageListener(RECEIVER_NAMESPACE, onMessage));
+    }
+    ui.device.textContent = quietly(() => s.getCastDevice().friendlyName) || "TV";
+    lastReplyAt = 0;
+    warnedNoReply = false;
+    const hint = quietly(channelCheck) || "";
+    setRemoteStatus(hint || "Waiting for the TV app to reply...");
+    renderRemote();
+  }
   if (resumed) {
+    if (s.__wsInit) return; // already asked
+    s.__wsInit = true;
     sendConfigToTv();
     send({ type: "getState" }); // reconnecting to a TV that is already playing: do not override it
     return;
   }
+  if (s.__wsPushed) return;
+  s.__wsPushed = true; // a real start: push the phone's choices once, even if the session was adopted first
+  s.__wsInit = true;
   const local = hooks.getLocal();
   const mix = MIXES.find((m) => m.id === local.mixId);
   remote = { ...remote, interval: local.interval, volume: local.volume, muted: !!local.muted, mixId: local.mixId, mixTitle: mix ? mix.en : "", pinned: false, musicPaused: false };
@@ -289,12 +356,54 @@ function onSessionStarted(s, resumed) {
   send({ type: "getState" });
 }
 
+/** CAF dispatches SESSION_ENDED while getCurrentSession() still returns the ending session, so a current
+ *  session only counts if its state is not terminal. */
+function liveSession(ctx) {
+  const cur = quietly(() => ctx.getCurrentSession());
+  if (!cur) return null;
+  if (quietly(() => cur.getSessionState()) === "SESSION_ENDED") return null;
+  const cs = quietly(() => ctx.getSessionState());
+  if (cs === "SESSION_ENDED" || cs === "NO_SESSION" || cs === "SESSION_START_FAILED") return null;
+  return cur;
+}
+
+/** The single source of truth: is a Cast session active or connecting? Safe before the SDK loads. */
+export function isCasting() {
+  if (!castConfigured) return !!session;
+  const ctx = quietly(() => cast.framework.CastContext.getInstance());
+  if (!ctx) return !!session;
+  if (session && quietly(() => session.getSessionState()) === "SESSION_ENDED") return false;
+  if (session) return true;
+  if (liveSession(ctx)) return true;
+  if (quietly(() => ctx.getSessionState()) === "SESSION_ENDED") return false;
+  const st = quietly(() => ctx.getCastState());
+  return st === "CONNECTING" || st === "CONNECTED";
+}
+
+/** Derive remote mode from the live Cast framework state. Safe to call at any time, as often as needed. */
+export function syncRemoteMode() {
+  if (!hooks || !ui.root) return;
+  const ctx = quietly(() => cast.framework.CastContext.getInstance());
+  if (!ctx) return;
+  const cur = liveSession(ctx);
+  const st = quietly(() => ctx.getCastState());
+  if (cur) {
+    if (cur !== session) onSessionStarted(cur, true); // adopt a session we missed the event for
+    else if (!remoteOn) enterRemote();
+  } else if (!session && !remoteOn && (st === "CONNECTING" || st === "CONNECTED")) {
+    ui.device.textContent = "TV";
+    enterRemote("Connecting to the TV...");
+  } else if (remoteOn && (st === "NOT_CONNECTED" || st === "NO_DEVICES_AVAILABLE")) {
+    leaveRemote();
+  }
+  renderDebug();
+}
+
 function onSessionEnded() {
-  if (!session) return;
-  session = null;
-  document.body.classList.remove("casting");
-  ui.root.hidden = true;
-  hooks.onEnd();
+  const ctx = quietly(() => cast.framework.CastContext.getInstance());
+  const other = ctx && liveSession(ctx);
+  if (other && other !== session) return syncRemoteMode(); // CAF reports a different live session
+  leaveRemote();
 }
 
 /* ---- visible status, so a tap never does "nothing" ---- */
@@ -360,13 +469,6 @@ function onCastTap() {
   );
 }
 
-/* If the context already has a live session (auto-join after a reload), enter remote mode for it. */
-function adoptCurrentSession() {
-  const ctx = cast.framework.CastContext.getInstance();
-  const current = quietly(() => ctx.getCurrentSession());
-  if (current && current !== session) onSessionStarted(current, true);
-}
-
 function initFramework() {
   const ctx = cast.framework.CastContext.getInstance();
   buildRemote();
@@ -374,21 +476,30 @@ function initFramework() {
   // and a missed SESSION_RESUMED left the phone playing locally while the TV was casting.
   const T = cast.framework.SessionState;
   ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
+    dbg.sessionState = e.sessionState;
+    dbg.last = e.sessionState + (e.errorCode ? ` ${e.errorCode}` : "");
     if (e.sessionState === T.SESSION_STARTED) onSessionStarted(e.session || quietly(() => ctx.getCurrentSession()), false);
     else if (e.sessionState === T.SESSION_RESUMED) onSessionStarted(e.session || quietly(() => ctx.getCurrentSession()), true);
     else if (e.sessionState === T.SESSION_ENDED) onSessionEnded();
+    else syncRemoteMode(); // SESSION_STARTING, SESSION_START_FAILED, SESSION_ENDING
+    renderDebug();
   });
   ctx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, (e) => {
     setStatus(STATE_TEXT[e.castState] || `Cast: ${e.castState}`);
-    if (e.castState === "CONNECTED") adoptCurrentSession();
+    dbg.last = `cast ${e.castState}`;
+    syncRemoteMode();
   });
+  // Events can be missed or late (backgrounded tab, slow TV): re-derive from the live state whenever the page wakes.
+  document.addEventListener("visibilitychange", () => !document.hidden && syncRemoteMode());
+  window.addEventListener("pageshow", () => syncRemoteMode());
+  window.addEventListener("focus", () => syncRemoteMode());
   ctx.setOptions({
     receiverApplicationId: CAST_APP_ID,
     autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
   });
   castReady = true;
   setStatus(STATE_TEXT[ctx.getCastState()] || "");
-  adoptCurrentSession();
+  syncRemoteMode("init");
 }
 
 /** hooks: { getLocal() -> {camId, mixId, interval, volume}, onStart(), onEnd() } */

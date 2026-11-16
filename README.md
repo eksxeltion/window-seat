@@ -64,6 +64,7 @@ Chrome on Android can cast Window Seat to a Google TV so the TV itself plays the
 - Receiver URL: https://window-seat-lemon.vercel.app/receiver.html (registered as a Custom Receiver in the Google Cast SDK Developer Console).
 - It needs a registered Cast Application ID, and your Cast device must be registered as a test device until the app is published.
 - Put the App ID in `js/cast-config.js` (`CAST_APP_ID`). While it is still the placeholder, the Cast button is hidden and the Cast SDK is not loaded.
+- The phone is only a remote whenever Cast is connecting or connected: it never plays locally then, and every control goes to the TV. To tell which build each side runs, see "Build" in About on the phone and the debug strip on the TV.
 - Debug the receiver in any browser with `receiver.html?debug=1`. It skips the Cast context and exposes `window.__receiver` (`state`, `send(cmd)`, `log`).
 - The service worker ignores the receiver files.
 
