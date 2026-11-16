@@ -2,6 +2,8 @@
 
 Ambient TV for your living room: public Japan live cams that rotate on their own, with Tokyo Chill Lab mixes playing underneath.
 
+**Live:** https://window-seat-lemon.vercel.app
+
 Open it in a TV browser or cast a Chrome tab to an Android TV, pick a mix, and let it run.
 
 - Cams: a curated set of public YouTube live cams across Japan, rotating every 30 or 60 seconds. Pin a feed to stay on it, or skip any feed.
