@@ -26,9 +26,11 @@ Remote:
 - OK: choose
 - Back: close a panel
 
-Bar buttons: Previous cam, Pin, Next cam, rotation every 30s or 60s, Lite, Cams, Music, Play or Pause music, Vol down, Vol up, Fullscreen, About.
+Bar buttons: Previous cam, Pin, Next cam, rotation every 30s or 60s, Lite, Cams, Music, Play or Pause music, Vol down, Vol up, Fullscreen, Send to TV, About.
 
-Lite mode: the Lite button (saved in your browser, off by default) makes the page much lighter on a laptop. It asks YouTube for lower video quality, fixes rotation at 60s (the 30s/60s button is disabled), and turns off all animations, transitions and gradient overlays.
+Send to TV: opens a panel with a QR code and the address `https://window-seat-lemon.vercel.app/?tv=1` in large text. Scan it with your phone, then cast, or type the address in your TV browser. The QR code is drawn in your browser by `js/qr.js` (no external service). The same button is on the Start screen.
+
+Lite mode: the Lite button (saved in your browser, off by default) makes the page much lighter on a laptop. It asks for lower quality where YouTube allows (YouTube makes the final choice) and renders the cam in a smaller 1280x720 viewport that is scaled up to fill the screen, which nudges automatic quality down. It also fixes rotation at 60s (the 30s/60s button is disabled), and turns off all animations, transitions and gradient overlays.
 
 Keyboard:
 
@@ -43,6 +45,14 @@ Keyboard:
 | Esc or Backspace | Close a panel |
 
 The Cams panel lets you choose which cams are in the rotation, watch any cam now, and turn the caption on or off. The Music panel lets you pick a mix, set the volume, and shuffle. Your choices are saved in the browser.
+
+## Install as an app
+
+Window Seat is an installable web app. In Chrome or Edge, use the install icon in the address bar (or menu, Install Window Seat). On Android, use Add to Home screen. It opens fullscreen in landscape. A small service worker (`sw.js`) caches only the app shell (page, styles, scripts, icons); YouTube video and music are never cached or intercepted. After changing a shell file, bump `CACHE_VERSION` at the top of `sw.js` so installed copies update.
+
+## TV mode
+
+TV mode turns on with `?tv=1`, and automatically on Android TV, Google TV and other smart TV browsers (or a large screen without a fine pointer). `?tv=0` forces it off. In TV mode the controls are larger, focus rings are thick and high contrast, Start is focused and tries fullscreen, and Lite mode is on by default (unless you have already chosen Lite on or off yourself).
 
 ## Run locally
 

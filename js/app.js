@@ -1,5 +1,6 @@
 // Window Seat: rotating Japan live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
+import qrcode from "./qr.js";
 
 /* ---------------------------------------------------------------- config */
 
@@ -17,6 +18,8 @@ const MUSIC_CHECK_MS = 5000;
 const MUSIC_READY_MS = 15000; // music iframe must report ready by then
 const API_TIMEOUT_MS = 20000;
 const VOLUME_STEP = 10;
+const ERROR_CONFIRM_MS = 2500; // a player error only fails a cam if the requested video is still not playing this long after
+const TV_URL = "https://window-seat-lemon.vercel.app/?tv=1";
 
 const YS = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
 
@@ -56,6 +59,18 @@ function loadOverrides() {
   return out;
 }
 
+/** TV mode: ?tv=1 forces it on, ?tv=0 forces it off, otherwise guess from the user agent and screen. */
+function detectTv() {
+  const q = new URLSearchParams(location.search).get("tv");
+  if (q === "1") return true;
+  if (q === "0") return false;
+  if (/Android TV|GoogleTV|AFT|BRAVIA|SMART-TV|SmartTV|Tizen|Web0S|CrKey/i.test(navigator.userAgent || "")) return true;
+  const mq = (query) => !!(window.matchMedia && window.matchMedia(query).matches);
+  return window.screen.width >= 1600 && (mq("(pointer: coarse)") || mq("(hover: none)"));
+}
+const isTv = detectTv();
+const storedLite = store.get("lite", null); // null: the user never chose
+
 const savedInterval = store.get("interval", 60);
 const savedMix = store.get("mix", null);
 const savedVolume = Number(store.get("volume", 60));
@@ -75,7 +90,7 @@ const state = {
   pending: null, // { camId, startedAt, dir, fails }
   nextSwapAt: 0,
   allFailed: false,
-  lite: store.get("lite", false) === true,
+  lite: storedLite === null ? isTv : storedLite === true,
   showCaption: store.get("caption", true) !== false,
   // music
   mixId: MIXES.some((m) => m.id === savedMix) ? savedMix : MIXES[0].id,
@@ -121,7 +136,7 @@ const el = {
   mixList: $("#mix-list"),
   volume: $("#music-volume"),
   volumeOut: $("#music-volume-out"),
-  panels: { cams: $("#panel-cams"), music: $("#panel-music"), about: $("#panel-about") },
+  panels: { cams: $("#panel-cams"), music: $("#panel-music"), tv: $("#panel-tv"), about: $("#panel-about") },
 };
 
 const quietly = (fn) => {
@@ -159,13 +174,13 @@ function toast(text) {
 /* ================================================================ cams */
 
 // One cam player. To switch: fade a black overlay in, load the new cam, fade out once it is PLAYING.
-const cp = { el: $("#cam"), player: null, ready: false, waiters: [], camId: null, seq: 0, loadedAt: 0, loadSeq: 0, nudged: false };
+const cp = { el: $("#cam"), player: null, ready: false, waiters: [], camId: null, seq: 0, loadedAt: 0, loadSeq: 0, nudged: false, deferred: null, errSeq: 0, errAt: 0 };
 let activeStall = null; // { at, tried } while the on-screen cam is not PLAYING
 let graceUntil = 0; // the stall watchdog stays quiet until then (right after the tab becomes visible)
 let covered = true; // black overlay is up (the HTML starts with it on)
 
 const rotateSec = () => (state.lite ? 60 : state.intervalSec);
-const camQuality = () => (state.lite ? "small" : "medium");
+const camQuality = () => (state.lite ? "small" : "medium"); // best-effort hint only; YouTube decides the real quality
 const animMs = () => (reducedMotion.matches || state.lite ? 0 : FADE_MS);
 const watchdogOn = () => !document.hidden && Date.now() >= graceUntil;
 
@@ -179,10 +194,15 @@ function cover(on) {
   el.blackout.classList.toggle("on", on);
 }
 
-/** Size the cam iframe to cover the viewport, but never render it larger than 1920x1080 CSS px. */
+/**
+ * Size the cam iframe to cover the viewport, but never render it larger than 1920x1080 CSS px
+ * (1280x720 in Lite). A smaller real viewport nudges YouTube's automatic quality choice down;
+ * the page scales it back up with a CSS transform.
+ */
 function sizeCam() {
+  const cap = state.lite ? 1280 : 1920;
   const w = Math.max(window.innerWidth, (window.innerHeight * 16) / 9);
-  const s = Math.max(1, w / 1920);
+  const s = Math.max(1, w / cap);
   const root = document.documentElement.style;
   root.setProperty("--cw", Math.round(w / s) + "px");
   root.setProperty("--ch", Math.round(((w / s) * 9) / 16) + "px");
@@ -190,6 +210,7 @@ function sizeCam() {
 }
 
 function setQuality() {
+  // Best effort: current players may ignore this.
   quietly(() => cp.player.setPlaybackQuality(camQuality()));
 }
 
@@ -242,11 +263,19 @@ function loadCam(camId, delay) {
   cp.camId = camId;
   cp.loadedAt = 0;
   cp.nudged = false;
+  cp.deferred = null;
+  cp.errSeq = 0;
   const seq = ++cp.seq;
   const go = () => {
     if (cp.camId !== camId || cp.seq !== seq) return;
     const run = () => {
       if (cp.camId !== camId || cp.seq !== seq) return;
+      if (document.hidden) {
+        cp.deferred = run; // never start playback in a hidden tab; onVisibility issues it once
+        return;
+      }
+      cp.deferred = null;
+      if (state.pending && state.pending.camId === camId) state.pending.startedAt = Date.now();
       cp.loadedAt = Date.now();
       cp.loadSeq = seq; // load generation: terminal events are only trusted while no newer load was issued
       cp.nudged = false;
@@ -389,15 +418,25 @@ function onCamState(s) {
   } else if (s === YS.ENDED && isCurrentLoad()) failActive();
 }
 
-// YouTube error codes 2, 5, 100, 101, 150 and 153 all mean the video cannot be played here,
-// so any error for the video we just asked for is a prompt failure.
+// YouTube error codes 2, 5, 100, 101, 150 and 153 all mean the video cannot be played here.
+// The error event carries no load generation, so a delayed error from an older cam could hit the one
+// that replaced it. Never fail on the event alone: only remember it, then confirm by polling that the
+// requested video is the one loaded and is still not playing (see errorConfirmed). Errors that cannot
+// be confirmed this way (an invalid id often reports an empty or old video id) fall to the load timeouts.
 function onCamError() {
-  // Ownership is by identity, not timing. For an invalid id the player may report an empty or the
-  // previous video id, so a mismatch is fine as long as no newer load was issued since this one
-  // (a stale error from an older load always arrives after a newer load bumped cp.seq).
   if (!hasCurrentLoad()) return;
-  if (state.pending) failPending();
-  else if (state.currentCamId) failActive();
+  if (cp.errSeq !== cp.seq) {
+    cp.errSeq = cp.seq;
+    cp.errAt = Date.now();
+  }
+}
+
+function errorConfirmed() {
+  if (!hasCurrentLoad() || cp.errSeq !== cp.seq) return false;
+  if (Date.now() - cp.errAt < ERROR_CONFIRM_MS) return false;
+  const live = quietly(() => cp.player.getPlayerState());
+  if (live === YS.PLAYING || live === YS.BUFFERING) return false;
+  return isCurrentLoad();
 }
 
 function tick() {
@@ -405,9 +444,10 @@ function tick() {
   const now = Date.now();
   const p = state.pending;
   if (p) {
+    if (now < graceUntil || cp.deferred) return; // grace after resume covers pending loads too
     const cold = !state.currentCamId || p.fails > 0;
     const deadline = cold ? COLD_LOAD_TIMEOUT_MS : LOAD_TIMEOUT_MS;
-    if (now - p.startedAt > deadline || looksUnplayable(cold ? COLD_STUCK_MS : STUCK_MS)) failPending();
+    if (now - p.startedAt > deadline || errorConfirmed() || looksUnplayable(cold ? COLD_STUCK_MS : STUCK_MS)) failPending();
     return;
   }
   if (!state.currentCamId || state.allFailed) return;
@@ -416,6 +456,10 @@ function tick() {
     const live = quietly(() => cp.player.getPlayerState());
     if (live === YS.PLAYING) activeStall = null;
     else if (live != null && !activeStall) activeStall = { at: now, tried: false };
+    if (errorConfirmed()) {
+      failActive();
+      return;
+    }
   }
   if (activeStall && now - activeStall.at > LOAD_TIMEOUT_MS) {
     if (!activeStall.tried) {
@@ -446,16 +490,24 @@ function onVisibility() {
   state.nextSwapAt = now + rotateSec() * 1000;
   const p = state.pending;
   if (p) {
+    if (cp.deferred) {
+      cp.deferred(); // the load never started while hidden: issue it now (also resets the pending clock)
+      return;
+    }
     beginLoad(p.camId, p.dir, p.fails); // it was paused mid-load: start it over
     return;
   }
   if (!state.currentCamId || state.allFailed) return;
   quietly(() => cp.player.playVideo());
   const seq = cp.seq;
+  // Destructive recovery waits for the grace period to end; a cam that is just buffering is left alone
+  // (the stall watchdog handles it after grace).
   setTimeout(() => {
     if (document.hidden || cp.seq !== seq || state.pending || !state.currentCamId) return;
-    if (quietly(() => cp.player.getPlayerState()) !== YS.PLAYING) beginLoad(state.currentCamId);
-  }, 4000);
+    if (Date.now() < graceUntil) return;
+    const live = quietly(() => cp.player.getPlayerState());
+    if (live !== YS.PLAYING && live !== YS.BUFFERING) beginLoad(state.currentCamId);
+  }, GRACE_MS + 250);
 }
 
 /* --- cam actions --- */
@@ -502,6 +554,7 @@ function toggleLite() {
   state.lite = !state.lite;
   store.set("lite", state.lite);
   body.classList.toggle("lite", state.lite);
+  sizeCam();
   setQuality();
   state.nextSwapAt = Date.now() + rotateSec() * 1000;
   toast(state.lite ? "Lite mode on" : "Lite mode off");
@@ -589,8 +642,8 @@ function createMusicPlayer() {
   musicReadyTimer = setTimeout(onMusicReadyTimeout, MUSIC_READY_MS);
   musicPlayer = new window.YT.Player("music-player", {
     host: YT_HOST,
-    width: "2",
-    height: "2",
+    width: "200", // YouTube requires at least 200x200; CSS keeps it hidden behind the cam layer
+    height: "200",
     videoId: state.mixId,
     playerVars: vars,
     events: {
@@ -1047,12 +1100,37 @@ function openPanel(name, opener) {
   let target = null;
   if (name === "cams") target = $(`.cam-row[data-id="${state.currentCamId}"] [data-action="watch"]`, panel);
   if (name === "music") target = $(`.mix-btn[data-id="${state.mixId}"]`, panel);
+  if (name === "tv") renderTvQr();
   if (!target) target = $(FOCUSABLE, panel);
   if (target) {
     target.focus();
     quietly(() => target.scrollIntoView({ block: "center" }));
   }
   showUI();
+}
+
+let qrDone = false;
+
+/** Draw the QR code for TV_URL into the panel canvas, with a white quiet zone of 4 modules. */
+function renderTvQr() {
+  $("#tv-url").textContent = TV_URL;
+  if (qrDone) return;
+  const qr = qrcode(0, "M");
+  qr.addData(TV_URL);
+  qr.make();
+  const n = qr.getModuleCount();
+  const cell = 8;
+  const quiet = 4;
+  const size = (n + quiet * 2) * cell;
+  const canvas = $("#tv-qr");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = "#000";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
+  qrDone = true;
 }
 
 function closePanel(restoreFocus = true) {
@@ -1104,6 +1182,11 @@ function start() {
     return;
   }
   state.started = true;
+  if (isTv) {
+    const docEl = document.documentElement;
+    const req = docEl.requestFullscreen || docEl.webkitRequestFullscreen;
+    if (req && !isFullscreen()) Promise.resolve(quietly(() => req.call(docEl))).catch(() => {});
+  }
   body.classList.remove("is-starting");
   el.start.classList.add("leaving");
   setTimeout(() => {
@@ -1402,6 +1485,8 @@ function handleAction(action, btn) {
       return openPanel("cams", btn);
     case "open-music":
       return openPanel("music", btn);
+    case "open-tv":
+      return openPanel("tv", btn);
     case "open-about":
       return openPanel("about", btn);
     case "close-panel":
@@ -1502,14 +1587,32 @@ function bindInput() {
 
 /* ================================================================ boot */
 
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
+
 function boot() {
   buildCamsPanel();
   buildMusicPanel();
   buildCredits();
   bindInput();
   render();
-  el.startBtn.focus();
   body.classList.toggle("lite", state.lite);
+  if (isTv) {
+    body.classList.add("tv");
+    // Keep the Start button focused until the user starts (TV browsers sometimes drop initial focus).
+    const keepFocus = () => {
+      if (!state.started && !state.openPanel && document.activeElement !== el.startBtn) el.startBtn.focus();
+    };
+    window.addEventListener("load", keepFocus);
+    setTimeout(keepFocus, 300);
+    setTimeout(keepFocus, 1500);
+  }
+  el.startBtn.focus();
+  registerServiceWorker();
   sizeCam();
   setInterval(tick, 1000);
   document.addEventListener("visibilitychange", onVisibility);
@@ -1522,6 +1625,7 @@ function boot() {
     start,
     currentCamId: () => state.currentCamId,
     currentMixId: () => state.mixId,
+    isTv,
   };
 }
 

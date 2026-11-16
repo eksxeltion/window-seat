@@ -52,19 +52,20 @@ button { font: inherit; color: inherit; }
 }
 .kbd input[type="range"]:focus { outline-offset: 0.4rem; }
 
-/* ---------- Music player: tiny, nearly transparent, in a corner (not display:none) ---------- */
+/* ---------- Music player: 200x200 CSS px (YouTube's minimum), nearly transparent, fully behind the opaque cam layer.
+   Not display:none and not visibility:hidden. Opacity stays above 0. ---------- */
 #music-wrap {
   position: fixed;
   right: 0;
   bottom: 0;
-  width: 2px;
-  height: 2px;
-  opacity: 0.01;
+  width: 200px;
+  height: 200px;
+  opacity: 0.02;
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
 }
-#music-wrap iframe { width: 2px; height: 2px; border: 0; }
+#music-wrap iframe { width: 200px; height: 200px; border: 0; }
 
 /* ---------- Cam stage ---------- */
 #stage {
@@ -75,7 +76,7 @@ button { font: inherit; color: inherit; }
   background: #000;
 }
 
-/* One cam iframe, sized by JS (capped near 1920x1080) and scaled up with a transform to cover the viewport. */
+/* One cam iframe, sized by JS (capped at 1920x1080, or 1280x720 in Lite) and scaled up with a transform to cover the viewport. */
 #cam { position: absolute; inset: 0; overflow: hidden; }
 #cam iframe,
 #cam .cam-player {
@@ -470,6 +471,28 @@ button { font: inherit; color: inherit; }
 .lite *, .lite *::before, .lite *::after { animation: none !important; transition: none !important; }
 .lite .vignette, .lite .scrim { display: none; }
 .lite .caption, .lite.ui-hidden .caption { transform: none; }
+
+/* ---------- Send to TV panel ---------- */
+.tv-send { display: flex; flex-direction: column; align-items: center; gap: 1rem; text-align: center; }
+.qr-box { padding: 0.6rem; background: #fff; border-radius: 0.6rem; line-height: 0; }
+#tv-qr { width: min(18rem, 50vh); height: min(18rem, 50vh); image-rendering: pixelated; }
+.tv-url { margin: 0; font-size: 1.9rem; font-weight: 600; letter-spacing: 0.01em; word-break: break-all; }
+.tv-hint { margin: 0; font-size: 1.05rem; color: var(--fg-dim); }
+
+/* ---------- TV mode: bigger controls, much thicker high contrast focus ---------- */
+.tv :focus-visible,
+.tv :focus {
+  outline: 0.4rem solid #fff;
+  outline-offset: 0.25rem;
+  box-shadow: 0 0 0 0.8rem #000;
+}
+.tv .bar { gap: 0.5rem; padding: 0.7rem; bottom: 5vh; }
+.tv .bar-btn { min-width: 6.6rem; padding: 0.8rem 0.6rem 0.7rem; }
+.tv .bar-btn .icon { width: 2.1rem; height: 2.1rem; }
+.tv .bar-btn .label { font-size: 1.05rem; color: var(--fg); }
+.tv .btn, .tv .switch { min-height: 3.4rem; font-size: 1.2rem; }
+.tv .btn-start { font-size: 1.9rem; min-height: 5rem; }
+.tv .pill { font-size: 1.4rem; }
 
 /* Small screens (phones): keep things usable. */
 @media (max-width: 700px) {
