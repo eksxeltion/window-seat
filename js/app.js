@@ -15,7 +15,6 @@ const IDLE_MS = 4000;
 const PANEL_IDLE_MS = 45000;
 const MUSIC_CHECK_MS = 5000;
 const MUSIC_READY_MS = 15000; // music iframe must report ready by then
-const STALE_EVENT_MS = 300; // ignore terminal events this soon after a load call (they belong to the old video)
 const API_TIMEOUT_MS = 20000;
 const VOLUME_STEP = 10;
 
@@ -167,6 +166,7 @@ const slots = [0, 1].map((i) => ({
   camId: null,
   seq: 0,
   loadedAt: 0,
+  loadSeq: 0,
 }));
 let activeStall = null; // { at, tried } while the on-screen cam is not PLAYING
 let activeSlot = null;
@@ -227,13 +227,12 @@ function whenReady(slot, fn) {
 function loadCamInto(slot, camId) {
   slot.camId = camId;
   slot.loadedAt = 0;
-  slot.sawState = false;
   slot.nudged = false;
   const seq = ++slot.seq;
   whenReady(slot, () => {
     if (slot.camId !== camId || slot.seq !== seq) return;
     slot.loadedAt = Date.now();
-    slot.sawState = false;
+    slot.loadSeq = seq; // load generation: terminal events are only trusted while no newer load was issued
     slot.nudged = false;
     hardMute(slot);
     quietly(() => slot.player.loadVideoById(camId));
@@ -243,6 +242,7 @@ function loadCamInto(slot, camId) {
 
 function stopSlot(slot) {
   slot.seq++;
+  slot.loadedAt = 0;
   slot.camId = null;
   if (slot.ready) quietly(() => slot.player.stopVideo());
 }
@@ -252,11 +252,16 @@ function slotShows(slot, camId) {
   return !data || !data.video_id || data.video_id === camId;
 }
 
-/** True when a terminal event (ended/error) really belongs to the video this slot is meant to show. */
+/** True when the slot's latest load call is still the newest one (no newer load or stop since). */
+function hasCurrentLoad(slot) {
+  return !!slot.camId && !!slot.loadedAt && slot.loadSeq === slot.seq;
+}
+
+/** True when an ENDED event belongs to the video this slot is meant to show (current load and matching id). */
 function isCurrentLoad(slot) {
-  if (!slot.camId || !slot.loadedAt) return false;
-  if (Date.now() - slot.loadedAt < STALE_EVENT_MS) return false;
-  return slotShows(slot, slot.camId);
+  if (!hasCurrentLoad(slot)) return false;
+  const data = quietly(() => slot.player.getVideoData());
+  return !!data && data.video_id === slot.camId;
 }
 
 /** Pick the next cam id from `fromId` in direction `dir`, skipping failed ones. */
@@ -408,7 +413,6 @@ function slotLooksUnplayable(slot, limitMs) {
 }
 
 function onCamState(slot, s) {
-  if (slot.loadedAt && Date.now() - slot.loadedAt >= 20) slot.sawState = true;
   if (s === YS.PLAYING || s === YS.BUFFERING) hardMute(slot);
   const p = state.pending;
   if (p && p.slot === slot) {
@@ -437,11 +441,10 @@ function onCamState(slot, s) {
 // YouTube error codes 2, 5, 100, 101, 150 and 153 all mean the video cannot be played here,
 // so any error for the video we just asked for is a prompt failure.
 function onCamError(slot) {
-  // Not using slotShows(): for an invalid id the player may still report the previous video id.
-  // Invalid ids report the error within ~150ms of the load call, so the usual stale-event
-  // window is skipped once the slot has already reacted to the new load.
-  if (!slot.camId || !slot.loadedAt) return;
-  if (!slot.sawState && Date.now() - slot.loadedAt < STALE_EVENT_MS) return;
+  // Ownership is by identity, not timing. For an invalid id the player may report an empty or the
+  // previous video id, so a mismatch is fine as long as no newer load was issued since this one
+  // (a stale error from an older load always arrives after a newer load bumped slot.seq).
+  if (!hasCurrentLoad(slot)) return;
   const p = state.pending;
   if (p && p.slot === slot) failPending();
   else if (slot === activeSlot) failActive();
@@ -458,6 +461,12 @@ function tick() {
       failPending();
       return;
     }
+  }
+  if (activeSlot && !state.allFailed && hasCurrentLoad(activeSlot) && !(p && p.slot === activeSlot)) {
+    // Poll the visible cam: any non-PLAYING state (UNSTARTED, CUED, BUFFERING, PAUSED, ENDED) counts as a stall.
+    const live = quietly(() => activeSlot.player.getPlayerState());
+    if (live === YS.PLAYING) activeStall = null;
+    else if (live != null && !activeStall) activeStall = { at: now, tried: false };
   }
   if (activeStall && activeSlot && !state.allFailed && now - activeStall.at > LOAD_TIMEOUT_MS) {
     if (!activeStall.tried) {
