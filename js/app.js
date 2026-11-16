@@ -401,8 +401,14 @@ function looksUnplayable(limitMs) {
   return true;
 }
 
+// A matching cam that reached PLAYING proves any earlier error marker was stale.
+function clearStaleError() {
+  if (cp.errSeq && isCurrentLoad()) cp.errSeq = 0;
+}
+
 function onCamState(s) {
   if (s === YS.PLAYING || s === YS.BUFFERING) hardMute();
+  if (s === YS.PLAYING) clearStaleError();
   const p = state.pending;
   if (p) {
     if (s === YS.PLAYING && shows(p.camId)) onCamPlaying(p);
@@ -454,8 +460,10 @@ function tick() {
   if (hasCurrentLoad() && now >= graceUntil) {
     // Poll the visible cam: any non-PLAYING state (UNSTARTED, CUED, BUFFERING, PAUSED, ENDED) counts as a stall.
     const live = quietly(() => cp.player.getPlayerState());
-    if (live === YS.PLAYING) activeStall = null;
-    else if (live != null && !activeStall) activeStall = { at: now, tried: false };
+    if (live === YS.PLAYING) {
+      activeStall = null;
+      clearStaleError();
+    } else if (live != null && !activeStall) activeStall = { at: now, tried: false };
     if (errorConfirmed()) {
       failActive();
       return;

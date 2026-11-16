@@ -1,6 +1,6 @@
 // Window Seat service worker: caches only the app shell so the page opens fast and installs as an app.
-// Bump CACHE_VERSION whenever a shell file changes (shell files are served cache-first).
-const CACHE_VERSION = "v1";
+// Bump CACHE_VERSION whenever a shell file changes (all same-origin GETs are network-first with cache fallback).
+const CACHE_VERSION = "v2";
 
 const CACHE = "window-seat-" + CACHE_VERSION;
 const SHELL = [
@@ -36,15 +36,19 @@ self.addEventListener("fetch", (event) => {
   // Never touch cross-origin traffic (YouTube player, API, thumbnails, video): no respondWith at all.
   if (url.origin !== self.location.origin || req.method !== "GET") return;
 
-  if (req.mode === "navigate") {
-    // Network first so a deploy shows up right away; fall back to the cached shell when offline.
-    event.respondWith(
-      fetch(req).catch(() => caches.match("/index.html").then((r) => r || caches.match("/"))),
-    );
-    return;
-  }
-
-  if (SHELL.includes(url.pathname)) {
-    event.respondWith(caches.match(url.pathname).then((hit) => hit || fetch(req)));
-  }
+  // Network first for every same-origin GET so HTML, JS and CSS always come from the same deploy.
+  // Fresh responses refresh the cache; the cache (precached shell) is the offline fallback.
+  event.respondWith(
+    fetch(req)
+      .then((res) => {
+        if (res && res.ok && res.type === "basic") {
+          const copy = res.clone();
+          caches.open(CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
+        }
+        return res;
+      })
+      .catch(() =>
+        caches.match(req).then((hit) => hit || (req.mode === "navigate" ? caches.match("/index.html").then((r) => r || caches.match("/")) : undefined)),
+      ),
+  );
 });
