@@ -22,13 +22,24 @@ let warnedNoReply = false;
 let hooks = null;
 const ui = {};
 
+// Stage 2 failures: the TV app launched, but a command could not be delivered to it.
 const SEND_ERRORS = {
-  timeout: "the TV did not answer in time",
+  timeout: "the TV app did not take the message in time (its Window Seat channel is not answering)",
   channel_error: "the connection to the TV dropped",
   session_error: "the Cast session ended",
-  invalid_parameter: "invalid message",
+  invalid_parameter: "the message was rejected as invalid",
   api_not_initialized: "Cast is still starting",
 };
+
+/* What the session says about the TV app: right app id, and does it declare our channel? */
+function channelCheck() {
+  const obj = quietly(() => session.getSessionObj());
+  const appId = obj && obj.appId;
+  const names = ((obj && obj.namespaces) || []).map((n) => n.name);
+  if (appId && appId !== CAST_APP_ID) return `Connected to a different TV app (${appId}), not Window Seat (${CAST_APP_ID}).`;
+  if (obj && !names.includes(RECEIVER_NAMESPACE)) return "The TV app is running but has not opened the Window Seat channel yet (receiver not started, or an old version).";
+  return "";
+}
 
 /* Send one command to the TV over the custom namespace. Errors and missing replies are shown, never swallowed. */
 function send(cmd, opts = {}) {
@@ -45,18 +56,22 @@ function send(cmd, opts = {}) {
     say(`Could not send to the TV: ${(e && e.message) || e}`);
     return;
   }
-  Promise.resolve(p).then(
-    (code) => code && say(`Could not send to the TV: ${SEND_ERRORS[code] || code}`),
-    (code) => say(`Could not send to the TV: ${SEND_ERRORS[(code && code.code) || code] || (code && code.code) || code}`),
-  );
+  const fail = (raw) => {
+    const code = (raw && raw.code) || raw;
+    const hint = channelCheck();
+    say(`Send failed (${code}): ${SEND_ERRORS[code] || code}.${hint ? " " + hint : ""}`);
+    setRemoteStatus(`Send failed: ${code}${hint ? ". " + hint : ""}`);
+  };
+  Promise.resolve(p).then((code) => code && fail(code), fail);
   if (opts.silent) return;
   clearTimeout(replyTimer);
   replyTimer = setTimeout(() => {
     if (lastReplyAt >= sentAt) return;
-    setRemoteStatus("Sent, but no reply from the TV yet");
+    const hint = channelCheck();
+    setRemoteStatus(`Sent, but no reply from the TV app after 4s.${hint ? " " + hint : ""}`);
     if (!warnedNoReply) {
       warnedNoReply = true;
-      say("Sent to the TV, but it has not replied. If nothing changes, tap Stop casting and cast again.");
+      say(`Sent, but the TV app has not replied after 4s.${hint ? " " + hint : " Check the green line at the bottom of the TV."}`);
     }
   }, 4000);
 }
@@ -202,7 +217,7 @@ function onMessage(_ns, raw) {
   lastReplyAt = Date.now();
   warnedNoReply = false;
   remote = { ...remote, ...msg };
-  setRemoteStatus("Connected. The TV confirms each tap.");
+  setRemoteStatus(`Connected. The TV confirms each tap.${msg.build ? ` (TV build ${msg.build})` : ""}`);
   renderRemote();
 }
 
@@ -214,7 +229,8 @@ function onSessionStarted(s, resumed) {
   ui.root.hidden = false;
   lastReplyAt = 0;
   warnedNoReply = false;
-  setRemoteStatus("Waiting for the TV...");
+  const hint = channelCheck();
+  setRemoteStatus(hint || "Waiting for the TV app to reply...");
   hooks.onStart();
   renderRemote();
   if (resumed) {

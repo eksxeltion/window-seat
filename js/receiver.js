@@ -2,6 +2,7 @@
 // Runs on the Cast device. With ?debug=1 it runs in any browser without starting the Cast context.
 import { CAMS, MIXES } from "./data.js";
 
+export const BUILD = "2026-11-15.3"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -51,6 +52,7 @@ function snapshot() {
   const mix = mixById(s.mixId);
   return {
     type: "state",
+    build: BUILD,
     camId: s.camId,
     camTitle: cam ? cam.title : "",
     mixId: s.mixId,
@@ -66,9 +68,40 @@ function snapshot() {
 }
 
 let context = null; // CastReceiverContext, only when running on a Cast device
-function broadcast() {
+/* ---------------------------------------------------------------- on-TV debug strip */
+
+const dbg = { caf: "loading", listener: "no", senders: 0, lastIn: "none", lastOut: "none", error: "" };
+let stripOn = new URLSearchParams(location.search).get("strip") !== "0";
+function hhmmss() {
+  return new Date().toTimeString().slice(0, 8);
+}
+function renderStrip() {
+  const el = $("debug-strip");
+  if (!el) return;
+  el.hidden = !stripOn;
+  el.textContent =
+    `build ${BUILD} | CAF ${dbg.caf} | listener ${dbg.listener} | senders ${dbg.senders} | ` +
+    `last in: ${dbg.lastIn} | last reply: ${dbg.lastOut}` + (dbg.error ? ` | error: ${dbg.error}` : "");
+}
+function setDbg(patch) {
+  Object.assign(dbg, patch);
+  renderStrip();
+}
+
+/* Replies go out as JSON text: the namespace is declared as STRING (see startCast). */
+function reply(senderId) {
   if (!context) return;
-  quietly(() => context.sendCustomMessage(NAMESPACE, undefined, snapshot()));
+  const kind = senderId ? "direct" : "broadcast";
+  try {
+    context.sendCustomMessage(NAMESPACE, senderId, JSON.stringify(snapshot()));
+    setDbg({ lastOut: `${kind} ${hhmmss()}` });
+  } catch (e) {
+    setDbg({ lastOut: `${kind} FAILED ${hhmmss()}`, error: String((e && e.message) || e).slice(0, 80) });
+  }
+}
+
+function broadcast() {
+  reply(undefined);
 }
 
 /* Small on-TV confirmation for every phone command, so a tap is visibly received. */
@@ -336,9 +369,17 @@ function prevMix() {
   playMix(MIXES[(i - 1 + MIXES.length) % MIXES.length].id);
 }
 
-function handle(cmd) {
+/** Accepts a command object, or JSON text of one (from any sender or namespace type). */
+export function parseCommand(raw) {
+  let cmd = raw;
   if (typeof cmd === "string") cmd = quietly(() => JSON.parse(cmd));
-  if (!cmd || typeof cmd !== "object") return;
+  if (typeof cmd === "string") cmd = quietly(() => JSON.parse(cmd)); // double-encoded JSON text
+  return cmd && typeof cmd === "object" && typeof cmd.type === "string" ? cmd : null;
+}
+
+function handle(raw) {
+  const cmd = parseCommand(raw);
+  if (!cmd) return;
   note("command", cmd);
   const quiet = cmd.silent === true; // setup messages sent on connect: no on-TV flash
   switch (cmd.type) {
@@ -410,6 +451,11 @@ function handle(cmd) {
       break;
     case "getState":
       break;
+    case "debug":
+      // Toggle the on-TV debug strip from the phone.
+      stripOn = !!cmd.value;
+      renderStrip();
+      break;
     default:
       return;
   }
@@ -454,34 +500,63 @@ function prepareKeepAlive() {
   return video;
 }
 
+function onCustomMessage(event) {
+  const raw = event && event.data;
+  const cmd = parseCommand(raw);
+  setDbg({ lastIn: `${cmd ? cmd.type : "unreadable " + typeof raw} ${hhmmss()}` });
+  try {
+    handle(cmd);
+  } catch (e) {
+    setDbg({ error: `handle: ${String((e && e.message) || e).slice(0, 80)}` });
+  }
+  // Also answer the sender directly, in case a broadcast does not reach it.
+  if (event && event.senderId) reply(event.senderId);
+}
+
 function startCast() {
   const cast = window.cast;
   if (!cast || !cast.framework) {
     note("castUnavailable");
+    setDbg({ caf: "missing" });
     return;
   }
-  // CAF needs a media element in the DOM before the context and player manager are obtained.
-  const keepAlive = prepareKeepAlive();
-  context = cast.framework.CastReceiverContext.getInstance();
-  const options = new cast.framework.CastReceiverOptions();
-  options.mediaElement = keepAlive;
-  options.disableIdleTimeout = true;
-  options.maxInactivity = 3600;
-  options.customNamespaces = { [NAMESPACE]: cast.framework.system.MessageType.JSON };
-  context.addCustomMessageListener(NAMESPACE, (event) => {
-    handle(event.data);
-    // Also answer the sender directly, in case a broadcast does not reach it.
-    if (event.senderId) quietly(() => context.sendCustomMessage(NAMESPACE, event.senderId, snapshot()));
-  });
-  // A sender leaving (phone asleep, app closed, user disconnects) never stops playback.
-  // Only an explicit {type:'stop'} command calls context.stop().
-  context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, (event) => {
-    note("senderDisconnected", { reason: event && event.reason });
-  });
-  context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => broadcast());
-  const playerManager = context.getPlayerManager();
-  if (typeof playerManager.setMediaElement === "function") quietly(() => playerManager.setMediaElement(keepAlive));
-  context.start(options);
+  try {
+    context = cast.framework.CastReceiverContext.getInstance();
+    const options = new cast.framework.CastReceiverOptions();
+    options.mediaElement = $("keepalive");
+    options.disableIdleTimeout = true;
+    options.maxInactivity = 3600;
+    // STRING: CAF hands us the raw text and we parse it ourselves (parseCommand accepts objects too),
+    // so a JSON parse quirk in the framework can never drop a command.
+    options.customNamespaces = { [NAMESPACE]: cast.framework.system.MessageType.STRING };
+    // The listener is registered before start(), and before anything YouTube related.
+    context.addCustomMessageListener(NAMESPACE, onCustomMessage);
+    setDbg({ listener: "registered" });
+    // A sender leaving (phone asleep, app closed, user disconnects) never stops playback.
+    // Only an explicit {type:'stop'} command calls context.stop().
+    context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, (event) => {
+      note("senderDisconnected", { reason: event && event.reason });
+      setDbg({ senders: quietly(() => context.getSenders().length) ?? dbg.senders });
+    });
+    context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => {
+      setDbg({ senders: quietly(() => context.getSenders().length) ?? dbg.senders + 1 });
+      broadcast();
+    });
+    context.addEventListener(cast.framework.system.EventType.READY, () => setDbg({ caf: "ready", listener: "ready" }));
+    // Keep-alive media element is optional: a failure here must never prevent start().
+    try {
+      const keepAlive = prepareKeepAlive();
+      const playerManager = context.getPlayerManager();
+      if (typeof playerManager.setMediaElement === "function") playerManager.setMediaElement(keepAlive);
+    } catch (e) {
+      setDbg({ error: `keepalive: ${String((e && e.message) || e).slice(0, 60)}` });
+    }
+    setDbg({ caf: "starting" });
+    context.start(options);
+    if (dbg.caf === "starting") setDbg({ caf: "started (waiting for ready)" });
+  } catch (e) {
+    setDbg({ caf: "FAILED", error: `start: ${String((e && e.message) || e).slice(0, 80)}` });
+  }
 }
 
 function loadScript(src) {
@@ -508,9 +583,26 @@ function startYouTube() {
   else loadScript(YT_URL).catch(() => note("ytLoadFailed"));
 }
 
+renderStrip();
+window.addEventListener("error", (e) => setDbg({ error: String(e.message || "script error").slice(0, 80) }));
+
+// Cast first: the message channel must come up even if YouTube is slow or failing.
+if (!DEBUG) {
+  loadScript(CAF_URL).then(startCast, () => {
+    note("castUnavailable");
+    setDbg({ caf: "load failed" });
+  });
+} else {
+  setDbg({ caf: "debug (off)" });
+}
+
 showMixTitle();
 setInterval(camTick, 1000);
-startYouTube();
+try {
+  startYouTube();
+} catch (e) {
+  setDbg({ error: `youtube: ${String((e && e.message) || e).slice(0, 60)}` });
+}
 
 if (DEBUG) {
   // No Cast context in debug mode: same player logic, driven through window.__receiver.send.
@@ -518,12 +610,15 @@ if (DEBUG) {
     value: {
       get state() { return snapshot(); },
       send: handle,
+      // Test hooks: the real Cast message path with a mocked context.
+      message: (event) => onCustomMessage(event),
+      useContext: (ctx) => {
+        context = ctx;
+      },
       log,
       // Test probes for the soak run.
       music: () => ({ state: quietly(() => musicPlayer.getPlayerState()), time: quietly(() => musicPlayer.getCurrentTime()), vol: quietly(() => musicPlayer.getVolume()), muted: quietly(() => musicPlayer.isMuted()) }),
       cam: () => ({ state: quietly(() => camPlayer.getPlayerState()) }),
     },
   });
-} else {
-  loadScript(CAF_URL).then(startCast, () => note("castUnavailable"));
 }
