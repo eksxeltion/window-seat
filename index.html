@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Window Seat</title>
+  <meta name="description" content="Ambient TV for your living room: public Japan live cams that rotate on their own, with Tokyo Chill Lab mixes playing underneath.">
+  <meta name="theme-color" content="#000000">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='16' fill='%23101014'/%3E%3Crect x='16' y='14' width='32' height='36' rx='8' fill='none' stroke='%23ffd27f' stroke-width='4'/%3E%3Cpath d='M32 14v36M16 32h32' stroke='%23ffd27f' stroke-width='4'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body class="is-starting kbd">
+  <!-- Icon sprite -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 5v14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M19 5.5v13L9 12z" fill="currentColor"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M18 5v14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M5 5.5v13L15 12z" fill="currentColor"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3.5h6l-.8 6.2L17.5 13h-11l3.3-3.3zM12 13v7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 13.5V9.5M9.5 3h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-cams" viewBox="0 0 24 24"><rect x="2.5" y="6" width="13" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.5 10.5l6-3.5v10l-6-3.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5.5l11-2V16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.6" fill="currentColor"/><circle cx="17.5" cy="16" r="2.6" fill="currentColor"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15L19.5 12z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></symbol>
+    <symbol id="i-vol-down" viewBox="0 0 24 24"><path d="M3.5 9h4l5-4v14l-5-4h-4z" fill="currentColor"/><path d="M16 12h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-vol-up" viewBox="0 0 24 24"><path d="M3.5 9h4l5-4v14l-5-4h-4z" fill="currentColor"/><path d="M15.5 12h6M18.5 9v6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="7.6" r="1.3" fill="currentColor"/></symbol>
+  </svg>
+
+  <!-- Music player: kept on screen but covered by the cam stage (never display:none) -->
+  <div id="music-wrap" aria-hidden="true"><div id="music-player"></div></div>
+
+  <!-- Cam layer -->
+  <div id="stage" aria-hidden="true">
+    <div class="cam-slot" id="cam-0"><div class="cam-player"></div></div>
+    <div class="cam-slot" id="cam-1"><div class="cam-player"></div></div>
+    <div class="vignette"></div>
+    <div class="scrim"></div>
+  </div>
+
+  <!-- Shown only while no cam is on screen -->
+  <div id="tuning" class="tuning" role="status" aria-live="polite" hidden>Tuning in<span class="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></div>
+
+  <!-- Caption -->
+  <div id="caption" class="caption" hidden>
+    <div class="cap-title"></div>
+    <div class="cap-meta"></div>
+    <div class="cap-music"></div>
+  </div>
+
+  <button id="tap-music" class="pill" type="button" hidden>
+    <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg>
+    <span>Tap to play music</span>
+  </button>
+
+  <div id="notice" class="notice glass" role="alertdialog" aria-labelledby="notice-title" hidden>
+    <h2 id="notice-title"></h2>
+    <p id="notice-text"></p>
+    <button id="notice-btn" class="btn btn-primary" type="button"></button>
+  </div>
+
+  <!-- Controls -->
+  <nav id="bar" class="bar glass" aria-label="Controls">
+    <button class="bar-btn" type="button" data-action="prev"><svg class="icon" aria-hidden="true"><use href="#i-prev"></use></svg><span class="label">Previous</span></button>
+    <button class="bar-btn" type="button" data-action="pin" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg><span class="label">Pin</span></button>
+    <button class="bar-btn" type="button" data-action="next" id="btn-next"><svg class="icon" aria-hidden="true"><use href="#i-next"></use></svg><span class="label">Next</span></button>
+    <button class="bar-btn" type="button" data-action="interval"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg><span class="label">Every 60s</span></button>
+    <button class="bar-btn" type="button" data-action="open-cams" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-cams"></use></svg><span class="label">Cams</span></button>
+    <button class="bar-btn" type="button" data-action="open-music" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-music"></use></svg><span class="label">Music</span></button>
+    <button class="bar-btn" type="button" data-action="play-pause"><svg class="icon" aria-hidden="true"><use href="#i-pause"></use></svg><span class="label">Pause</span></button>
+    <button class="bar-btn" type="button" data-action="vol-down"><svg class="icon" aria-hidden="true"><use href="#i-vol-down"></use></svg><span class="label">Vol down</span></button>
+    <button class="bar-btn" type="button" data-action="vol-up"><svg class="icon" aria-hidden="true"><use href="#i-vol-up"></use></svg><span class="label">Vol up</span></button>
+    <button class="bar-btn" type="button" data-action="fullscreen"><svg class="icon" aria-hidden="true"><use href="#i-fullscreen"></use></svg><span class="label">Fullscreen</span></button>
+    <button class="bar-btn" type="button" data-action="open-about" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg><span class="label">About</span></button>
+  </nav>
+
+  <!-- Cams panel -->
+  <section id="panel-cams" class="panel glass" role="dialog" aria-modal="true" aria-labelledby="cams-title" hidden>
+    <header class="panel-head">
+      <h2 id="cams-title">Cams</h2>
+      <button class="btn" type="button" data-action="close-panel">Close</button>
+    </header>
+    <div class="panel-tools">
+      <button class="btn" type="button" data-action="interval" id="cams-interval">Every 60s</button>
+      <button class="switch" type="button" data-action="toggle-caption" aria-pressed="true"><span class="switch-track"><span class="switch-thumb"></span></span><span>Show caption</span></button>
+      <button class="btn" type="button" data-action="select-defaults">Select defaults</button>
+      <button class="btn" type="button" data-action="select-all">Select all</button>
+    </div>
+    <div class="panel-body" id="cams-list"></div>
+  </section>
+
+  <!-- Music panel -->
+  <section id="panel-music" class="panel glass" role="dialog" aria-modal="true" aria-labelledby="music-title" hidden>
+    <header class="panel-head">
+      <h2 id="music-title">Music</h2>
+      <button class="btn" type="button" data-action="close-panel">Close</button>
+    </header>
+    <div class="panel-tools">
+      <button class="btn" type="button" data-action="play-pause" id="music-play">Pause</button>
+      <button class="switch" type="button" data-action="mute" id="music-mute" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Mute</span></button>
+      <label class="volume">
+        <span>Volume</span>
+        <input id="music-volume" type="range" min="0" max="100" step="5" value="60" aria-label="Music volume">
+        <output id="music-volume-out">60</output>
+      </label>
+      <button class="switch" type="button" data-action="shuffle" id="music-shuffle" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Shuffle</span></button>
+    </div>
+    <div class="panel-body">
+      <ol class="mix-list" id="mix-list"></ol>
+      <p class="fineprint">Mixes by <a id="music-credit" target="_blank" rel="noopener"></a>.</p>
+    </div>
+  </section>
+
+  <!-- About panel -->
+  <section id="panel-about" class="panel glass" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+    <header class="panel-head">
+      <h2 id="about-title">About Window Seat</h2>
+      <button class="btn" type="button" data-action="close-panel">Close</button>
+    </header>
+    <div class="panel-body prose">
+      <p>Window Seat is a quiet window onto Japan. Public live cams from around the country rotate on their own while long mixes from TOKYO CHILL LAB play underneath. It is made for leaving on the TV.</p>
+
+      <h3>Use it on your TV</h3>
+      <ul>
+        <li><strong>TV browser:</strong> open this page in the browser on your Android TV or Google TV and press Start.</li>
+        <li><strong>Cast:</strong> open the page in Chrome on a computer, choose Cast, then Cast tab. Go fullscreen for the best view.</li>
+        <li><strong>Remote:</strong> arrows to move, OK to choose, Back to close a panel.</li>
+        <li><strong>Keyboard:</strong> N next cam, P pin, M mute music, Space play or pause music, F fullscreen.</li>
+      </ul>
+
+      <h3>About the video</h3>
+      <p>All video and music are embedded with the official YouTube player. Nothing is downloaded, stored, or restreamed. All rights belong to the creators, so please visit and support their channels.</p>
+
+      <h3>Credits</h3>
+      <h4>Live cams</h4>
+      <ul class="credits" id="credits-cams"></ul>
+      <h4>Music</h4>
+      <ul class="credits" id="credits-music"></ul>
+      <h4>Source</h4>
+      <p><a href="https://github.com/eksxeltion/window-seat" target="_blank" rel="noopener">github.com/eksxeltion/window-seat</a></p>
+    </div>
+  </section>
+
+  <!-- Start screen -->
+  <div id="start" class="start">
+    <div class="start-inner">
+      <h1>Window Seat</h1>
+      <p class="tagline">Live views from Japan with soft music, made for your TV.</p>
+      <button id="start-btn" class="btn btn-primary btn-start" type="button" autofocus>
+        <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg><span>Start</span>
+      </button>
+      <button id="start-about" class="btn btn-ghost" type="button" data-action="open-about" aria-haspopup="dialog">About and credits</button>
+      <p id="start-status" class="start-status" role="status"></p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <noscript><p class="noscript">Window Seat needs JavaScript to play the cams and music.</p></noscript>
+</body>
+</html>
