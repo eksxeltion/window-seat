@@ -3,7 +3,7 @@
 import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 
-export const BUILD = "2026-11-16.1"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.2"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";

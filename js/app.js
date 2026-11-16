@@ -1,7 +1,8 @@
 // Window Seat: rotating Japan live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
 import qrcode from "./qr.js";
-import { initCast, castConfigured, sendConfigToTv } from "./cast.js";
+import { initCast, castConfigured, sendConfigToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam } from "./cast.js";
+import { BUILD } from "./build.js";
 import { refreshFromSheet, listLabel } from "./config.js";
 
 /* ---------------------------------------------------------------- config */
@@ -108,6 +109,15 @@ const state = {
 };
 
 const reducedMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+
+/* While Cast is connecting or connected this page is only a remote: ask the Cast framework (not just our own flag),
+   show the remote, and send the control to the TV. Returns true when the caller must not act locally. */
+function viaTv(send) {
+  if (!isCasting()) return false;
+  syncRemoteMode();
+  if (send) send();
+  return true;
+}
 
 /* ---------------------------------------------------------------- dom */
 
@@ -523,6 +533,7 @@ function onVisibility() {
 /* --- cam actions --- */
 
 function skip(dir = 1) {
+  if (viaTv(() => remoteCmd(dir < 0 ? "prev" : "next"))) return;
   if (state.casting || !state.started || !state.apiReady) return;
   const from = state.pending ? state.pending.camId : state.currentCamId;
   const target = pickCam(from, dir);
@@ -539,12 +550,14 @@ function watchNow(camId) {
   if (!camById(camId)) return;
   state.failed.delete(camId);
   setAllFailed(false);
+  if (viaTv(() => remoteCam(camId))) return;
   if (state.casting || !state.started) return;
   if (state.pending ? state.pending.camId === camId : camId === state.currentCamId) return;
   beginLoad(camId);
 }
 
 function togglePin() {
+  if (viaTv(() => remoteCmd("pin"))) return;
   state.pinned = !state.pinned;
   if (!state.pinned) state.nextSwapAt = Date.now() + rotateSec() * 1000;
   toast(state.pinned ? "Pinned. This cam stays on." : "Unpinned. Rotation is back on.");
@@ -552,6 +565,7 @@ function togglePin() {
 }
 
 function toggleInterval() {
+  if (viaTv(() => remoteCmd("interval"))) return;
   if (state.lite) return;
   state.intervalSec = state.intervalSec === 60 ? 30 : 60;
   store.set("interval", state.intervalSec);
@@ -754,6 +768,7 @@ function showTapMusic(on) {
 
 function playMix(mixId, { userChoice = false } = {}) {
   if (!mixById(mixId)) return;
+  if (viaTv(() => remoteMix(mixId))) return;
   state.mixId = mixId;
   store.set("mix", mixId);
   state.musicWantsPlay = true;
@@ -773,6 +788,7 @@ function playMix(mixId, { userChoice = false } = {}) {
 }
 
 function nextMix() {
+  if (viaTv(() => remoteCmd("next-mix"))) return;
   const i = MIXES.findIndex((m) => m.id === state.mixId);
   let j;
   if (state.shuffle && MIXES.length > 1) {
@@ -815,7 +831,7 @@ function musicIsPlaying() {
 }
 
 function togglePlayMusic() {
-  if (state.casting) return;
+  if (viaTv(() => remoteCmd("play"))) return;
   if (musicStuck) return retryMusicPlayer();
   if (!musicReady) return;
   if (state.musicUnavailable) {
@@ -837,6 +853,7 @@ function togglePlayMusic() {
 }
 
 function setVolume(v, announce = true) {
+  if (viaTv(() => remoteCmd(v > state.volume ? "vol-up" : "vol-down"))) return;
   state.volume = Math.min(100, Math.max(0, Math.round(v)));
   if (state.volume > 0 && state.muted) state.muted = false;
   store.set("volume", state.volume);
@@ -847,6 +864,7 @@ function setVolume(v, announce = true) {
 }
 
 function toggleMute() {
+  if (viaTv(() => remoteCmd("mute"))) return;
   state.muted = !state.muted;
   store.set("muted", state.muted);
   applyVolume();
@@ -861,6 +879,7 @@ function toggleShuffle() {
 }
 
 function tapToPlay() {
+  if (viaTv()) return;
   if (musicStuck) return retryMusicPlayer();
   state.musicWantsPlay = true;
   if (!musicReady) return;
@@ -1227,7 +1246,7 @@ function toggleFullscreen() {
 let begun = false;
 
 function start() {
-  if (state.started || state.casting) return;
+  if (viaTv() || state.started || state.casting) return;
   if (state.apiFailed) {
     location.reload();
     return;
@@ -1252,7 +1271,7 @@ function start() {
 }
 
 function begin() {
-  if (begun) return;
+  if (begun || viaTv()) return;
   begun = true;
   startCams();
   startMusic();
@@ -1351,7 +1370,7 @@ function onApiReady() {
     el.startStatus.textContent = "";
     el.startBtn.querySelector("span").textContent = "Start";
   }
-  if (state.casting) return; // casting: no local players until the session ends
+  if (viaTv() || state.casting) return; // casting: no local players until the session ends
   createCamPlayer();
   createMusicPlayer();
   if (state.started) begin();
@@ -1515,11 +1534,11 @@ function isInteractive(node) {
 function onKeyDown(e) {
   const key = e.key;
   body.classList.add("kbd");
-  if (state.casting) return; // this page is only a remote while casting
+  const tv = isCasting(); // this page is only a remote while Cast is connecting or connected
 
-  // Media keys work any time once started.
+  // Media keys work any time once started (or while casting).
   if (MEDIA_KEYS.has(key)) {
-    if (!state.started) return;
+    if (!state.started && !tv) return;
     e.preventDefault();
     if (key === "MediaTrackNext") skip(1);
     else if (key === "MediaTrackPrevious") skip(-1);
@@ -1569,10 +1588,11 @@ function onKeyDown(e) {
     return;
   }
 
-  if (!state.started) return;
+  if (!state.started && !tv) return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   const k = key.length === 1 ? key.toLowerCase() : key;
+  if (tv && !["n", "p", "u", " "].includes(k)) return; // casting: only the keys that map to a TV command
   switch (k) {
     case "n":
       e.preventDefault();
@@ -1633,8 +1653,10 @@ function handleAction(action, btn) {
     case "play-pause":
       return togglePlayMusic();
     case "vol-down":
+      if (viaTv(() => remoteCmd("vol-down"))) return;
       return setVolume(state.volume - VOLUME_STEP);
     case "vol-up":
+      if (viaTv(() => remoteCmd("vol-up"))) return;
       if (state.muted) {
         state.muted = false;
         return setVolume(Math.max(state.volume, VOLUME_STEP));
@@ -1742,12 +1764,15 @@ function boot() {
   loadYouTubeApi();
   setupCast();
   loadSheetConfig();
+  const buildLine = $("#about-build");
+  if (buildLine) buildLine.textContent = `Build ${BUILD}`;
 
   window.__windowSeat = {
     state,
     next: () => skip(1),
     prev: () => skip(-1),
     start,
+    build: BUILD,
     currentCamId: () => state.currentCamId,
     currentMixId: () => state.mixId,
     isTv,

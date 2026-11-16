@@ -1,6 +1,6 @@
 // Window Seat service worker: caches only the app shell so the page opens fast and installs as an app.
-// Bump CACHE_VERSION whenever a shell file changes (all same-origin GETs are network-first with cache fallback).
-const CACHE_VERSION = "v5";
+// Bump CACHE_VERSION whenever a shell file changes, and keep it equal to BUILD in js/build.js (all same-origin GETs are network-first with cache fallback).
+const CACHE_VERSION = "2026-11-16.2";
 
 const CACHE = "window-seat-" + CACHE_VERSION;
 const SHELL = [
@@ -11,6 +11,7 @@ const SHELL = [
   "/js/data.js",
   "/js/qr.js",
   "/js/cast.js",
+  "/js/build.js",
   "/js/cast-config.js",
   "/js/config.js",
   "/manifest.webmanifest",
@@ -44,7 +45,8 @@ self.addEventListener("fetch", (event) => {
   // Network first for every same-origin GET so HTML, JS and CSS always come from the same deploy.
   // Fresh responses refresh the cache; the cache (precached shell) is the offline fallback.
   event.respondWith(
-    fetch(req)
+    // no-cache: the browser HTTP cache must revalidate, so a deploy is never masked by a stale copy.
+    fetch(req, { cache: "no-cache" })
       .then((res) => {
         if (res && res.ok && res.type === "basic") {
           const copy = res.clone();
