@@ -191,7 +191,15 @@ async function fetchText(url, ms) {
   const ctrl = typeof AbortController === "function" ? new AbortController() : null;
   const timer = setTimeout(() => ctrl && ctrl.abort(), ms);
   try {
-    const res = await fetch(url, { cache: "no-store", credentials: "omit", signal: ctrl ? ctrl.signal : undefined });
+    let res;
+    try {
+      res = await fetch(url, { cache: "no-store", credentials: "omit", signal: ctrl ? ctrl.signal : undefined });
+    } catch (e) {
+      if (e && e.name === "AbortError") throw new Error("the sheet took too long to answer");
+      // A private sheet answers with a sign-in page and no CORS header, which the browser reports as a network error.
+      throw new Error("could not read the sheet. Is it shared as Anyone with the link, Viewer? Or the device is offline.");
+    }
+    if (res.status === 401 || res.status === 403) throw new Error(`the sheet is private (HTTP ${res.status}). Share it as Anyone with the link, Viewer.`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const type = res.headers.get("content-type") || "";
     if (!/csv|text\/plain/.test(type)) throw new Error(`not CSV (${type || "no type"}): is the sheet shared as Anyone with the link?`);
