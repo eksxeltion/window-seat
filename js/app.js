@@ -1183,7 +1183,7 @@ function toggleFullscreen() {
 let begun = false;
 
 function start() {
-  if (state.started) return;
+  if (state.started || state.casting) return;
   if (state.apiFailed) {
     location.reload();
     return;
@@ -1217,19 +1217,45 @@ function begin() {
 
 /* ================================================================ cast */
 
-// While casting, this page is only a remote: local playback is stopped to save battery.
+// While casting, this page is only a remote: both local YouTube players are destroyed
+// (no audio, no video, no network on the phone) and recreated only when the session ends.
+function destroyLocalPlayers() {
+  quietly(() => cp.player.stopVideo());
+  quietly(() => cp.player.destroy());
+  cp.player = null;
+  cp.ready = false;
+  if (!cp.el.querySelector(".cam-player")) {
+    cp.el.textContent = "";
+    const d = document.createElement("div");
+    d.className = "cam-player";
+    cp.el.append(d);
+  }
+  clearTimeout(musicReadyTimer);
+  clearTimeout(musicCheckTimer);
+  quietly(() => musicPlayer.stopVideo());
+  quietly(() => musicPlayer.destroy());
+  musicPlayer = null;
+  musicReady = false;
+  musicStuck = false;
+  const host = document.getElementById("music-wrap");
+  if (host && !document.getElementById("music-player")) {
+    host.textContent = "";
+    const d = document.createElement("div");
+    d.id = "music-player";
+    host.append(d);
+  }
+}
+
 function pauseLocalForCast() {
+  if (state.casting) return;
   state.casting = true;
   state.pending = null;
   cp.seq++; // invalidate queued camera loads (delayed go() and waiters)
   cp.waiters.length = 0;
   cp.deferred = null;
-  clearTimeout(musicCheckTimer);
   state.musicWantsPlay = false;
-  quietly(() => cp.player.pauseVideo());
-  quietly(() => cp.player.mute());
-  quietly(() => musicPlayer.pauseVideo());
-  quietly(() => musicPlayer.mute());
+  destroyLocalPlayers();
+  showTapMusic(false);
   if (state.openPanel) closePanel(false);
 }
 
@@ -1241,8 +1267,9 @@ function resumeAfterCast() {
   state.currentCamId = null;
   state.pending = null;
   state.musicWantsPlay = true;
-  quietly(() => cp.player.stopVideo());
-  quietly(() => musicPlayer.stopVideo());
+  // Fresh players; nothing plays until the user presses Start.
+  if (state.apiReady && !cp.player) createCamPlayer();
+  if (state.apiReady && !musicPlayer) createMusicPlayer();
   body.classList.add("is-starting");
   el.start.hidden = false;
   el.start.classList.remove("leaving");
@@ -1280,6 +1307,7 @@ function onApiReady() {
     el.startStatus.textContent = "";
     el.startBtn.querySelector("span").textContent = "Start";
   }
+  if (state.casting) return; // casting: no local players until the session ends
   createCamPlayer();
   createMusicPlayer();
   if (state.started) begin();

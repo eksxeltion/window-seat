@@ -42,15 +42,21 @@ function channelCheck() {
 }
 
 /* Send one command to the TV over the custom namespace. Errors and missing replies are shown, never swallowed. */
+const lastSendOf = {}; // command type -> generation, so a late retry never overrides a newer command
+let sendGen = 0;
+
 function send(cmd, opts = {}) {
   if (!session) {
     if (!opts.silent) say("Not connected to the TV. Tap Cast again.");
     return;
   }
   const sentAt = Date.now();
+  const gen = opts.gen || ++sendGen;
+  if (!opts.retried) lastSendOf[cmd.type] = gen;
+  const target = session;
   let p;
   try {
-    // JSON text: the receiver declares this namespace as JSON and parses it.
+    // JSON text: the receiver declares this namespace as STRING and parses it itself.
     p = session.sendMessage(RECEIVER_NAMESPACE, JSON.stringify(cmd));
   } catch (e) {
     say(`Could not send to the TV: ${(e && e.message) || e}`);
@@ -58,6 +64,16 @@ function send(cmd, opts = {}) {
   }
   const fail = (raw) => {
     const code = (raw && raw.code) || raw;
+    // Only state-setting commands are safe to resend (a resent "next" or "mix" would act twice).
+    const repeatable = ["pin", "interval", "volume", "mute", "playMusic", "cams", "getState"].includes(cmd.type);
+    if (code === "timeout" && repeatable && !opts.retried) {
+      // The channel can lag right after connecting: try once more before reporting,
+      // but only on the same session and only if no newer command of this type went out.
+      setTimeout(() => {
+        if (session === target && lastSendOf[cmd.type] === gen) send(cmd, { ...opts, retried: true, gen });
+      }, 1000);
+      return;
+    }
     const hint = channelCheck();
     say(`Send failed (${code}): ${SEND_ERRORS[code] || code}.${hint ? " " + hint : ""}`);
     setRemoteStatus(`Send failed: ${code}${hint ? ". " + hint : ""}`);
@@ -222,16 +238,28 @@ function onMessage(_ns, raw) {
 }
 
 function onSessionStarted(s, resumed) {
+  if (!s) return;
+  const same = session === s;
   session = s;
-  quietly(() => s.addMessageListener(RECEIVER_NAMESPACE, onMessage));
-  ui.device.textContent = quietly(() => s.getCastDevice().friendlyName) || "TV";
+  // Remote mode first, unconditionally: stop local playback and show the remote,
+  // before anything that talks to the TV (which may fail or never answer).
   document.body.classList.add("casting");
   ui.root.hidden = false;
+  try {
+    hooks.onStart();
+  } catch (e) {
+    say(`Could not stop local playback: ${(e && e.message) || e}`);
+  }
+  if (same) return; // the same session reported twice (resume plus our own check)
+  if (!s.__wsListener) {
+    s.__wsListener = true;
+    quietly(() => s.addMessageListener(RECEIVER_NAMESPACE, onMessage));
+  }
+  ui.device.textContent = quietly(() => s.getCastDevice().friendlyName) || "TV";
   lastReplyAt = 0;
   warnedNoReply = false;
-  const hint = channelCheck();
+  const hint = quietly(channelCheck) || "";
   setRemoteStatus(hint || "Waiting for the TV app to reply...");
-  hooks.onStart();
   renderRemote();
   if (resumed) {
     send({ type: "getState" }); // reconnecting to a TV that is already playing: do not override it
@@ -323,24 +351,35 @@ function onCastTap() {
   );
 }
 
+/* If the context already has a live session (auto-join after a reload), enter remote mode for it. */
+function adoptCurrentSession() {
+  const ctx = cast.framework.CastContext.getInstance();
+  const current = quietly(() => ctx.getCurrentSession());
+  if (current && current !== session) onSessionStarted(current, true);
+}
+
 function initFramework() {
   const ctx = cast.framework.CastContext.getInstance();
+  buildRemote();
+  // Listeners go on before setOptions: auto-join can resume an existing session right away,
+  // and a missed SESSION_RESUMED left the phone playing locally while the TV was casting.
+  const T = cast.framework.SessionState;
+  ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
+    if (e.sessionState === T.SESSION_STARTED) onSessionStarted(e.session || quietly(() => ctx.getCurrentSession()), false);
+    else if (e.sessionState === T.SESSION_RESUMED) onSessionStarted(e.session || quietly(() => ctx.getCurrentSession()), true);
+    else if (e.sessionState === T.SESSION_ENDED) onSessionEnded();
+  });
+  ctx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, (e) => {
+    setStatus(STATE_TEXT[e.castState] || `Cast: ${e.castState}`);
+    if (e.castState === "CONNECTED") adoptCurrentSession();
+  });
   ctx.setOptions({
     receiverApplicationId: CAST_APP_ID,
     autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
   });
-  buildRemote();
   castReady = true;
   setStatus(STATE_TEXT[ctx.getCastState()] || "");
-  ctx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, (e) => {
-    setStatus(STATE_TEXT[e.castState] || `Cast: ${e.castState}`);
-  });
-  const T = cast.framework.SessionState;
-  ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
-    if (e.sessionState === T.SESSION_STARTED) onSessionStarted(e.session, false);
-    else if (e.sessionState === T.SESSION_RESUMED) onSessionStarted(e.session, true);
-    else if (e.sessionState === T.SESSION_ENDED) onSessionEnded();
-  });
+  adoptCurrentSession();
 }
 
 /** hooks: { getLocal() -> {camId, mixId, interval, volume}, onStart(), onEnd() } */
