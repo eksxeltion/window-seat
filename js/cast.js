@@ -137,6 +137,69 @@ function onSessionEnded() {
   hooks.onEnd();
 }
 
+/* ---- visible status, so a tap never does "nothing" ---- */
+let castReady = false; // SDK loaded and Cast available
+let castFailed = false; // SDK missing or Cast not available in this browser
+
+const STATE_TEXT = {
+  NO_DEVICES_AVAILABLE: "Cast: no devices found",
+  NOT_CONNECTED: "Cast: TV found, not connected",
+  CONNECTING: "Cast: connecting...",
+  CONNECTED: "Cast: connected",
+};
+const ERROR_TEXT = {
+  cancel: "Cast: picker closed (cancel)",
+  receiver_unavailable: "Cast: no TV found (receiver_unavailable)",
+  session_error: "Cast: TV found, but the receiver failed to load (session_error)",
+  timeout: "Cast: TV found, but the receiver timed out (timeout)",
+  channel_error: "Cast: connection to the TV failed (channel_error)",
+  extension_missing: "Cast not available in this browser (extension_missing)",
+  api_not_initialized: "Cast: still starting, try again (api_not_initialized)",
+};
+const UNAVAILABLE = "Cast not available in this browser";
+
+function setStatus(text) {
+  document.querySelectorAll(".cast-status").forEach((el) => {
+    el.textContent = text;
+    el.hidden = !text;
+  });
+  document.querySelectorAll("[data-cast]").forEach((b) => (b.title = text));
+}
+
+function say(text) {
+  setStatus(text);
+  if (hooks && hooks.toast) hooks.toast(text);
+}
+
+function markUnavailable() {
+  castFailed = true;
+  setStatus(UNAVAILABLE);
+}
+
+function onCastTap() {
+  if (castFailed) return say(UNAVAILABLE);
+  if (!castReady) return say("Cast: still loading, try again in a moment");
+  const ctx = cast.framework.CastContext.getInstance();
+  if (session) return say(STATE_TEXT.CONNECTED + ". Use Stop casting to end.");
+  say("Cast: looking for your TV...");
+  let p;
+  try {
+    p = ctx.requestSession();
+  } catch (e) {
+    return say(`Cast error: ${(e && e.message) || e}`);
+  }
+  Promise.resolve(p).then(
+    (code) => {
+      if (code) say(ERROR_TEXT[code] || `Cast: ${code}`);
+      else say(STATE_TEXT[ctx.getCastState()] || "Cast: connected");
+    },
+    (code) => {
+      const c = (code && code.code) || code;
+      say(ERROR_TEXT[c] || `Cast: ${c}`);
+    },
+  );
+}
+
 function initFramework() {
   const ctx = cast.framework.CastContext.getInstance();
   ctx.setOptions({
@@ -144,7 +207,11 @@ function initFramework() {
     autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
   });
   buildRemote();
-  document.querySelectorAll(".cast-launcher").forEach((el) => (el.hidden = false));
+  castReady = true;
+  setStatus(STATE_TEXT[ctx.getCastState()] || "");
+  ctx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, (e) => {
+    setStatus(STATE_TEXT[e.castState] || `Cast: ${e.castState}`);
+  });
   const T = cast.framework.SessionState;
   ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
     if (e.sessionState === T.SESSION_STARTED) onSessionStarted(e.session, false);
@@ -158,12 +225,22 @@ export function initCast(h) {
   if (!castConfigured) return; // placeholder App ID: no SDK, no button, nothing to break
   hooks = h;
   // Must exist before the SDK script runs.
+  // Show the buttons right away; a tap always explains what happened.
+  document.querySelectorAll("[data-cast]").forEach((b) => {
+    b.hidden = false;
+    b.addEventListener("click", onCastTap);
+  });
   window.__onGCastApiAvailable = (available) => {
-    if (available) quietly(initFramework);
+    if (!available) return markUnavailable();
+    try {
+      initFramework();
+    } catch (e) {
+      markUnavailable();
+    }
   };
   const script = document.createElement("script");
   script.src = SDK_URL;
   script.async = true;
-  script.onerror = () => {}; // offline or blocked: the page just has no Cast button
+  script.onerror = markUnavailable; // offline or blocked
   document.head.append(script);
 }
