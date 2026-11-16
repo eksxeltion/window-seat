@@ -1,6 +1,7 @@
 // Sender side of Google Cast. The phone page starts a session, then becomes a remote for receiver.html.
 import { CAST_APP_ID, RECEIVER_NAMESPACE } from "./cast-config.js";
 import { CAMS, MIXES } from "./data.js";
+import { listInfo, currentConfig } from "./config.js";
 
 const SDK_URL = "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
 export const castConfigured = CAST_APP_ID !== "REPLACE_WITH_APP_ID";
@@ -148,28 +149,7 @@ function buildRemote() {
   ui.mute = $("#remote-mute");
   ui.play = $("#remote-play");
   ui.status = $("#remote-status");
-  const list = $("#remote-mixes");
-  for (const m of MIXES) {
-    const li = document.createElement("li");
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "btn";
-    b.dataset.mix = m.id;
-    b.textContent = m.en;
-    li.append(b);
-    list.append(li);
-  }
-  const camList = $("#remote-cams");
-  for (const c of CAMS) {
-    const li = document.createElement("li");
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "btn";
-    b.dataset.cam = c.id;
-    b.textContent = `${c.title} (${c.place})`;
-    li.append(b);
-    camList.append(li);
-  }
+  fillRemoteLists();
   root.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b) return;
@@ -211,6 +191,33 @@ function buildRemote() {
       default:
     }
   });
+}
+
+/* Remote cam and mix buttons, rebuilt whenever the list changes (sheet config). */
+function fillRemoteLists() {
+  const fill = (ol, items, key, label) => {
+    if (!ol) return;
+    ol.textContent = "";
+    for (const it of items) {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn";
+      b.dataset[key] = it.id;
+      b.textContent = label(it);
+      li.append(b);
+      ol.append(li);
+    }
+  };
+  fill($("#remote-mixes"), MIXES, "mix", (m) => m.en);
+  fill($("#remote-cams"), CAMS, "cam", (c) => `${c.title} (${c.place})`);
+}
+
+/** Send the current cam and mix lists to the TV (only when they come from the sheet). */
+export function sendConfigToTv() {
+  if (ui.root) fillRemoteLists();
+  if (!session || listInfo.source === "built-in") return;
+  send({ type: "config", source: listInfo.source, ...currentConfig(), silent: true }, { silent: true });
 }
 
 function renderRemote() {
@@ -262,6 +269,7 @@ function onSessionStarted(s, resumed) {
   setRemoteStatus(hint || "Waiting for the TV app to reply...");
   renderRemote();
   if (resumed) {
+    sendConfigToTv();
     send({ type: "getState" }); // reconnecting to a TV that is already playing: do not override it
     return;
   }
@@ -270,6 +278,7 @@ function onSessionStarted(s, resumed) {
   remote = { ...remote, interval: local.interval, volume: local.volume, muted: !!local.muted, mixId: local.mixId, mixTitle: mix ? mix.en : "", pinned: false, musicPaused: false };
   renderRemote();
   const quiet = { silent: true };
+  sendConfigToTv(); // first, so the cam filter and picks below refer to the same list on the TV
   if (Array.isArray(local.camIds)) send({ type: "cams", ids: local.camIds, silent: true }, quiet);
   if (local.camId && CAMS.some((c) => c.id === local.camId)) send({ type: "cam", id: local.camId, silent: true }, quiet);
   send({ type: "pin", value: false, silent: true }, quiet);

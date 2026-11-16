@@ -1,8 +1,9 @@
 // Window Seat Cast receiver: one full-screen cam that rotates, plus a visible music player.
 // Runs on the Cast device. With ?debug=1 it runs in any browser without starting the Cast context.
 import { CAMS, MIXES } from "./data.js";
+import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 
-export const BUILD = "2026-11-15.3"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.1"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -64,6 +65,7 @@ function snapshot() {
     musicPaused: s.musicPaused,
     poolIds: s.poolIds,
     failedCams: Array.from(s.failed),
+    list: { source: listInfo.source, cams: listInfo.cams, mixes: listInfo.mixes },
   };
 }
 
@@ -80,7 +82,7 @@ function renderStrip() {
   if (!el) return;
   el.hidden = !stripOn;
   el.textContent =
-    `build ${BUILD} | CAF ${dbg.caf} | listener ${dbg.listener} | senders ${dbg.senders} | ` +
+    `build ${BUILD} | list ${listInfo.source} ${listInfo.cams}/${listInfo.mixes} | CAF ${dbg.caf} | listener ${dbg.listener} | senders ${dbg.senders} | ` +
     `last in: ${dbg.lastIn} | last reply: ${dbg.lastOut}` + (dbg.error ? ` | error: ${dbg.error}` : "");
 }
 function setDbg(patch) {
@@ -170,6 +172,10 @@ function beginLoad(camId, reason = "rotate") {
 
 function commitPending() {
   const cam = camById(pending.camId);
+  if (!cam) { // left the list while loading
+    pending = null;
+    return;
+  }
   s.camId = cam.id;
   pending = null;
   stall = null;
@@ -451,6 +457,10 @@ function handle(raw) {
       break;
     case "getState":
       break;
+    case "config":
+      // The phone fetched the sheet and passes the lists along (works even if the TV cannot reach Google).
+      if (applyConfig(cmd, "phone")) afterListChange();
+      break;
     case "debug":
       // Toggle the on-TV debug strip from the phone.
       stripOn = !!cmd.value;
@@ -595,6 +605,48 @@ if (!DEBUG) {
 } else {
   setDbg({ caf: "debug (off)" });
 }
+
+/* After the cam or mix list changed: drop vanished picks, keep playing what still exists. */
+function afterListChange() {
+  if (s.poolIds) s.poolIds = s.poolIds.filter((id) => camById(id));
+  if (!s.poolIds || !s.poolIds.length) s.poolIds = null;
+  for (const id of Array.from(s.failed)) if (!camById(id)) s.failed.delete(id);
+  if (!mixById(s.mixId)) {
+    if (s.musicPaused) {
+      // Paused stays paused: just cue the replacement.
+      clearTimeout(musicRetryTimer);
+      s.mixId = MIXES[0].id;
+      if (musicReady) quietly(() => musicPlayer.cueVideoById(s.mixId));
+      showMixTitle();
+    } else playMix(MIXES[0].id);
+  } else showMixTitle();
+  const gone = pending ? !camById(pending.camId) : s.camId && !camById(s.camId);
+  if (gone) {
+    token++; // drop callbacks of a load for a cam that no longer exists
+    pending = null;
+    let next = pick(null, 1);
+    if (!next) {
+      // Only failed cams are left: forget the failures and try again now rather than stay black.
+      s.failed.clear();
+      next = pick(null, 1) || CAMS[0].id;
+    }
+    beginLoad(next, "list");
+  } else if (s.camId && !pending) {
+    const cam = camById(s.camId); // same cam, maybe renamed in the sheet
+    $("cap-title").textContent = cam.title;
+    $("cap-meta").textContent = `${cam.place} · ${cam.channel}`;
+  }
+  renderStrip();
+  broadcast();
+}
+
+// The TV fetches the sheet itself too; a failure just keeps the saved copy or the built-in list.
+refreshFromSheet().then((r) => {
+  if (r.ok) {
+    if (r.changed) afterListChange();
+    else renderStrip();
+  } else setDbg({ error: `sheet: ${String(r.error).slice(0, 60)}` });
+});
 
 showMixTitle();
 setInterval(camTick, 1000);
