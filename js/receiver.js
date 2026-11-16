@@ -75,6 +75,8 @@ let nextSwapAt = 0;
 let stall = null; // { at, nudged } while the visible cam is not PLAYING
 let retryTimer = 0;
 let rotateReason = "start";
+let wantedCam = null; // camera requested before the YouTube player was ready
+let awaitingRetry = false; // all cams failed: camTick stays idle until the retry timer fires
 
 const blackout = $("blackout");
 const fadeTo = (on) => blackout.classList.toggle("on", on);
@@ -93,7 +95,13 @@ function pick(fromId, dir) {
 }
 
 function beginLoad(camId, reason = "rotate") {
-  if (!camReady || !camById(camId)) return;
+  if (!camById(camId)) return;
+  if (!camReady) {
+    wantedCam = camId; // YouTube not ready yet: onReady loads this instead of a random cam
+    return;
+  }
+  wantedCam = null;
+  awaitingRetry = false;
   clearTimeout(retryTimer);
   const my = ++token;
   rotateReason = reason;
@@ -135,6 +143,7 @@ function failCam(camId, why) {
     note("allFailed");
     s.failed.clear();
     token++;
+    awaitingRetry = true;
     fadeTo(true);
     retryTimer = setTimeout(() => beginLoad(pick(s.camId, 1) || CAMS[0].id, "retry"), RETRY_ALL_FAILED_MS);
   }
@@ -156,7 +165,7 @@ function onCamError(e) {
 }
 
 function camTick() {
-  if (!camReady) return;
+  if (!camReady || awaitingRetry) return;
   const now = Date.now();
   if (pending) {
     if (pending.loading && now - pending.startedAt > CAM_LOAD_MS) failCam(pending.camId, "load timeout");
@@ -195,7 +204,8 @@ function createCamPlayer() {
       onReady: () => {
         camReady = true;
         const list = pool();
-        beginLoad((list[Math.floor(Math.random() * list.length)] || CAMS[0]).id, "start");
+        const first = wantedCam && camById(wantedCam) ? wantedCam : (list[Math.floor(Math.random() * list.length)] || CAMS[0]).id;
+        beginLoad(first, wantedCam ? "cam" : "start");
       },
       onStateChange: onCamState,
       onError: onCamError,
@@ -208,6 +218,7 @@ function createCamPlayer() {
 let musicPlayer = null;
 let musicReady = false;
 let musicErrors = 0;
+let musicRetryTimer = 0;
 
 function showMixTitle() {
   const mix = mixById(s.mixId);
@@ -216,6 +227,7 @@ function showMixTitle() {
 
 function playMix(id) {
   if (!mixById(id)) return;
+  clearTimeout(musicRetryTimer); // a newer selection supersedes any pending all-failed retry
   s.mixId = id;
   showMixTitle();
   if (musicReady) {
@@ -232,7 +244,10 @@ function nextMix() {
 }
 
 function onMusicState(e) {
-  if (e.data === YS.PLAYING) musicErrors = 0;
+  if (e.data === YS.PLAYING) {
+    musicErrors = 0;
+    clearTimeout(musicRetryTimer);
+  }
   if (e.data === YS.ENDED) {
     note("mixEnded", { mixId: s.mixId });
     nextMix();
@@ -245,7 +260,8 @@ function onMusicError(e) {
   if (musicErrors >= MIXES.length) {
     // Every mix failed in a row: wait a minute before trying again.
     musicErrors = 0;
-    setTimeout(nextMix, RETRY_ALL_FAILED_MS);
+    clearTimeout(musicRetryTimer);
+    musicRetryTimer = setTimeout(nextMix, RETRY_ALL_FAILED_MS);
     return;
   }
   nextMix();
@@ -354,17 +370,15 @@ function silentWavUrl() {
   return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
 }
 
-function startKeepAlive(playerManager) {
-  const video = document.createElement("video");
+function prepareKeepAlive() {
+  const video = $("keepalive");
   video.src = silentWavUrl();
   video.loop = true;
   video.muted = true;
   video.autoplay = true;
   video.playsInline = true;
-  video.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none";
-  document.body.append(video);
   quietly(() => video.play());
-  if (playerManager && typeof playerManager.setMediaElement === "function") quietly(() => playerManager.setMediaElement(video));
+  return video;
 }
 
 function startCast() {
@@ -373,8 +387,11 @@ function startCast() {
     note("castUnavailable");
     return;
   }
+  // CAF needs a media element in the DOM before the context and player manager are obtained.
+  const keepAlive = prepareKeepAlive();
   context = cast.framework.CastReceiverContext.getInstance();
   const options = new cast.framework.CastReceiverOptions();
+  options.mediaElement = keepAlive;
   options.disableIdleTimeout = true;
   options.maxInactivity = 3600;
   options.customNamespaces = { [NAMESPACE]: cast.framework.system.MessageType.JSON };
@@ -389,7 +406,8 @@ function startCast() {
     note("senderDisconnected", { reason: event && event.reason });
   });
   context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => broadcast());
-  startKeepAlive(context.getPlayerManager());
+  const playerManager = context.getPlayerManager();
+  if (typeof playerManager.setMediaElement === "function") quietly(() => playerManager.setMediaElement(keepAlive));
   context.start(options);
 }
 

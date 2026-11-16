@@ -269,9 +269,9 @@ function loadCam(camId, delay) {
   cp.errSeq = 0;
   const seq = ++cp.seq;
   const go = () => {
-    if (cp.camId !== camId || cp.seq !== seq) return;
+    if (state.casting || cp.camId !== camId || cp.seq !== seq) return;
     const run = () => {
-      if (cp.camId !== camId || cp.seq !== seq) return;
+      if (state.casting || cp.camId !== camId || cp.seq !== seq) return;
       if (document.hidden) {
         cp.deferred = run; // never start playback in a hidden tab; onVisibility issues it once
         return;
@@ -523,7 +523,7 @@ function onVisibility() {
 /* --- cam actions --- */
 
 function skip(dir = 1) {
-  if (!state.started || !state.apiReady) return;
+  if (state.casting || !state.started || !state.apiReady) return;
   const from = state.pending ? state.pending.camId : state.currentCamId;
   const target = pickCam(from, dir);
   if (!target) return;
@@ -539,7 +539,7 @@ function watchNow(camId) {
   if (!camById(camId)) return;
   state.failed.delete(camId);
   setAllFailed(false);
-  if (!state.started) return;
+  if (state.casting || !state.started) return;
   if (state.pending ? state.pending.camId === camId : camId === state.currentCamId) return;
   beginLoad(camId);
 }
@@ -762,6 +762,7 @@ function playMix(mixId, { userChoice = false } = {}) {
     state.musicErrors = 0;
     state.musicUnavailable = false;
   }
+  if (state.casting) return render();
   if (musicReady && state.started) {
     applyVolume();
     quietly(() => musicPlayer.loadVideoById(mixId));
@@ -815,6 +816,7 @@ function musicIsPlaying() {
 }
 
 function togglePlayMusic() {
+  if (state.casting) return;
   if (musicStuck) return retryMusicPlayer();
   if (!musicReady) return;
   if (state.musicUnavailable) {
@@ -1224,6 +1226,10 @@ function begin() {
 function pauseLocalForCast() {
   state.casting = true;
   state.pending = null;
+  cp.seq++; // invalidate queued camera loads (delayed go() and waiters)
+  cp.waiters.length = 0;
+  cp.deferred = null;
+  clearTimeout(musicCheckTimer);
   state.musicWantsPlay = false;
   quietly(() => cp.player.pauseVideo());
   quietly(() => cp.player.mute());
@@ -1439,6 +1445,7 @@ function isInteractive(node) {
 function onKeyDown(e) {
   const key = e.key;
   body.classList.add("kbd");
+  if (state.casting) return; // this page is only a remote while casting
 
   // Media keys work any time once started.
   if (MEDIA_KEYS.has(key)) {
