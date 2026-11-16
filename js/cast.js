@@ -302,7 +302,6 @@ function onMessage(_ns, raw) {
   if (!msg || msg.type !== "state") return;
   lastReplyAt = Date.now();
   warnedNoReply = false;
-  if (session) session.__wsGotReply = true;
   if (msg.build) dbg.tvBuild = msg.build;
   remote = { ...remote, ...msg };
   setRemoteStatus(`Connected. The TV confirms each tap.${msg.build ? ` (TV build ${msg.build})` : ""}`);
@@ -334,8 +333,20 @@ function leaveRemote() {
   hooks.onEnd();
 }
 
-/* Play services can refresh the app's namespace list after the session started. When ours appears,
-   whatever timed out before is sent again. */
+/* Initial setup is held back until the session lists our channel, then sent exactly once (never replayed). */
+function flushInit(s) {
+  if (session !== s || !s.__wsPending || !nsInfo().ok) return;
+  const mode = s.__wsPending;
+  s.__wsPending = null;
+  if (mode === "push") {
+    pushChoices();
+  } else {
+    sendConfigToTv();
+    send({ type: "getState" }); // reconnecting to a TV that is already playing: do not override it
+  }
+}
+
+/* Play services can refresh the app's namespace list after the session started. */
 function watchNamespaces(s) {
   s.__wsNsOk = nsInfo().ok;
   const onChange = () => {
@@ -344,13 +355,8 @@ function watchNamespaces(s) {
     const appeared = ok && !s.__wsNsOk;
     s.__wsNsOk = ok;
     renderDebug();
-    if (!appeared) return;
-    setRemoteStatus("Connected. The Window Seat channel is now open.");
-    if (!s.__wsGotReply) {
-      if (s.__wsPushedChoices) pushChoices();
-      else sendConfigToTv();
-    }
-    send({ type: "getState" });
+    if (appeared) setRemoteStatus("Connected. The Window Seat channel is now open.");
+    flushInit(s);
   };
   const T = (window.cast && cast.framework && cast.framework.SessionEventType) || {};
   for (const type of [T.APPLICATION_METADATA_CHANGED || "applicationmetadatachanged", T.APPLICATION_STATUS_CHANGED || "applicationstatuschanged"]) {
@@ -377,17 +383,16 @@ function onSessionStarted(s, resumed) {
     renderRemote();
   }
   if (resumed) {
-    if (s.__wsInit) return; // already asked
+    if (!s.__wsInit) {
+      s.__wsInit = true;
+      s.__wsPending = "resume";
+    }
+  } else if (!s.__wsPushed) {
+    s.__wsPushed = true; // a real start: push the phone's choices once, even if the session was adopted first
     s.__wsInit = true;
-    sendConfigToTv();
-    send({ type: "getState" }); // reconnecting to a TV that is already playing: do not override it
-    return;
+    s.__wsPending = "push";
   }
-  if (s.__wsPushed) return;
-  s.__wsPushed = true; // a real start: push the phone's choices once, even if the session was adopted first
-  s.__wsInit = true;
-  s.__wsPushedChoices = true;
-  pushChoices();
+  flushInit(s);
 }
 
 /** Push the phone's choices to the TV (first connect), then ask for its state. */

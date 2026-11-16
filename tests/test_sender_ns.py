@@ -17,14 +17,23 @@ with sync_playwright() as p:
     line = pg.text_content("#remote-debug"); print("debug:", line)
     check("debug shows ns missing", "ns missing" in line)
     check("debug lists short namespace names", "com.google.cast.media" in line and "urn:x-cast:" not in line)
-    check("debug shows the last send error object", "err: timeout / no ack" in line)
     check("hint says Chrome does not list the channel", "phone's Chrome does not list the Window Seat channel" in (pg.text_content("#remote-status") or "") + (pg.text_content("#remote-debug") or "") + pg.evaluate("()=>document.body.innerText"))
-    pg.evaluate("()=>{window.__mockFail=null; window.__mockNs=[{name:'urn:x-cast:com.google.cast.media'},{name:'urn:x-cast:com.windowseat'}]; __mockCast.sent.length=0; __mockCast.fireSession('applicationmetadatachanged')}")
+    setup = lambda sent: [t for t in sent if t in ("mix", "volume", "interval", "mute", "pin", "config", "cams", "cam")]
+    before = [json.loads(m["data"])["type"] for m in pg.evaluate("()=>__mockCast.sent")]
+    check("no setup commands sent while ns missing", not setup(before))
+    pg.evaluate("()=>{window.__mockFail=null; window.__mockNs=[{name:'urn:x-cast:com.google.cast.media'},{name:'urn:x-cast:com.windowseat'}]; __mockCast.sent.length=0}")
+    # an unsolicited state broadcast arrives first; it must not cancel the pending initialisation
+    pg.evaluate("()=>__mockCast.reply({type:'state',build:'x'})")
+    pg.evaluate("()=>__mockCast.fireSession('applicationmetadatachanged')")
     pg.wait_for_timeout(400)
     sent = [json.loads(m["data"])["type"] for m in pg.evaluate("()=>__mockCast.sent")]
     print("sent after event:", sent)
-    check("getState re-sent when namespace appears", "getState" in sent)
-    check("initial config/state push re-sent (no reply yet)", "mix" in sent and "volume" in sent)
+    check("exactly one getState after namespace appears", sent.count("getState") == 1)
+    check("exactly one mix and volume after namespace appears", sent.count("mix") == 1 and sent.count("volume") == 1)
+    pg.evaluate("()=>{__mockCast.sent.length=0; __mockCast.fireSession('applicationstatuschanged')}")
+    pg.wait_for_timeout(400)
+    sent2 = [json.loads(m["data"])["type"] for m in pg.evaluate("()=>__mockCast.sent")]
+    check("no extra setup on a second event", not setup(sent2) and "getState" not in sent2)
     check("debug now shows ns ok", "ns ok" in pg.text_content("#remote-debug"))
     b.close()
 print("FAILED:" if fails else "ALL PASS", fails)

@@ -31,6 +31,10 @@ with sync_playwright() as p:
     readies = [d for d in sys_msgs if d.get("type") == "ready"]
     check("(a) outgoing system ready lists our namespace", any(NS in (d.get("activeNamespaces") or []) for d in readies))
     check("(b) receiver sends system setappstate after ready + senderconnected", any(d.get("type") == "setappstate" for d in sys_msgs))
+    apps = [d for d in sys_msgs if d.get("type") == "setappstate"]
+    texts = [d.get("statusText") for d in apps]
+    print("setappstate texts:", texts)
+    check("(b2) two distinct setappstate statusText values, both differ from initial", len(set(texts)) >= 2 and "Window Seat" not in texts)
     fp.to_receiver({"type": "getState"}); pg.wait_for_timeout(1500)
     strip = pg.text_content("#debug-strip") or ""; print("strip:", strip)
     import re

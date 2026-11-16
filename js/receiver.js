@@ -533,10 +533,11 @@ function onCustomMessage(event) {
 }
 
 /* Ask the platform to send a fresh receiver status, so senders re-read the app's namespace list. */
+let appStateGeneration = 0;
 function refreshAppState() {
   if (!context || !cafStarted) return;
   try {
-    context.setApplicationState("Window Seat");
+    context.setApplicationState(`Window Seat ready ${++appStateGeneration}`);
     setDbg({ appState: "ok" });
   } catch (e) {
     setDbg({ appState: "fail", error: `appstate: ${String((e && e.message) || e).slice(0, 60)}` });
