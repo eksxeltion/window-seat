@@ -1464,6 +1464,7 @@ function toggleFullscreen() {
 /* ================================================================ start */
 
 let begun = false;
+let startHideTimer = null; // pending hide of #start after its leave animation; cancelled when Home returns
 
 function start() {
   if (viaTv() || state.started || state.casting) return;
@@ -1476,8 +1477,10 @@ function start() {
   if ((isTv || prefersFullscreen()) && !isFullscreen()) requestFullscreen();
   body.classList.remove("is-starting");
   el.start.classList.add("leaving");
-  setTimeout(() => {
-    el.start.hidden = true;
+  clearTimeout(startHideTimer);
+  startHideTimer = setTimeout(() => {
+    startHideTimer = null;
+    if (state.started) el.start.hidden = true;
   }, reducedMotion.matches ? 0 : 650);
   if (state.openPanel) closePanel(false);
   state.chromeHidden = false;
@@ -1528,6 +1531,8 @@ function goHome() {
 
 function showStartScreen() {
   clearTimeout(chromeTimer);
+  clearTimeout(startHideTimer); // Home pressed during the leave animation must not hide Start later
+  startHideTimer = null;
   state.chromeHidden = false;
   body.classList.add("is-starting");
   el.start.hidden = false;

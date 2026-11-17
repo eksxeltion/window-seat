@@ -266,6 +266,24 @@ with sync_playwright() as p:
     check("player: Start again plays locally", wait_until(pg, "()=>__windowSeat.currentCamId() && __yt.cam().state===1", 6000))
     pg.context.close()
 
+    # Home pressed during the Start leave animation (well under 650 ms): the delayed hide must not fire later.
+    pg = phone()
+    pg.evaluate("""async()=>{document.querySelector('#start-btn').click();
+      await new Promise(r=>setTimeout(r,80));
+      window.__startedBeforeHome = __windowSeat.state.started;
+      document.querySelector('#lp-home').click()}""")
+    check("early home: Start had begun before Home", pg.evaluate("()=>window.__startedBeforeHome") is True)
+    pg.wait_for_timeout(1000)  # well past the 650 ms hide timeout
+    check("early home: #start still visible after the timeout", pg.evaluate("()=>!document.querySelector('#start').hidden && !document.querySelector('#start').classList.contains('leaving')") and pg.is_visible("#start") and pg.is_visible("#start-btn"))
+    check("early home: not left on an empty player", pg.evaluate("()=>!__windowSeat.state.started") and not pg.is_visible("#bar") and not pg.is_visible("#chrome-toggle"))
+    pg.click("#start-btn")
+    check("early home: Start watching works again", wait_until(pg, "()=>__windowSeat.currentCamId() && __yt.cam().state===1", 6000))
+    check("early home: Start screen dismisses normally afterwards", wait_until(pg, "()=>document.querySelector('#start').hidden", 2000))
+    pg.click("#lp-home")
+    pg.wait_for_timeout(1000)
+    check("early home: normal Home after a full Start still shows Start", pg.is_visible("#start") and pg.is_visible("#start-btn"))
+    pg.context.close()
+
     # ------------------------------------------------------------ Debug on the local player
     pg = phone()
     check("debug: off on a fresh load", pg.evaluate("()=>__windowSeat.isDebugOn()") is False and not pg.is_visible("#debug-panel"))
