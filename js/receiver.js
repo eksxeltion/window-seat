@@ -9,7 +9,7 @@ import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 
-export const BUILD = "2026-11-16.9"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.10"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -47,6 +47,7 @@ const s = {
   volume: 60,
   muted: false,
   paused: false, // the whole feed (cam and music) is paused; independent of pinned
+  shuffle: true, // the phone's session-only Shuffle: when a mix ends, pick a random other one (else list order)
   poolIds: null, // cam ids chosen on the phone (Cams filters); null = the default cams
   skipSleeping: true, // time-of-day rules from the phone's Cams sheet (session-only there too)
   onlyDaytime: false,
@@ -77,6 +78,7 @@ function snapshot() {
     volume: s.volume,
     muted: s.muted,
     paused: s.paused,
+    shuffle: s.shuffle,
     musicPaused: s.paused, // older name, kept for senders that still read it
     poolIds: s.poolIds,
     skipSleeping: s.skipSleeping,
@@ -435,12 +437,20 @@ function playMix(id) {
   showMixTitle();
   if (musicReady) {
     applyAudio();
-    quietly(() => musicPlayer.loadVideoById(id));
+    // Every mix starts at its beginning, never partway (a pick from the phone, shuffle, or the next in order).
+    quietly(() => musicPlayer.loadVideoById({ videoId: id, startSeconds: 0 }));
   }
   broadcast();
 }
 
+/** Shuffle: a random mix, never the current one twice in a row. Off: the next one in sheet order. */
 function nextMix() {
+  if (s.shuffle && MIXES.length > 1) {
+    let m;
+    do m = MIXES[Math.floor(Math.random() * MIXES.length)];
+    while (m.id === s.mixId);
+    return playMix(m.id);
+  }
   const i = MIXES.findIndex((m) => m.id === s.mixId);
   playMix(MIXES[(i + 1) % MIXES.length].id);
 }
@@ -482,7 +492,7 @@ function createMusicPlayer() {
         if (s.paused) {
           // Paused from the phone before the player was ready: load the mix without starting it.
           applyAudio();
-          quietly(() => musicPlayer.cueVideoById(s.mixId));
+          quietly(() => musicPlayer.cueVideoById({ videoId: s.mixId, startSeconds: 0 }));
         } else playMix(s.mixId);
       },
       onStateChange: onMusicState,
@@ -595,6 +605,11 @@ function handle(raw) {
       if (cmd.type === "nextMix") nextMix();
       else prevMix();
       if (!quiet) flash(`Music: ${(mixById(s.mixId) || {}).en || ""}`);
+      break;
+    case "shuffle":
+      // The phone's Shuffle switch (sent on connect, on resume and on every change). Steers only the next mix.
+      s.shuffle = cmd.value !== false;
+      if (!quiet) flash(s.shuffle ? "Shuffle on" : "Shuffle off");
       break;
     case "interval":
       s.interval = Number(cmd.value) === 30 ? 30 : 60;

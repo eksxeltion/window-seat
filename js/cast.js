@@ -18,7 +18,7 @@ const quietly = (fn) => {
 };
 
 let session = null;
-let remote = { camId: null, camTitle: "", mixId: null, mixTitle: "", pinned: false, interval: 60, volume: 60, muted: false, paused: false };
+let remote = { camId: null, camTitle: "", mixId: null, mixTitle: "", pinned: false, interval: 60, volume: 60, muted: false, paused: false, shuffle: true };
 let lastReplyAt = 0; // last state message from the TV
 let replyTimer = 0;
 let warnedNoReply = false;
@@ -91,7 +91,7 @@ function send(cmd, opts = {}) {
   const fail = (raw) => {
     const code = (raw && raw.code) || raw;
     // Only state-setting commands are safe to resend (a resent "next" or "mix" would act twice).
-    const repeatable = ["pin", "interval", "volume", "mute", "pause", "playMusic", "cams", "getState"].includes(cmd.type);
+    const repeatable = ["pin", "interval", "volume", "mute", "pause", "playMusic", "cams", "getState", "shuffle"].includes(cmd.type);
     if (code === "timeout" && repeatable && !opts.retried) {
       // The channel can lag right after connecting: try once more before reporting,
       // but only on the same session and only if no newer command of this type went out.
@@ -212,6 +212,7 @@ function buildRemote() {
     <p class="remote-status" id="remote-status" role="status">Waiting for the TV...</p>
     <p class="remote-debug" id="remote-debug"></p>
     <h3 class="remote-head">Music</h3>
+    <button class="btn remote-cams-btn" type="button" data-action="open-music" aria-haspopup="dialog">Mix, shuffle and volume</button>
     <ol class="remote-mixes" id="remote-mixes"></ol>
     <button class="btn remote-cams-btn" type="button" data-action="open-cams" aria-haspopup="dialog">Cams and time of day</button>
     <h3 class="remote-head">Show a cam now</h3>
@@ -272,6 +273,26 @@ export function remoteCmd(name) {
 export function remoteMix(id) {
   const m = MIXES.find((x) => x.id === id);
   act({ type: "mix", id }, { mixId: id, mixTitle: m ? m.en : "", paused: false });
+}
+
+/** Music volume from the Mix sheet slider while casting: one absolute value (a state command, safe to resend). */
+export function remoteVolume(v) {
+  const n = Math.min(100, Math.max(0, Math.round(Number(v))));
+  if (!Number.isFinite(n)) return;
+  act({ type: "volume", value: n }, { volume: n, muted: n === 0 ? remote.muted : false });
+}
+
+/** What the TV reports (or the phone just asked for): read only, for the Mix sheet while casting. */
+export function remoteState() {
+  return { mixId: remote.mixId, mixTitle: remote.mixTitle, volume: remote.volume, muted: !!remote.muted, paused: !!remote.paused, shuffle: remote.shuffle !== false };
+}
+
+/** Shuffle for this session: the TV picks the next mix itself when one ends, so it follows the phone's switch.
+ *  {type:"shuffle", value:true|false}. An older receiver ignores it and plays in list order. */
+export function sendShuffleToTv(on, s = session) {
+  if (!s || s !== session) return;
+  remote = { ...remote, shuffle: !!on };
+  send({ type: "shuffle", value: !!on, silent: true }, { silent: true });
 }
 
 export function remoteCam(id) {
@@ -377,6 +398,8 @@ function flushInit(s) {
     pushChoices();
   } else {
     sendConfigToTv();
+    // Shuffle only steers the next mix, so it is safe to send on resume: the TV keeps the mix it is playing.
+    sendShuffleToTv(hooks.getLocal().shuffle !== false, s);
     send({ type: "getState" }); // reconnecting to a TV that is already playing: do not override it
   }
 }
@@ -480,7 +503,7 @@ export function castDebugInfo() {
 function pushChoices() {
   const local = hooks.getLocal();
   const mix = MIXES.find((m) => m.id === local.mixId);
-  remote = { ...remote, interval: local.interval, volume: local.volume, muted: !!local.muted, mixId: local.mixId, mixTitle: mix ? mix.en : "", pinned: false, paused: false };
+  remote = { ...remote, interval: local.interval, volume: local.volume, muted: !!local.muted, mixId: local.mixId, mixTitle: mix ? mix.en : "", pinned: false, paused: false, shuffle: local.shuffle !== false };
   renderRemote();
   const quiet = { silent: true };
   sendConfigToTv(); // first, so the cam filter and picks below refer to the same list on the TV
@@ -490,6 +513,7 @@ function pushChoices() {
   send({ type: "interval", value: local.interval, silent: true }, quiet);
   send({ type: "volume", value: local.volume, silent: true }, quiet);
   send({ type: "mute", value: !!local.muted, silent: true }, quiet);
+  send({ type: "shuffle", value: local.shuffle !== false, silent: true }, quiet); // before mix: the TV knows what comes next
   send({ type: "mix", id: local.mixId, silent: true }, quiet);
   send({ type: "getState" });
 }
