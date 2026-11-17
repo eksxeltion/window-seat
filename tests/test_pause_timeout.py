@@ -209,7 +209,7 @@ with sync_playwright() as p:
     check("remote: shown", pg.is_visible("#remote"))
     sent = lambda: [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     clear = lambda: pg.evaluate("()=>__mockCast.sent.length=0")
-    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.14', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
+    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.15', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
     state()
     check("remote: no hairline or warning while playing", not pg.is_visible("#remote-hairline") and not pg.is_visible("#remote-pause-warn"))
     pg.locator('#remote [data-cmd="play"]').tap()
@@ -253,7 +253,7 @@ with sync_playwright() as p:
     pg = phone()
     pg.evaluate("()=>__mockCast.start()")
     pg.wait_for_timeout(400)
-    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.14', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
+    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.15', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
     state(paused=True, pauseWarning=True)
     pg.evaluate("()=>__mockCast.reply({type:'pauseTimeout'})")
     pg.wait_for_timeout(4000)

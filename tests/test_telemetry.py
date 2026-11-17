@@ -13,7 +13,7 @@ base = sys.argv[1].rstrip("/")
 HERE = os.path.dirname(os.path.abspath(__file__))
 MOCK_SENDER = open(os.path.join(HERE, "mock_cast_sender.js")).read()
 FAKE_YT = open(os.path.join(HERE, "fake_youtube.js")).read()
-BUILD = "2026-11-17.14"
+BUILD = "2026-11-17.15"
 NS = "urn:x-cast:com.windowseat"
 # PostHog drops events from browsers that look automated (webdriver flag, HeadlessChrome brand). These tests need it
 # to behave as in a normal Chrome, so they present one. Existing tests keep the headless defaults.
@@ -389,6 +389,10 @@ with sync_playwright() as p:
     check("receiver: later events go out one by one", wait_until(rx, "()=>__telemetry.sent().filter(e=>e.event==='receiver_error' && e.properties.kind==='message_parse').length>=2", 4000))
     rx.wait_for_timeout(500)
     check("receiver: and each one is a request (no batching)", len(host_hits(rq)) > n)
+    # Checked after the later event too: everything PostHog was allowed to send (after before_send) so far.
+    sent = rx.evaluate("()=>__telemetry.sent()")
+    check(f"receiver: every event passed to PostHog so far, buffered and later, has app == window-seat ({len(sent)} events, {sorted({e['properties'].get('app') for e in sent}, key=str)})",
+          len(sent) >= 3 and all(e["properties"].get("app") == "window-seat" for e in sent))
     # A second phone says off: off for the rest of this receiver session.
     msg(rx, {"type": "telemetry", "on": False, "installId": None, "test": False, "environment": "production"}, "s2")
     check("receiver: a phone saying off turns it off", rx.evaluate("()=>__telemetry.state().on") is False)
