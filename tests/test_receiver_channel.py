@@ -1,12 +1,16 @@
 """Receiver message channel with a mocked CAF framework (the real receiver.html, not debug mode).
 Proves: listener registered right after start() (the real CAF rejects the other order), namespace declared, string/object/double-encoded
 commands applied, direct and broadcast replies sent as JSON text, debug strip updated, and all of it
-works even when YouTube is blocked."""
+works even when YouTube is blocked.
+Usage: test_receiver_channel.py BASE_URL   (BASE_URL serves receiver.html; a receiver.html URL also works)"""
 import sys, os, json
 from playwright.sync_api import sync_playwright
 import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
-url = sys.argv[1]
+base = sys.argv[1].split("?")[0].rstrip("/")
+if base.endswith(".html"):
+    base = base.rsplit("/", 1)[0]
+url = base + "/receiver.html"  # the receiver page, whatever base URL the suite passes
 MOCK = open(os.path.join(os.path.dirname(__file__), "mock_caf_receiver.js")).read()
 NS = "urn:x-cast:com.windowseat"
 fails, logs = [], []
