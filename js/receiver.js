@@ -84,11 +84,20 @@ function listError(text) {
   return "parse";
 }
 
-/** Stop the receiver after telling telemetry (sent with sendBeacon, then a short flush). No wait when it is off. */
+/** Stop the receiver after telling telemetry (sent with sendBeacon, then a flush that also lets a still loading
+ *  PostHog send what it queued). No wait when it is off. One stop at a time: a repeated stop while the flush runs
+ *  neither schedules a second stop nor counts a second receiver_stop. */
+let stopInFlight = false;
 function stopWithTelemetry(reason, stop) {
+  if (stopInFlight) return;
   capture("receiver_stop", { reason, seconds_in_session: secondsInSession() }, { beacon: true });
   if (!telemetryActive()) return stop();
-  flushTelemetry(600).then(stop, stop);
+  stopInFlight = true;
+  const done = () => {
+    stopInFlight = false;
+    stop();
+  };
+  flushTelemetry(600, 2000).then(done, done);
 }
 
 /* ---------------------------------------------------------------- state and log */

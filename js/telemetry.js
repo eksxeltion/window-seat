@@ -720,19 +720,47 @@ export function receiverTelemetryMessage(msg, senderId = "local") {
   }
 }
 
-/** Send what is pending (receiver, before context.stop()). Resolves within `ms`, never rejects. */
-export function flushTelemetry(ms = 600) {
+/** An SDK that is on its way: downloading, or scheduled to start downloading after first paint. */
+const pendingLoad = (state) => state === "loading" || (state === "idle" && loadScheduled);
+
+/** Resolves once `state()` is no longer pending (the SDK arrived or failed), or after `ms`. */
+function whenLoaded(state, ms) {
+  return new Promise((resolve) => {
+    const end = Date.now() + ms;
+    const tick = () => {
+      if (!pendingLoad(state()) || Date.now() >= end) return resolve();
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
+/**
+ * Send what is pending (receiver, before context.stop()). Resolves within about `loadMs` + `ms`, never rejects.
+ * Events still waiting for PostHog to load are switched to sendBeacon (which outlives the page) and the flush waits
+ * up to `loadMs` for the SDK to send them; errors waiting for Sentry likewise. Then Sentry gets `ms` to flush.
+ */
+export function flushTelemetry(ms = 600, loadMs = 2000) {
   try {
-    if (!t.on || t.sentryState !== "ready" || !t.sentry) return Promise.resolve(false);
-    return Promise.race([Promise.resolve(t.sentry.flush(ms)).catch(() => false), new Promise((r) => setTimeout(() => r(false), ms + 50))]);
+    if (!t.on) return Promise.resolve(false);
+    for (const item of t.queue) item.beacon = true;
+    const waits = [];
+    if (pendingLoad(t.phState) && t.queue.length) waits.push(whenLoaded(() => t.phState, loadMs));
+    if (pendingLoad(t.sentryState) && t.earlyErrors.length) waits.push(whenLoaded(() => t.sentryState, loadMs));
+    return Promise.all(waits).then(() => {
+      if (!t.on || t.sentryState !== "ready" || !t.sentry) return t.phState === "ready";
+      return Promise.race([Promise.resolve(t.sentry.flush(ms)).catch(() => false), new Promise((r) => setTimeout(() => r(false), ms + 50))]);
+    }).catch(() => false);
   } catch {
     return Promise.resolve(false);
   }
 }
 
-/** True when a flush could matter (telemetry on and an SDK loaded), so callers can skip waiting otherwise. */
+/** True when a flush could matter (telemetry on, and an SDK loaded or events waiting for one to load). */
 export function telemetryActive() {
-  return t.on && (t.phState === "ready" || t.sentryState === "ready");
+  if (!t.on) return false;
+  if (t.phState === "ready" || t.sentryState === "ready") return true;
+  return (pendingLoad(t.phState) && t.queue.length > 0) || (pendingLoad(t.sentryState) && t.earlyErrors.length > 0);
 }
 
 /* ---------------------------------------------------------------- test hook (read only) */
