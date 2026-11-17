@@ -1026,9 +1026,10 @@ function toggleMute() {
   render();
 }
 
-/* Shuffle is this session only. While casting the TV picks the next mix itself, so it gets the setting too. */
+/* Shuffle is this session only. While casting the TV picks the next mix itself, so the switch flips the TV's
+   reported setting (another sender may have changed it) and the phone follows. */
 function toggleShuffle() {
-  state.shuffle = !state.shuffle;
+  state.shuffle = !(isCasting() ? remoteState().shuffle : state.shuffle);
   if (isCasting()) sendShuffleToTv(state.shuffle);
   toast(state.shuffle ? "Shuffle on. A random mix plays next." : "Shuffle off. Mixes play in list order.");
   render();
@@ -1126,7 +1127,6 @@ function render() {
   const playing = !state.feedPaused;
   const ppBtn = setBarLabel("play-pause", playing ? "Pause" : "Play");
   $("use", ppBtn).setAttribute("href", playing ? "#i-pause" : "#i-play");
-  setText($("#music-play"), playing ? "Pause" : "Play");
 
   const fs = isFullscreen();
   el.fullscreenBtn.setAttribute("aria-label", fs ? "Exit full screen" : "Full screen");
@@ -1152,13 +1152,13 @@ function render() {
   syncChrome();
 }
 
-/** The mix and volume to show: the TV's reported state while casting (this phone plays nothing then), else local. */
+/** The mix, volume, pause and shuffle to show: the TV's reported state while casting (this phone plays nothing then), else local. */
 function shownMusic() {
   if (isCasting()) {
     const r = remoteState();
-    return { mixId: r.mixId || null, volume: Number.isFinite(r.volume) ? r.volume : state.volume, muted: !!r.muted };
+    return { mixId: r.mixId || null, volume: Number.isFinite(r.volume) ? r.volume : state.volume, muted: !!r.muted, paused: !!r.paused, shuffle: r.shuffle };
   }
-  return { mixId: state.mixId, volume: state.volume, muted: state.muted };
+  return { mixId: state.mixId, volume: state.volume, muted: state.muted, paused: state.feedPaused, shuffle: state.shuffle };
 }
 
 function showVolume(input, out, value) {
@@ -1172,7 +1172,8 @@ function showVolume(input, out, value) {
 function renderMusicPanel() {
   const shown = shownMusic();
   $("#music-mute").setAttribute("aria-pressed", String(shown.muted));
-  $("#music-shuffle").setAttribute("aria-pressed", String(state.shuffle));
+  $("#music-shuffle").setAttribute("aria-pressed", String(shown.shuffle));
+  setText($("#music-play"), shown.paused ? "Play" : "Pause");
   showVolume(el.volume, el.volumeOut, state.volume);
   showVolume(el.mixVolume, el.mixVolumeOut, shown.volume);
   for (const btn of $$(".mix-btn", el.mixList)) {

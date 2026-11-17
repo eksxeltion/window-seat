@@ -277,6 +277,50 @@ with sync_playwright() as p:
     check(f"cast: the Playing row is the TV's mix ({pr['cur']})", pr["cur"] == [tv_mix] and pr["marks"] == [tv_mix])
     check("cast: the sheet slider shows the TV's volume", pg.evaluate("()=>document.querySelector('#mix-volume').value") == "45")
 
+    # The TV pauses with the sheet open: the sheet's Play/Pause follows the TV, not the phone's own feed state.
+    check("cast: sheet reads Pause while the TV plays", pg.text_content("#music-play").strip() == "Pause")
+    pg.evaluate(f"()=>__mockCast.reply({{type:'state',mixId:'{tv_mix}',mixTitle:'X',volume:45,paused:true,shuffle:true}})")
+    pg.wait_for_timeout(150)
+    check("cast: TV paused, sheet reads Play", pg.text_content("#music-play").strip() == "Play")
+    check("cast: the phone's own feed stays unpaused", pg.evaluate("()=>__windowSeat.feedPaused()") is False)
+    pg.evaluate("()=>__mockCast.sent.length=0")
+    pg.click("#music-play")
+    pg.wait_for_timeout(150)
+    sent = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
+    check(f"cast: Play on a paused TV sends pause false ({sent})", [m for m in sent if m["type"] == "pause"] == [{"type": "pause", "value": False}])
+    check("cast: sheet reads Pause right after the tap", pg.text_content("#music-play").strip() == "Pause")
+    pg.evaluate(f"()=>__mockCast.reply({{type:'state',mixId:'{tv_mix}',mixTitle:'X',volume:45,paused:true}})")
+    pg.wait_for_timeout(150)
+    check("cast: a TV paused reply turns it back to Play", pg.text_content("#music-play").strip() == "Play")
+    pg.evaluate(f"()=>__mockCast.reply({{type:'state',mixId:'{tv_mix}',mixTitle:'X',volume:45,paused:false}})")
+    pg.wait_for_timeout(150)
+    check("cast: TV playing again, sheet reads Pause", pg.text_content("#music-play").strip() == "Pause")
+
+    # Another sender turns shuffle off on the TV: the switch follows, and a tap turns it on (not a resend of off).
+    pg.evaluate(f"()=>__mockCast.reply({{type:'state',mixId:'{tv_mix}',mixTitle:'X',volume:45,paused:false,shuffle:false}})")
+    pg.wait_for_timeout(150)
+    check("cast: TV reports shuffle off, switch reads off", pg.get_attribute("#music-shuffle", "aria-pressed") == "false")
+    pg.evaluate("()=>__mockCast.sent.length=0")
+    pg.click("#music-shuffle")
+    pg.wait_for_timeout(150)
+    sent = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
+    check(f"cast: tap after a TV shuffle off sends shuffle true ({sent})", [m["value"] for m in sent if m["type"] == "shuffle"] == [True])
+    check("cast: switch reads on after the tap", pg.get_attribute("#music-shuffle", "aria-pressed") == "true")
+    # And the other way: TV reports on while the phone's own setting is off.
+    pg.click("#music-shuffle")
+    pg.wait_for_timeout(150)
+    check("cast: phone switched shuffle off", pg.evaluate("()=>__windowSeat.shuffle()") is False)
+    pg.evaluate(f"()=>__mockCast.reply({{type:'state',mixId:'{tv_mix}',mixTitle:'X',volume:45,paused:false,shuffle:true}})")
+    pg.wait_for_timeout(150)
+    check("cast: TV reports shuffle on, switch reads on", pg.get_attribute("#music-shuffle", "aria-pressed") == "true")
+    pg.evaluate("()=>__mockCast.sent.length=0")
+    pg.click("#music-shuffle")
+    pg.wait_for_timeout(150)
+    sent = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
+    check(f"cast: tap after a TV shuffle on sends shuffle false ({sent})", [m["value"] for m in sent if m["type"] == "shuffle"] == [False])
+    pg.evaluate(f"()=>__mockCast.reply({{type:'state',mixId:'{tv_mix}',mixTitle:'X',volume:45,paused:false,shuffle:true}})")
+    pg.wait_for_timeout(150)
+
     # Tap a row: only the mix command goes to the TV.
     target = next(m for m in MIX_IDS if m not in (phone_mix, tv_mix))
     pg.evaluate("()=>__mockCast.sent.length=0")

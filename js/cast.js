@@ -284,7 +284,7 @@ export function remoteVolume(v) {
 
 /** What the TV reports (or the phone just asked for): read only, for the Mix sheet while casting. */
 export function remoteState() {
-  return { mixId: remote.mixId, mixTitle: remote.mixTitle, volume: remote.volume, muted: !!remote.muted, shuffle: remote.shuffle !== false };
+  return { mixId: remote.mixId, mixTitle: remote.mixTitle, volume: remote.volume, muted: !!remote.muted, paused: !!remote.paused, shuffle: remote.shuffle !== false };
 }
 
 /** Shuffle for this session: the TV picks the next mix itself when one ends, so it follows the phone's switch.
