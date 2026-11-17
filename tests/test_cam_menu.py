@@ -159,6 +159,29 @@ with sync_playwright() as p:
     pg.click('#cams-quick [data-group="none"]')
     check("None: every checkbox off, every row still visible", pg.evaluate("()=>[...document.querySelectorAll('#cams-list [data-action=toggle-cam]')].every(b=>b.getAttribute('aria-checked')==='false')") and all_rows_visible(pg))
     check("None: chip filled, All and Japan not", pressed(pg, '#cams-quick [data-group="none"]') and not pressed(pg, '#cams-quick [data-group="all"]') and not pressed(pg, jp_chip))
+    all_ids = pg.evaluate("async()=>(await import('/js/data.js')).CAMS.map(c=>c.id)")
+    check(f"None: sheet says rotation uses every cam ({pg.text_content('#cams-count')})", pg.text_content("#cams-count") == "No cams checked. Rotation uses every cam.")
+    pool = ws(pg, "rotationIds()")
+    check(f"None: phone pool is every cam, not empty and not only defaults ({len(pool)} of {len(all_ids)})", sorted(pool) == sorted(all_ids) and len(all_ids) == 44)
+
+    # ------------------------------------------------------------ fallback pool count: every checked cam is out by the rules
+    pg.click(f"{row(pg, EIFFEL)} [data-action=toggle-cam]")
+    pool = ws(pg, "rotationIds()")
+    count = pg.text_content("#cams-count")
+    check(f"fallback: only the sleeping Paris cam checked, Skip on, it still rotates ({pool})", pool == [EIFFEL] and pressed(pg, "#cams-skip-sleeping"))
+    check(f"fallback: count matches the fallback pool, not 0 ({count})", count == "1 in rotation now. 1 checked cam is sleeping.")
+    pg.click(f"{row(pg, EIFFEL)} [data-action=toggle-cam]")
+    pg.clock.set_fixed_time(NOON_EU)
+    pg.click(f"{row(pg, SHINJUKU)} [data-action=toggle-cam]")
+    pg.click(f"{row(pg, SHIODOME)} [data-action=toggle-cam]")
+    pg.click("#cams-only-daytime")
+    pool = ws(pg, "rotationIds()")
+    count = pg.text_content("#cams-count")
+    check(f"fallback: Only daytime with only evening Tokyo cams checked keeps both rotating ({pool})", sorted(pool) == sorted([SHINJUKU, SHIODOME]))
+    check(f"fallback: daytime count matches the fallback pool, not 0 ({count})", count == "2 in rotation now.")
+    pg.click("#cams-only-daytime")
+    pg.click('#cams-quick [data-group="none"]')
+    pg.clock.set_fixed_time(NIGHT_EU)
     pg.click(jp_chip)
     jp = pg.evaluate("""()=>{const r=[...document.querySelectorAll('#cams-list .cam-row')]; return r.map(x=>({c: x.querySelector('.cam-where').textContent.startsWith('Japan ·'), on: x.querySelector('[data-action=toggle-cam]').getAttribute('aria-checked')==='true'}))}""")
     check("Japan chip: checks exactly the Japan cams", all(x["on"] == x["c"] for x in jp) and any(x["c"] for x in jp))
@@ -232,6 +255,14 @@ with sync_playwright() as p:
     msgs = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     check(f"cast: Play now plays on the TV ({msgs})", any(m.get("type") == "cam" and m.get("id") == EIFFEL for m in msgs))
     check("cast: Play now leaves the checkbox alone", ws(pg, f"isEnabled('{EIFFEL}')") is True)
+    pg.evaluate("()=>__mockCast.sent.length=0")
+    if not pg.is_visible("#panel-cams"):
+        pg.click("#remote [data-action=open-cams]")
+        pg.wait_for_selector("#panel-cams:not([hidden])")
+    pg.click('#cams-quick [data-group="none"]')
+    msgs = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
+    cams = [m for m in msgs if m.get("type") == "cams"]
+    check(f"cast: None sends every cam id, not an empty list ({[len(c['ids']) for c in cams]})", len(cams) == 1 and sorted(cams[0]["ids"]) == sorted(all_ids))
     pg.context.close()
 
     # ------------------------------------------------------------ missing or invalid timezone errs toward showing the cam

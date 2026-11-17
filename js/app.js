@@ -5,7 +5,7 @@ import { initCast, castConfigured, sendConfigToTv, sendCamsToTv, isCasting, sync
 import { initDebug, isDebugOn } from "./debug.js";
 import { BUILD } from "./build.js";
 import { refreshFromSheet, listLabel } from "./config.js";
-import { localTime, camLocalTime, awakeCams, placeLine, partOfDay, isSleeping, rotationAllows, rotationPool, DEFAULT_TIME_RULES } from "./localtime.js";
+import { localTime, camLocalTime, awakeCams, placeLine, partOfDay, isSleeping, rotationPool, DEFAULT_TIME_RULES } from "./localtime.js";
 
 /* ---------------------------------------------------------------- config */
 
@@ -186,9 +186,23 @@ const isEnabled = (id) => {
 const timeRules = () => ({ skipSleeping: state.skipSleeping, onlyDaytime: state.onlyDaytime });
 const checkedCams = () => CAMS.filter((c) => isEnabled(c.id));
 
-/** Ids of the cams auto-rotation may pick right now: checked, not failed, and allowed by the time-of-day rules. */
+/** The cams auto-rotation may pick right now: checked, not failed, and allowed by the time-of-day rules (or the
+ *  checked cams anyway when the rules leave none). With no usable cam checked, every usable cam rotates. */
+function rotationCams(now = new Date()) {
+  const usable = (c) => !state.failed.has(c.id);
+  const pool = rotationPool(CAMS.filter((c) => usable(c) && isEnabled(c.id)), timeRules(), now);
+  return pool.length ? pool : CAMS.filter(usable);
+}
+
 function rotationIds(now = new Date()) {
-  return rotationPool(checkedCams().filter((c) => !state.failed.has(c.id)), timeRules(), now).map((c) => c.id);
+  return rotationCams(now).map((c) => c.id);
+}
+
+/** The cam ids a casting TV should rotate: the checked cams, or every cam when none is checked (as on the phone).
+ *  Never an empty list, which the receiver reads as "use its default cams". */
+function tvCamIds() {
+  const checked = checkedCams();
+  return (checked.length ? checked : CAMS).map((c) => c.id);
 }
 
 function formatLength(minutes) {
@@ -374,9 +388,7 @@ function isCurrentLoad() {
  *  sleeping or non-daytime cams. A current cam that has fallen asleep is simply not picked again, so rotation
  *  leaves it at the next scheduled swap (no extra cut). Pin stops rotation, so a pinned cam stays past midnight. */
 function pickCam(fromId, dir = 1) {
-  const usable = (c) => !state.failed.has(c.id);
-  let pool = rotationPool(CAMS.filter((c) => usable(c) && isEnabled(c.id)), timeRules());
-  if (!pool.length) pool = CAMS.filter(usable);
+  const pool = rotationCams();
   if (!pool.length) return null;
   if (pool.length === 1) return pool[0].id;
   const n = CAMS.length;
@@ -669,7 +681,7 @@ function setManyEnabled(ids, on) {
 /** The rotation pool changed (checks or time-of-day rules): redraw and keep a casting TV on the same pool. */
 function poolChanged() {
   render();
-  if (isCasting()) sendCamsToTv(checkedCams().map((c) => c.id), timeRules());
+  if (isCasting()) sendCamsToTv(tvCamIds(), timeRules());
 }
 
 function toggleTimeRule(key) {
@@ -1138,8 +1150,9 @@ function render() {
    rows are refreshed on every render and every 30 seconds while the sheet is open. */
 function renderCamsPanel(now = new Date()) {
   const checked = checkedCams();
+  // The real pool, including the fallback to the checked cams when every one of them is asleep.
   const pool = new Set(rotationIds(now));
-  const inRotation = checked.filter((c) => pool.has(c.id) && rotationAllows(c, timeRules(), now)).length;
+  const inRotation = pool.size;
   const sleeping = checked.filter((c) => isSleeping(c, now)).length;
   let count;
   if (!checked.length) count = "No cams checked. Rotation uses every cam.";
@@ -1713,7 +1726,7 @@ function setupCast() {
   }
   if (note) note.textContent = "Tap the Cast button in Chrome and pick your TV. This page then becomes a remote.";
   initCast({
-    getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume, muted: state.muted, camIds: checkedCams().map((c) => c.id), ...timeRules() }),
+    getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume, muted: state.muted, camIds: tvCamIds(), ...timeRules() }),
     onStart: pauseLocalForCast,
     onEnd: resumeAfterCast,
     toast: (text) => toast(text, 6000),
