@@ -213,6 +213,7 @@ function buildRemote() {
     <p class="remote-debug" id="remote-debug"></p>
     <h3 class="remote-head">Music</h3>
     <ol class="remote-mixes" id="remote-mixes"></ol>
+    <button class="btn remote-cams-btn" type="button" data-action="open-cams" aria-haspopup="dialog">Cams and time of day</button>
     <h3 class="remote-head">Show a cam now</h3>
     <ol class="remote-mixes" id="remote-cams"></ol>
     <button class="btn btn-primary remote-stop" type="button" data-cmd="stop">Stop casting</button>`;
@@ -276,6 +277,13 @@ export function remoteMix(id) {
 export function remoteCam(id) {
   const c = CAMS.find((x) => x.id === id);
   act({ type: "cam", id }, { camId: id, camTitle: c ? c.title : "" });
+}
+
+/** The phone's rotation pool changed (Cams sheet): checked cam ids plus the session-only time-of-day rules.
+ *  Same "cams" command as on connect, with two optional fields an older receiver simply ignores. */
+export function sendCamsToTv(ids, rules = {}) {
+  if (!session) return;
+  send({ type: "cams", ids, skipSleeping: rules.skipSleeping !== false, onlyDaytime: !!rules.onlyDaytime }, { silent: true });
 }
 
 /** Send the current cam and mix lists to the TV (only when they come from the sheet). */
@@ -474,7 +482,7 @@ function pushChoices() {
   renderRemote();
   const quiet = { silent: true };
   sendConfigToTv(); // first, so the cam filter and picks below refer to the same list on the TV
-  if (Array.isArray(local.camIds)) send({ type: "cams", ids: local.camIds, silent: true }, quiet);
+  if (Array.isArray(local.camIds)) send({ type: "cams", ids: local.camIds, skipSleeping: local.skipSleeping !== false, onlyDaytime: !!local.onlyDaytime, silent: true }, quiet);
   if (local.camId && CAMS.some((c) => c.id === local.camId)) send({ type: "cam", id: local.camId, silent: true }, quiet);
   send({ type: "pin", value: false, silent: true }, quiet);
   send({ type: "interval", value: local.interval, silent: true }, quiet);

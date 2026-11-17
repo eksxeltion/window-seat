@@ -107,18 +107,36 @@
   <button id="chrome-toggle" class="lp-fab" type="button" data-action="toggle-chrome" aria-controls="bar" aria-expanded="true" aria-label="Hide controls"><svg class="icon" aria-hidden="true"><use href="#i-controls"></use></svg></button>
 
   <!-- Cams panel -->
-  <section id="panel-cams" class="panel" role="dialog" aria-modal="true" aria-labelledby="cams-title" hidden>
+  <section id="panel-cams" class="panel panel-cams" role="dialog" aria-modal="true" aria-labelledby="cams-title" aria-describedby="cams-count" hidden>
     <header class="panel-head">
-      <h2 id="cams-title">Cams</h2>
-      <button class="btn" type="button" data-action="close-panel">Close</button>
+      <div>
+        <h2 id="cams-title">Cams</h2>
+        <p class="cams-count" id="cams-count" role="status"></p>
+      </div>
+      <button class="btn btn-ghost btn-done" type="button" data-action="close-panel">Done</button>
     </header>
-    <div class="panel-tools">
-      <button class="btn" type="button" data-action="interval" id="cams-interval">Every 60s</button>
-      <button class="switch" type="button" data-action="lite" id="cams-lite" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Lite mode</span></button>
-      <button class="btn" type="button" data-action="select-defaults">Select defaults</button>
-      <button class="btn" type="button" data-action="select-all">Select all</button>
+    <div class="panel-body cams-body">
+      <section class="cams-section" aria-labelledby="cams-time-title">
+        <h3 class="cams-label" id="cams-time-title">Time of day</h3>
+        <div class="cams-switches">
+          <button class="switch" type="button" data-action="skip-sleeping" id="cams-skip-sleeping" aria-pressed="true"><span class="switch-track"><span class="switch-thumb"></span></span><span>Skip sleeping cams</span></button>
+          <button class="switch" type="button" data-action="only-daytime" id="cams-only-daytime" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Only daytime</span></button>
+        </div>
+        <p class="cams-hint">Sleeping is midnight to 6 AM where the cam is. Daytime is 7 AM to 7 PM. Both reset each visit. Play now and Pin still work on any cam.</p>
+      </section>
+      <section class="cams-section" aria-labelledby="cams-quick-title">
+        <h3 class="cams-label" id="cams-quick-title">Quick picks</h3>
+        <div class="cams-quick" id="cams-quick" role="group" aria-labelledby="cams-quick-title"></div>
+      </section>
+      <ul class="cam-list" id="cams-list" aria-label="All cams"></ul>
+      <section class="cams-section cams-secondary" aria-labelledby="cams-more-title">
+        <h3 class="cams-label" id="cams-more-title">Playback</h3>
+        <div class="cams-switches">
+          <button class="btn" type="button" data-action="interval" id="cams-interval">Every 60s</button>
+          <button class="switch" type="button" data-action="lite" id="cams-lite" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Lite mode</span></button>
+        </div>
+      </section>
     </div>
-    <div class="panel-body" id="cams-list"></div>
     <p class="panel-foot"><span class="list-status" role="status"></span></p>
   </section>
 

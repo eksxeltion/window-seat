@@ -1,11 +1,11 @@
 // Window Seat: rotating live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
 import qrcode from "./qr.js";
-import { initCast, castConfigured, sendConfigToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam, castDebugInfo, sendDebugToTv } from "./cast.js";
+import { initCast, castConfigured, sendConfigToTv, sendCamsToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam, castDebugInfo, sendDebugToTv } from "./cast.js";
 import { initDebug, isDebugOn } from "./debug.js";
 import { BUILD } from "./build.js";
 import { refreshFromSheet, listLabel } from "./config.js";
-import { localTime, camLocalTime, awakeCams, placeLine, partOfDay } from "./localtime.js";
+import { localTime, camLocalTime, awakeCams, placeLine, partOfDay, isSleeping, rotationAllows, rotationPool, DEFAULT_TIME_RULES } from "./localtime.js";
 
 /* ---------------------------------------------------------------- config */
 
@@ -91,7 +91,10 @@ const state = {
   started: false,
   // cams
   intervalSec: savedInterval === 30 ? 30 : 60,
-  enabledOverrides: loadOverrides(),
+  enabledOverrides: loadOverrides(), // which cams are checked, relative to the sheet's in_rotation set (localStorage)
+  // Time of day (Cams sheet): session-only, never stored, so every page load starts with Skip on and Only daytime off.
+  skipSleeping: DEFAULT_TIME_RULES.skipSleeping,
+  onlyDaytime: DEFAULT_TIME_RULES.onlyDaytime,
   failed: new Set(),
   pinned: false,
   feedPaused: false, // Pause stops the whole feed (cam and music); independent of pinned
@@ -179,6 +182,14 @@ const isEnabled = (id) => {
   if (id in state.enabledOverrides) return state.enabledOverrides[id];
   return !!camById(id)?.default;
 };
+
+const timeRules = () => ({ skipSleeping: state.skipSleeping, onlyDaytime: state.onlyDaytime });
+const checkedCams = () => CAMS.filter((c) => isEnabled(c.id));
+
+/** Ids of the cams auto-rotation may pick right now: checked, not failed, and allowed by the time-of-day rules. */
+function rotationIds(now = new Date()) {
+  return rotationPool(checkedCams().filter((c) => !state.failed.has(c.id)), timeRules(), now).map((c) => c.id);
+}
 
 function formatLength(minutes) {
   const h = Math.floor(minutes / 60);
@@ -359,10 +370,12 @@ function isCurrentLoad() {
   return !!data && data.video_id === cp.camId;
 }
 
-/** Pick the next cam id from `fromId` in direction `dir`, skipping failed ones. */
+/** Pick the next cam id from `fromId` in direction `dir`, skipping failed ones and (by the time-of-day rules)
+ *  sleeping or non-daytime cams. A current cam that has fallen asleep is simply not picked again, so rotation
+ *  leaves it at the next scheduled swap (no extra cut). Pin stops rotation, so a pinned cam stays past midnight. */
 function pickCam(fromId, dir = 1) {
   const usable = (c) => !state.failed.has(c.id);
-  let pool = CAMS.filter((c) => usable(c) && isEnabled(c.id));
+  let pool = rotationPool(CAMS.filter((c) => usable(c) && isEnabled(c.id)), timeRules());
   if (!pool.length) pool = CAMS.filter(usable);
   if (!pool.length) return null;
   if (pool.length === 1) return pool[0].id;
@@ -639,30 +652,59 @@ function toggleLite() {
 }
 
 function setEnabled(camId, on) {
-  state.enabledOverrides[camId] = on;
-  if (on === !!camById(camId)?.default) delete state.enabledOverrides[camId];
+  setManyEnabled([camId], on);
+}
+
+/** Check or uncheck a group of cams; the checked set persists, and a casting TV gets the new pool. */
+function setManyEnabled(ids, on) {
+  for (const id of ids) {
+    if (!camById(id)) continue;
+    state.enabledOverrides[id] = on;
+    if (on === !!camById(id).default) delete state.enabledOverrides[id];
+  }
   saveOverrides();
+  poolChanged();
+}
+
+/** The rotation pool changed (checks or time-of-day rules): redraw and keep a casting TV on the same pool. */
+function poolChanged() {
   render();
+  if (isCasting()) sendCamsToTv(checkedCams().map((c) => c.id), timeRules());
+}
+
+function toggleTimeRule(key) {
+  state[key] = !state[key];
+  poolChanged();
+}
+
+/* Quick picks. "all" and "none", or "country:Japan" and "type:street". They change checks, never which rows show. */
+function groupCams(group) {
+  if (group === "all" || group === "none") return CAMS.slice();
+  const [kind, value] = String(group).split(/:(.*)/s);
+  if (kind === "country") return CAMS.filter((c) => c.country === value);
+  if (kind === "type") return CAMS.filter((c) => c.type === value);
+  return [];
+}
+
+/** A filled chip: every cam in the group is checked (None: no cam is checked). */
+function groupFilled(group) {
+  const cams = groupCams(group);
+  if (!cams.length) return false;
+  if (group === "none") return cams.every((c) => !isEnabled(c.id));
+  return cams.every((c) => isEnabled(c.id));
+}
+
+function pickGroup(group) {
+  const ids = groupCams(group).map((c) => c.id);
+  if (group === "all") return setManyEnabled(ids, true);
+  if (group === "none") return setManyEnabled(ids, false);
+  // A filled country or type chip unchecks its cams; otherwise it checks them all.
+  setManyEnabled(ids, !groupFilled(group));
 }
 
 function saveOverrides() {
   if (Object.keys(state.enabledOverrides).length) store.set("enabled", state.enabledOverrides);
   else store.remove("enabled");
-}
-
-function selectDefaults() {
-  state.enabledOverrides = {};
-  saveOverrides();
-  toast("Default cams selected");
-  render();
-}
-
-function selectAll() {
-  state.enabledOverrides = {};
-  for (const cam of CAMS) if (!cam.default) state.enabledOverrides[cam.id] = true;
-  saveOverrides();
-  toast("All cams selected");
-  render();
 }
 
 function setAllFailed(on) {
@@ -688,7 +730,7 @@ function retryCams() {
 }
 
 function startCams() {
-  const pool = CAMS.filter((c) => isEnabled(c.id));
+  const pool = rotationPool(checkedCams(), timeRules());
   const list = pool.length ? pool : CAMS;
   beginLoad(list[Math.floor(Math.random() * list.length)].id);
 }
@@ -1075,22 +1117,7 @@ function render() {
   // "Tuning in" indicator while no cam is on screen
   el.tuning.hidden = !(state.started && !state.allFailed && covered && (!state.currentCamId || (state.pending && state.pending.fails > 0)));
 
-  // Cams panel
-  for (const row of $$(".cam-row", el.camsList)) {
-    const id = row.dataset.id;
-    const on = isEnabled(id);
-    const failed = state.failed.has(id);
-    const current = id === state.currentCamId;
-    row.classList.toggle("is-current", current);
-    row.classList.toggle("is-failed", failed);
-    const toggle = $('[data-action="toggle-cam"]', row);
-    toggle.setAttribute("aria-pressed", String(on));
-    $(".switch-text", toggle).textContent = on ? "In rotation" : "Not in rotation";
-    const badge = $(".badge", row);
-    badge.hidden = !(current || failed);
-    badge.className = "badge " + (failed ? "badge-failed" : "badge-now");
-    badge.textContent = failed ? "Unavailable right now" : "Now showing";
-  }
+  renderCamsPanel();
 
   // Music panel
   $("#music-mute").setAttribute("aria-pressed", String(state.muted));
@@ -1107,55 +1134,128 @@ function render() {
   syncChrome();
 }
 
+/* Cams sheet: count, time of day, quick picks, and the full list in list order. Local times move on, so the
+   rows are refreshed on every render and every 30 seconds while the sheet is open. */
+function renderCamsPanel(now = new Date()) {
+  const checked = checkedCams();
+  const pool = new Set(rotationIds(now));
+  const inRotation = checked.filter((c) => pool.has(c.id) && rotationAllows(c, timeRules(), now)).length;
+  const sleeping = checked.filter((c) => isSleeping(c, now)).length;
+  let count;
+  if (!checked.length) count = "No cams checked. Rotation uses every cam.";
+  else {
+    count = `${inRotation} in rotation now.`;
+    if (sleeping) count += sleeping === 1 ? " 1 checked cam is sleeping." : ` ${sleeping} checked cams are sleeping.`;
+  }
+  setText($("#cams-count"), count);
+  $("#cams-skip-sleeping").setAttribute("aria-pressed", String(state.skipSleeping));
+  $("#cams-only-daytime").setAttribute("aria-pressed", String(state.onlyDaytime));
+  for (const c of $$('[data-action="pick-group"]', $("#cams-quick"))) c.setAttribute("aria-pressed", String(groupFilled(c.dataset.group)));
+
+  for (const row of $$(".cam-row", el.camsList)) {
+    const id = row.dataset.id;
+    const cam = camById(id);
+    const on = isEnabled(id);
+    const failed = state.failed.has(id);
+    const current = id === state.currentCamId;
+    const asleep = isSleeping(cam, now);
+    row.classList.toggle("is-current", current);
+    row.classList.toggle("is-failed", failed);
+    row.classList.toggle("is-sleeping", asleep);
+    row.classList.toggle("is-off", !on);
+    row.dataset.inPool = String(pool.has(id));
+    $('[data-action="toggle-cam"]', row).setAttribute("aria-checked", String(on));
+    setText($(".cam-clock", row), camLocalTime(cam, now));
+    $(".sleep-mark", row).hidden = !asleep;
+    const badge = $(".badge", row);
+    badge.hidden = !(current || failed);
+    badge.className = "badge " + (failed ? "badge-failed" : "badge-now");
+    badge.textContent = failed ? "Unavailable right now" : "Now showing";
+  }
+}
+
+const capital = (t) => (t ? t[0].toUpperCase() + t.slice(1) : "");
+
+/** The most common values of a field (two or more cams), in list order on ties: the country and type shortcuts. */
+function topValues(field, max) {
+  const counts = new Map();
+  for (const cam of CAMS) if (cam[field]) counts.set(cam[field], (counts.get(cam[field]) || 0) + 1);
+  return Array.from(counts.entries())
+    .filter(([, n]) => n > 1)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, max)
+    .map(([v]) => v);
+}
+
+function chip(group, label) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "chip";
+  b.dataset.action = "pick-group";
+  b.dataset.group = group;
+  b.setAttribute("aria-pressed", "false");
+  b.textContent = label;
+  return b;
+}
+
 function buildCamsPanel() {
-  const places = [];
-  for (const cam of CAMS) if (!places.includes(cam.place)) places.push(cam.place);
+  const quick = $("#cams-quick");
+  quick.textContent = "";
+  quick.append(chip("all", "All"), chip("none", "None"));
+  for (const country of topValues("country", 4)) quick.append(chip(`country:${country}`, country));
+  for (const type of topValues("type", 3)) quick.append(chip(`type:${type}`, capital(type)));
+
   const frag = document.createDocumentFragment();
-  for (const place of places) {
-    const h = document.createElement("h3");
-    h.className = "place";
-    h.textContent = place;
-    const ul = document.createElement("ul");
-    ul.className = "cam-list";
-    for (const cam of CAMS.filter((c) => c.place === place)) {
-      const li = document.createElement("li");
-      li.className = "cam-row";
-      li.dataset.id = cam.id;
+  for (const cam of CAMS) {
+    const li = document.createElement("li");
+    li.className = "cam-row";
+    li.dataset.id = cam.id;
 
-      const info = document.createElement("div");
-      info.className = "cam-info";
-      const title = document.createElement("span");
-      title.className = "cam-title";
-      title.textContent = cam.title;
-      const badge = document.createElement("span");
-      badge.className = "badge";
-      badge.hidden = true;
-      title.append(badge);
-      const sub = document.createElement("span");
-      sub.className = "cam-sub";
-      sub.textContent = cam.channel;
-      info.append(title, sub);
+    const check = document.createElement("button");
+    check.type = "button";
+    check.className = "cam-check";
+    check.setAttribute("role", "checkbox");
+    check.setAttribute("aria-checked", "false");
+    check.dataset.action = "toggle-cam";
+    check.dataset.id = cam.id;
+    const box = document.createElement("span");
+    box.className = "check-box";
+    box.setAttribute("aria-hidden", "true");
 
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.className = "switch";
-      toggle.dataset.action = "toggle-cam";
-      toggle.dataset.id = cam.id;
-      toggle.setAttribute("aria-label", `${cam.title}: in rotation`);
-      toggle.innerHTML = '<span class="switch-track"><span class="switch-thumb"></span></span><span class="switch-text"></span>';
+    const info = document.createElement("span");
+    info.className = "cam-info";
+    const title = document.createElement("span");
+    title.className = "cam-title";
+    title.textContent = cam.title;
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.hidden = true;
+    title.append(badge);
+    const sub = document.createElement("span");
+    sub.className = "cam-sub";
+    const where = document.createElement("span");
+    where.className = "cam-where";
+    where.textContent = [cam.country, capital(cam.type)].filter(Boolean).join(" · ");
+    const clock = document.createElement("span");
+    clock.className = "cam-clock";
+    const sleep = document.createElement("span");
+    sleep.className = "sleep-mark";
+    sleep.textContent = "Sleeping";
+    sleep.hidden = true;
+    sub.append(where, clock, sleep);
+    info.append(title, sub);
+    check.append(box, info);
 
-      const watch = document.createElement("button");
-      watch.type = "button";
-      watch.className = "btn";
-      watch.dataset.action = "watch";
-      watch.dataset.id = cam.id;
-      watch.textContent = "Watch now";
-      watch.setAttribute("aria-label", `Watch ${cam.title} now`);
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "btn btn-play";
+    play.dataset.action = "watch";
+    play.dataset.id = cam.id;
+    play.textContent = "Play now";
+    play.setAttribute("aria-label", `Play ${cam.title} now`);
 
-      li.append(info, toggle, watch);
-      ul.append(li);
-    }
-    frag.append(h, ul);
+    li.append(check, play);
+    frag.append(li);
   }
   el.camsList.append(frag);
 }
@@ -1613,7 +1713,7 @@ function setupCast() {
   }
   if (note) note.textContent = "Tap the Cast button in Chrome and pick your TV. This page then becomes a remote.";
   initCast({
-    getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume, muted: state.muted, camIds: CAMS.filter((c) => isEnabled(c.id)).map((c) => c.id) }),
+    getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume, muted: state.muted, camIds: checkedCams().map((c) => c.id), ...timeRules() }),
     onStart: pauseLocalForCast,
     onEnd: resumeAfterCast,
     toast: (text) => toast(text, 6000),
@@ -2021,10 +2121,12 @@ function handleAction(action, btn) {
     case "watch":
       closePanel();
       return watchNow(id);
-    case "select-defaults":
-      return selectDefaults();
-    case "select-all":
-      return selectAll();
+    case "skip-sleeping":
+      return toggleTimeRule("skipSleeping");
+    case "only-daytime":
+      return toggleTimeRule("onlyDaytime");
+    case "pick-group":
+      return pickGroup(btn.dataset.group);
     case "play-mix":
       return playMix(id, { userChoice: true });
     default:
@@ -2128,6 +2230,7 @@ function boot() {
     renderStatus();
   }, 1000);
   setInterval(() => !state.started && renderHero(), 30000); // keep the Home clock and awake count current
+  setInterval(() => state.openPanel === "cams" && renderCamsPanel(), 30000); // local times and Sleeping marks move on
   loadFonts();
   document.addEventListener("visibilitychange", onVisibility);
   loadYouTubeApi();
@@ -2152,6 +2255,8 @@ function boot() {
     pinned: () => state.pinned,
     chromeHidden: () => state.chromeHidden,
     heroCamId: () => heroCamId,
+    rotationIds: () => rotationIds(),
+    isEnabled,
     renderHero,
   };
 }

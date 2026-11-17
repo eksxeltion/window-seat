@@ -7,9 +7,9 @@
 // loading receiver.html?debug=1 (or ?strip=1) instead. The registered receiver URL stays unchanged.
 import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
-import { camLocalTime, placeLine } from "./localtime.js";
+import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 
-export const BUILD = "2026-11-16.8"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.9"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -48,6 +48,8 @@ const s = {
   muted: false,
   paused: false, // the whole feed (cam and music) is paused; independent of pinned
   poolIds: null, // cam ids chosen on the phone (Cams filters); null = the default cams
+  skipSleeping: true, // time-of-day rules from the phone's Cams sheet (session-only there too)
+  onlyDaytime: false,
   failed: new Set(),
 };
 const log = [];
@@ -77,6 +79,8 @@ function snapshot() {
     paused: s.paused,
     musicPaused: s.paused, // older name, kept for senders that still read it
     poolIds: s.poolIds,
+    skipSleeping: s.skipSleeping,
+    onlyDaytime: s.onlyDaytime,
     failedCams: Array.from(s.failed),
     list: { source: listInfo.source, cams: listInfo.cams, mixes: listInfo.mixes },
     // Diagnostics mirrored on the phone's debug panel (small, always sent).
@@ -247,18 +251,29 @@ function camToLiveEdge() {
   camPlay();
 }
 
+/* The rotation pool: the phone's checked cams (or the defaults), minus failed ones, minus sleeping cams (and
+   non-daytime cams when Only daytime is on). If the rules leave nothing, the checked cams are used anyway.
+   A cam that falls asleep while on screen is left at the next scheduled swap; a pinned cam never rotates. */
 function pool() {
   const chosen = s.poolIds && s.poolIds.length ? CAMS.filter((c) => s.poolIds.includes(c.id)) : CAMS.filter((c) => c.default);
-  return chosen.filter((c) => !s.failed.has(c.id));
+  return rotationPool(chosen.filter((c) => !s.failed.has(c.id)), { skipSleeping: s.skipSleeping, onlyDaytime: s.onlyDaytime });
 }
 
-/** Next usable cam after fromId in the given direction (1 or -1). */
+/** Next usable cam after fromId in the given direction (1 or -1), in list order. */
 function pick(fromId, dir) {
   const list = pool();
   if (!list.length) return null;
   const i = list.findIndex((c) => c.id === fromId);
-  if (i === -1) return (dir > 0 ? list[0] : list[list.length - 1]).id;
-  return list[(i + dir + list.length) % list.length].id;
+  if (i !== -1) return list[(i + dir + list.length) % list.length].id;
+  // fromId is outside the pool (asleep, unchecked or failed): continue from its place in the full list.
+  const n = CAMS.length;
+  const at = CAMS.findIndex((c) => c.id === fromId);
+  if (at === -1) return (dir > 0 ? list[0] : list[list.length - 1]).id;
+  for (let k = 1; k <= n; k++) {
+    const cam = CAMS[(((at + dir * k) % n) + n) % n];
+    if (list.includes(cam)) return cam.id;
+  }
+  return list[0].id;
 }
 
 function beginLoad(camId, reason = "rotate") {
@@ -608,6 +623,8 @@ function handle(raw) {
     case "cams": {
       const ids = Array.isArray(cmd.ids) ? cmd.ids.filter((id) => camById(id)) : [];
       s.poolIds = ids.length ? ids : null;
+      if (typeof cmd.skipSleeping === "boolean") s.skipSleeping = cmd.skipSleeping;
+      if (typeof cmd.onlyDaytime === "boolean") s.onlyDaytime = cmd.onlyDaytime;
       if (!quiet) flash(`${pool().length} cams in rotation`);
       break;
     }
