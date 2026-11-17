@@ -84,6 +84,7 @@ The receiver has no UI, so it uses the phone's setting through a new message on 
 `{ type: "telemetry", on: true|false, installId, test, environment }`
 
 - The phone sends it on every new or resumed session once the namespace is available, and again on every switch change. It is a small, backward compatible addition to the protocol.
+- A value counts as sent only once CAF confirms the send. A failed send is retried (after 1, 3 and 8 s, while it is still the current value) and sent again on the next resume, namespace change or switch change, so a failed off is never suppressed. It is not a user command: a failure goes to the debug log only, never to the Cast status, the toast or `cast_send_failed`.
 - The receiver stays off until it gets one. If on, it loads the SDKs, sets the phone's `installId` as its distinct ID, and flushes its buffer. The buffer holds at most 50 events and is dropped after 2 minutes without a message.
 - Several phones: the receiver sends only while every phone that has told it is on. Any phone saying off turns it off for the rest of that receiver session. When the last phone disconnects, the setting stays as it was (the TV keeps playing on its own).
 - `test` and `environment` come from the phone, so verification events from the TV are marked too. Once any phone says `test: true`, the receiver session is a test session and its environment is `verification`, whatever an earlier phone said, so test errors never land in `production`.

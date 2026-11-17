@@ -600,15 +600,44 @@ function telemetrySessionStarted(s, resumed, via) {
 }
 
 /** Tell the TV whether to send telemetry: on every new or resumed session once the namespace is listed, and on
- *  every switch change. An older receiver ignores the unknown type. Sent once per session per value. */
-export function sendTelemetryToTv(s = session) {
+ *  every switch change. An older receiver ignores the unknown type.
+ *  A value counts as delivered only once CAF confirms the send, so a failed "off" is never suppressed later: it is
+ *  retried (a few times, while it is still this session's current value) and sent again on the next resume,
+ *  namespace change or switch change. This is not a user command, so a failure here only goes to the debug log,
+ *  never to the Cast status line, the toast or cast_send_failed. */
+const TEL_RETRY_MS = [1000, 3000, 8000];
+export function sendTelemetryToTv(s = session, retry = 0) {
   if (!s || s !== session) return false;
   const msg = telemetryMessage();
   if (!msg || !quietly(nsInfo)?.ok) return false;
   const key = JSON.stringify(msg);
-  if (s.__wsTelSent === key) return false;
-  s.__wsTelSent = key;
-  send({ ...msg, silent: true }, { silent: true });
+  if (s.__wsTelSent === key || s.__wsTelInFlight === key) return false;
+  s.__wsTelInFlight = key;
+  clearTimeout(s.__wsTelRetry);
+  const failed = (raw) => {
+    if (s.__wsTelInFlight !== key) return; // a newer value went out meanwhile
+    s.__wsTelInFlight = null;
+    logEvent(`tx telemetry FAILED ${errText((raw && raw.message) || raw) || "?"}`);
+    if (retry < TEL_RETRY_MS.length) s.__wsTelRetry = setTimeout(() => sendTelemetryToTv(s, retry + 1), TEL_RETRY_MS[retry]);
+  };
+  let p;
+  try {
+    p = s.sendMessage(RECEIVER_NAMESPACE, JSON.stringify({ ...msg, silent: true }));
+  } catch (e) {
+    failed(e);
+    return false;
+  }
+  io.tx++;
+  Promise.resolve(p).then(
+    (code) => {
+      if (code) return failed(code);
+      if (s.__wsTelInFlight !== key) return;
+      s.__wsTelInFlight = null;
+      s.__wsTelSent = key;
+      logEvent("tx telemetry ok");
+    },
+    failed,
+  );
   return true;
 }
 
