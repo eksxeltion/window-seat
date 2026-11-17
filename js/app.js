@@ -676,6 +676,10 @@ function togglePin() {
   if (viaTv(() => remoteCmd("pin"))) return;
   state.pinned = !state.pinned;
   localCommand(state.pinned ? "pin" : "unpin");
+  const p = state.pending;
+  // Pin holds the cam on screen at the tap: an automatic rotation still loading is dropped and the
+  // current cam reloaded (the swap may already have replaced it on the single player). Next, prev and picks stay.
+  if (state.pinned && p && p.reason === "rotate" && state.currentCamId) beginLoad(state.currentCamId, 1, 0, "retry");
   if (!state.pinned) {
     state.nextSwapAt = Date.now() + rotateSec() * 1000;
     state.pausedRemaining = rotateSec() * 1000;

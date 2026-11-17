@@ -807,6 +807,8 @@ function handle(raw, senderId) {
     case "pin": {
       const was = s.pinned;
       s.pinned = !!cmd.value;
+      // Pin holds the cam on screen: drop an automatic rotation still loading and reload the current cam.
+      if (s.pinned && pending && rotateReason === "rotate" && s.camId) beginLoad(s.camId, "retry");
       if (!s.pinned) {
         nextSwapAt = Date.now() + s.interval * 1000;
         pausedRemaining = s.interval * 1000;

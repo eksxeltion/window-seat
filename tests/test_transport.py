@@ -17,6 +17,22 @@ ARCHIVE = "JXY8_HX99q8"  # "Tokaido Shinkansen, Odawara (archive)": a recording,
 fails, logs = [], []
 
 
+# Start an automatic rotation, then tap Pin while it is still loading: before the swap's load call
+# (during the fade) or after it (the player already holds the new video). Runs in the page so the tap
+# lands inside the swap window every time. Returns {cam, target} or an error string.
+PIN_MID_SWAP = """async ([phone, afterLoad]) => {
+  const until = async (f) => { const t0 = Date.now(); while (!f()) { if (Date.now() - t0 > 5000) return false; await new Promise((r) => setTimeout(r, 5)); } return true; };
+  const cam = phone ? __windowSeat.currentCamId() : __receiver.state.camId;
+  if (phone) __windowSeat.state.nextSwapAt = 0; else __receiver.expireRotation();
+  const fading = () => document.querySelector('#blackout').classList.contains('on');
+  if (!(await until(() => (phone ? __windowSeat.state.pending && __windowSeat.state.pending.reason === 'rotate' : fading())))) return 'no rotation started';
+  if (afterLoad ? !(await until(() => __yt.cam().vid !== cam)) : __yt.cam().vid !== cam) return 'load timing missed';
+  const target = __yt.cam().vid !== cam ? __yt.cam().vid : phone ? __windowSeat.state.pending.camId : null;
+  if (phone) document.querySelector('#pin-pill').click(); else __receiver.send({ type: 'pin', value: true });
+  return { cam, target };
+}"""
+
+
 def check(name, cond):
     print(("PASS " if cond else "FAIL ") + name)
     if not cond:
@@ -198,6 +214,19 @@ with sync_playwright() as p:
     tap(pg, "#bar [data-action=play-pause]")
     pg.wait_for_timeout(300)
     check("phone: resume after the swap plays cam and music", ystate(pg, "cam") == 1 and ystate(pg, "music") == 1)
+
+    # Pin during an automatic rotation that is still loading: the cam on screen at the tap stays, music plays on.
+    for after_load in (False, True):
+        tag = "after the load call" if after_load else "during the fade"
+        r = pg.evaluate(PIN_MID_SWAP, [True, after_load])
+        check(f"phone pin mid-swap ({tag}): rotation was loading at the tap ({r})", isinstance(r, dict))
+        if isinstance(r, dict):
+            pg.wait_for_timeout(1500)
+            check(f"phone pin mid-swap ({tag}): the cam at the tap stays current", ws("currentCamId") == r["cam"] and not pg.evaluate("()=>__windowSeat.state.pending"))
+            check(f"phone pin mid-swap ({tag}): the player shows that cam, playing", pg.evaluate("()=>__yt.cam().vid") == r["cam"] and ystate(pg, "cam") == 1)
+            check(f"phone pin mid-swap ({tag}): pinned, music keeps playing", ws("pinned") is True and ws("feedPaused") is False and ystate(pg, "music") == 1)
+        tap(pg, "#pin-pill")
+        pg.wait_for_timeout(200)
 
     # Control: playing and unpinned, rotation does advance (so the freezes above mean something).
     cam4 = ws("currentCamId")
@@ -414,6 +443,19 @@ with sync_playwright() as p:
     cam4 = st()["camId"]
     rx.evaluate("()=>__receiver.expireRotation()")
     check("tv: rotation advances when playing and unpinned", wait_until(rx, f"()=>__receiver.state.camId!=={json.dumps(cam4)}", 4000))
+
+    # Pin during an automatic rotation that is still loading: the cam on screen at the tap stays, music plays on.
+    for after_load in (False, True):
+        tag = "after the load call" if after_load else "during the fade"
+        rx.wait_for_timeout(300)
+        r = rx.evaluate(PIN_MID_SWAP, [False, after_load])
+        check(f"tv pin mid-swap ({tag}): rotation was loading at the tap ({r})", isinstance(r, dict))
+        if isinstance(r, dict):
+            rx.wait_for_timeout(1500)
+            check(f"tv pin mid-swap ({tag}): the cam at the tap stays current", st()["camId"] == r["cam"])
+            check(f"tv pin mid-swap ({tag}): the player shows that cam, playing, no blackout", rx.evaluate("()=>__yt.cam().vid") == r["cam"] and ystate(rx, "cam") == 1 and not rx.evaluate("()=>document.querySelector('#blackout').classList.contains('on')"))
+            check(f"tv pin mid-swap ({tag}): pinned, music keeps playing", st()["pinned"] is True and st()["paused"] is False and ystate(rx, "music") == 1)
+        send({"type": "pin", "value": False})
 
     # Interval changed while paused: resume uses the new period, not the clock frozen at pause time.
     rx.wait_for_timeout(300)
