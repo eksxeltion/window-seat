@@ -13,7 +13,7 @@ base = sys.argv[1].rstrip("/")
 HERE = os.path.dirname(os.path.abspath(__file__))
 MOCK_SENDER = open(os.path.join(HERE, "mock_cast_sender.js")).read()
 FAKE_YT = open(os.path.join(HERE, "fake_youtube.js")).read()
-BUILD = "2026-11-17.13"
+BUILD = "2026-11-17.14"
 NS = "urn:x-cast:com.windowseat"
 # PostHog drops events from browsers that look automated (webdriver flag, HeadlessChrome brand). These tests need it
 # to behave as in a normal Chrome, so they present one. Existing tests keep the headless defaults.
@@ -190,6 +190,21 @@ with sync_playwright() as p:
           any("https://example.com/p/q" in v and "[email]" in v and "[redacted]" in v for v in scrubbed) and any("https://example.net/r" in v for v in scrubbed))
     leaked = [s for s in (b"SECRETQ1", b"fragZ9", b"me@example.org", b"abcdefghijklmnop1234567890", b"SECRETQ2", b"fragY8", b"token=", b"sig=") if s in bodies]
     check(f"scrub: no query, fragment, email or token from error text in any request body ({leaked})", not leaked and b"example.com/p/q" in bodies)
+    # No IP storage: every Sentry event envelope tells ingestion not to infer the IP, and carries no user IP.
+    sentry_events = []
+    for h in telemetry_guard.hits:
+        if "sentry.io" not in h["url"] or not h["body"]:
+            continue
+        lines = h["body"].split(b"\n")
+        for i in range(1, len(lines) - 1):
+            try:
+                hdr = json.loads(lines[i])
+            except Exception:
+                continue
+            if isinstance(hdr, dict) and hdr.get("type") == "event":
+                sentry_events.append(json.loads(lines[i + 1]))
+    no_ip = [((ev.get("sdk") or {}).get("settings") or {}).get("infer_ip") == "never" and "ip_address" not in (ev.get("user") or {}) and "geo" not in (ev.get("user") or {}) for ev in sentry_events]
+    check(f"no IP: Sentry envelopes say infer_ip never, no user.ip_address ({len(no_ip)} events, {[((ev.get('sdk') or {}).get('settings'), ev.get('user')) for ev in sentry_events][:2]})", no_ip and all(no_ip))
     # Huge error text is cut before any regex runs: 200,000 characters without "@" scrub fast, and a URL cut at the
     # scan limit still loses its query.
     big = pg.evaluate("""()=>{

@@ -344,8 +344,23 @@ function stripEventUrls(event) {
     if (typeof b.message === "string") b.message = scrubText(b.message);
     if (b.data && typeof b.data === "object") for (const k of Object.keys(b.data)) if (typeof b.data[k] === "string") b.data[k] = bareUrl(b.data[k]);
   }
-  delete event.user;
+  noIp(event);
   return frames;
+}
+
+/**
+ * No IP storage: no user (so no ip_address, never "{{auto}}", no geo), and tell Sentry's ingestion not to infer the
+ * client IP. sendDefaultPii:false alone does not stop that with our bundle, and the SDK merges its own
+ * sdk.settings over the event's after beforeSend, so the init option dataCollection.userInfo:false (and the
+ * metadata guard in onSentryLoaded) keep the SDK side on "never" too.
+ */
+function noIp(event) {
+  if (event.user) {
+    delete event.user.ip_address;
+    delete event.user.geo;
+  }
+  delete event.user;
+  event.sdk = { ...(event.sdk || {}), settings: { ...((event.sdk && event.sdk.settings) || {}), infer_ip: "never" } };
 }
 
 function sentryBeforeSend(event) {
@@ -395,6 +410,7 @@ function onSentryLoaded() {
       release: `${APP}@${t.build}`,
       environment: superProps().environment,
       sendDefaultPii: false,
+      dataCollection: { userInfo: false }, // SDK then sends sdk.settings.infer_ip "never" (its default is "auto")
       tracesSampleRate: 0,
       defaultIntegrations: false, // no browserApiErrors (would wrap CAF timers and listeners), no session tracking
       integrations,
@@ -402,6 +418,11 @@ function onSentryLoaded() {
       maxBreadcrumbs: 30,
       beforeBreadcrumb,
       beforeSend: sentryBeforeSend,
+    });
+    // Guard: whatever the SDK put in its metadata, the envelope's sdk.settings must say infer_ip "never".
+    safe(() => {
+      const md = S.getClient().getSdkMetadata();
+      if (md && md.sdk) md.sdk.settings = { ...(md.sdk.settings || {}), infer_ip: "never" };
     });
     t.sentry = S;
     t.sentryState = "ready";
