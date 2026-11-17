@@ -162,7 +162,21 @@ with sync_playwright() as p:
     all_ids = pg.evaluate("async()=>(await import('/js/data.js')).CAMS.map(c=>c.id)")
     check(f"None: sheet says rotation uses every cam ({pg.text_content('#cams-count')})", pg.text_content("#cams-count") == "No cams checked. Rotation uses every cam.")
     pool = ws(pg, "rotationIds()")
-    check(f"None: phone pool is every cam, not empty and not only defaults ({len(pool)} of {len(all_ids)})", sorted(pool) == sorted(all_ids) and len(all_ids) == 44)
+    # Inclusion is every usable cam; the time-of-day rules (Skip sleeping is on) still apply, as on the TV.
+    want = pg.evaluate("""async()=>{const {CAMS}=await import('/js/data.js'); const lt=await import('/js/localtime.js'); const s=__windowSeat.state;
+      const rules={skipSleeping:s.skipSleeping, onlyDaytime:s.onlyDaytime}; const d=new Date(); const usable=CAMS.filter(c=>!s.failed.has(c.id));
+      return {phone: lt.rotationPool(usable, rules, d).map(c=>c.id), sleeping: usable.filter(c=>lt.isSleeping(c,d)).map(c=>c.id)}}""")
+    check(f"None: phone pool is rotationPool(every usable cam, rules, clock) ({len(pool)} of {len(all_ids)})", sorted(pool) == sorted(want["phone"]) and len(all_ids) == 44 and pool)
+    check(f"None: Skip on keeps sleeping cams out ({len(want['sleeping'])} sleeping)", want["sleeping"] and EIFFEL not in pool and not set(pool) & set(want["sleeping"]))
+    tv = pg.evaluate("""async(ids)=>{const {CAMS}=await import('/js/data.js'); const lt=await import('/js/localtime.js'); const s=__windowSeat.state;
+      const chosen=ids.length ? CAMS.filter(c=>ids.includes(c.id)) : CAMS.filter(c=>c.default);
+      return lt.rotationPool(chosen.filter(c=>!s.failed.has(c.id)), {skipSleeping:s.skipSleeping, onlyDaytime:s.onlyDaytime}, new Date()).map(c=>c.id)}""", all_ids)
+    check(f"None: phone pool equals what the TV rotates from every cam id and the same rules ({len(tv)})", sorted(pool) == sorted(tv))
+    pg.click('#cams-quick [data-group="all"]')
+    all_pool = ws(pg, "rotationIds()")
+    check(f"All and None: same rotation pool under the same rules and clock ({len(all_pool)} vs {len(pool)})", sorted(all_pool) == sorted(pool))
+    pg.click('#cams-quick [data-group="none"]')
+    check("None again: pool unchanged", sorted(ws(pg, "rotationIds()")) == sorted(pool))
 
     # ------------------------------------------------------------ fallback pool count: every checked cam is out by the rules
     pg.click(f"{row(pg, EIFFEL)} [data-action=toggle-cam]")

@@ -186,12 +186,13 @@ const isEnabled = (id) => {
 const timeRules = () => ({ skipSleeping: state.skipSleeping, onlyDaytime: state.onlyDaytime });
 const checkedCams = () => CAMS.filter((c) => isEnabled(c.id));
 
-/** The cams auto-rotation may pick right now: checked, not failed, and allowed by the time-of-day rules (or the
- *  checked cams anyway when the rules leave none). With no usable cam checked, every usable cam rotates. */
+/** The cams auto-rotation may pick right now. Inclusion is the checked usable (not failed) cams, or every usable
+ *  cam when none is checked. The time-of-day rules then apply to that set (or the set is used anyway when the rules
+ *  leave none), the same as the TV does with the ids from tvCamIds(). */
 function rotationCams(now = new Date()) {
-  const usable = (c) => !state.failed.has(c.id);
-  const pool = rotationPool(CAMS.filter((c) => usable(c) && isEnabled(c.id)), timeRules(), now);
-  return pool.length ? pool : CAMS.filter(usable);
+  const usable = CAMS.filter((c) => !state.failed.has(c.id));
+  const checked = usable.filter((c) => isEnabled(c.id));
+  return rotationPool(checked.length ? checked : usable, timeRules(), now);
 }
 
 function rotationIds(now = new Date()) {
@@ -742,8 +743,8 @@ function retryCams() {
 }
 
 function startCams() {
-  const pool = rotationPool(checkedCams(), timeRules());
-  const list = pool.length ? pool : CAMS;
+  const checked = checkedCams();
+  const list = rotationPool(checked.length ? checked : CAMS, timeRules());
   beginLoad(list[Math.floor(Math.random() * list.length)].id);
 }
 
