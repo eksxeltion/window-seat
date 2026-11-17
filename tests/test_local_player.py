@@ -11,7 +11,7 @@ if base.endswith(".html"):
 here = os.path.dirname(os.path.abspath(__file__))
 FAKE_YT = open(os.path.join(here, "fake_youtube.js")).read()
 MOCK = open(os.path.join(here, "mock_cast_sender.js")).read()
-BUILD = "2026-11-16.8"
+BUILD = "2026-11-16.9"
 TAGLINE = "Live windows onto the world, with soft music, made for your TV."
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 # Every page denies the Fullscreen API: the player must stay full bleed and keep playing anyway.
@@ -86,7 +86,8 @@ with sync_playwright() as p:
         return pg
 
     # ------------------------------------------------------------ Home: bright, copy, hero from the real list
-    pg = phone()
+    # Built-in list only (no sheet, no saved copy) at the fixed clock: data.js carries the sheet's timezones.
+    pg = phone(clock=MOCK_NOW)
     bg = pg.evaluate("()=>getComputedStyle(document.querySelector('#start')).backgroundColor")
     check(f"home: bright canvas #F3F5F7 ({bg})", bg == "rgb(243, 245, 247)")
     check("home: theme-color is the canvas", pg.get_attribute('meta[name="theme-color"]', "content").upper() == "#F3F5F7")
@@ -101,14 +102,15 @@ with sync_playwright() as p:
     order = pg.evaluate("()=>['#right-now','#start-btn','.cast-start','#start-tv','#start-about'].map(s=>document.querySelector(s).getBoundingClientRect().top)")
     check(f"home: hero, Start watching, Cast, then ghost actions in order ({order})", order == sorted(order))
     check("home: Right now hero visible", pg.is_visible("#right-now") and pg.text_content("#right-now-label") == "Right now")
-    hero = pg.evaluate("""async()=>{const {CAMS}=await import('/js/data.js'); const id=__windowSeat.heroCamId(); const c=CAMS.find(x=>x.id===id);
+    hero = pg.evaluate("""async()=>{const {CAMS}=await import('/js/data.js'); const lt=await import('/js/localtime.js'); const id=__windowSeat.heroCamId(); const c=CAMS.find(x=>x.id===id);
       return {id, inList: !!c, inRotation: !!(c&&c.default), city: c&&c.city, title: c&&c.title, time: document.querySelector('#hero-time').textContent,
               line: document.querySelector('#hero-line').textContent, cam: document.querySelector('#hero-cam').textContent,
-              awake: CAMS.filter(x=>x.default).length, img: document.querySelector('#hero-img').getAttribute('src')}}""")
+              awake: lt.awakeCams(CAMS, new Date()).length, zones: CAMS.every(x=>lt.isValidZone(x.timezone)), img: document.querySelector('#hero-img').getAttribute('src')}}""")
     print("hero:", hero)
     check("home: hero cam is an in-rotation cam from the real list", hero["inList"] and hero["inRotation"])
     check("home: hero names that cam's real city and title", hero["city"] in hero["time"] and hero["title"] in hero["cam"] and hero["city"] in hero["cam"])
-    check("home: built-in list has no timezone, so no local time is shown", not re.search(r"\d:\d\d", hero["time"]))
+    check("home: every built-in cam has a valid IANA timezone", hero["zones"] is True)
+    check(f"home: built-in list shows local time: 'It's ... in {hero['city']}.' ({hero['time']})", re.fullmatch(r"It's \d{1,2}:\d\d (AM|PM) in " + re.escape(hero["city"]) + r"\.", hero["time"]) is not None)
     check(f"home: awake count comes from the list ({hero['awake']})", f"{hero['awake']} windows are awake." in hero["line"])
     check("home: hero still is the cam's YouTube thumbnail", hero["img"] == f"https://i.ytimg.com/vi/{hero['id']}/hqdefault.jpg")
     check("home: hero still shown once loaded", wait_until(pg, "()=>!document.querySelector('#hero-img').hidden", 2000))
@@ -148,7 +150,7 @@ with sync_playwright() as p:
     for r in pending:
         sheet(r)
     check("hero: after the sheet loads it shows the sheet cam with its local time", wait_until(pg, "()=>/^It's \\d{1,2}:\\d\\d (AM|PM) in Tokyo\\.$/.test(document.querySelector('#hero-time').textContent)", 4000))
-    check(f"hero: first paint came from the built-in list ({before})", before.startswith("Live from "))
+    check(f"hero: first paint came from the built-in list, with its local time ({before})", re.fullmatch(r"It's \d{1,2}:\d\d (AM|PM) in .+\.", before) is not None)
     check("hero: count follows the sheet (1 window)", pg.text_content("#hero-line").endswith("1 window is awake.") or pg.text_content("#hero-line").endswith("All the windows are asleep."))
     ctx.close()
 
@@ -169,7 +171,7 @@ with sync_playwright() as p:
     check("player: bottom glass visible", pg.is_visible("#bar"))
     cam = pg.evaluate("async()=>{const {CAMS}=await import('/js/data.js'); return CAMS.find(c=>c.id===__windowSeat.currentCamId())}")
     check("player: glass shows the cam name", pg.text_content(".cap-title") == cam["title"])
-    check(f"player: meta is '{{city}}, {{country}}' ({pg.text_content('.cap-meta')})", pg.text_content(".cap-meta") == f"{cam['city']}, {cam['country']}")
+    check(f"player: meta is '{{city}}, {{country}} · {{local time}}' ({pg.text_content('.cap-meta')})", re.fullmatch(re.escape(f"{cam['city']}, {cam['country']}") + r" · \d{1,2}:\d\d (AM|PM)", pg.text_content(".cap-meta")) is not None)
     check("player: meta has no channel or type", cam["channel"] not in pg.text_content(".cap-meta"))
     check(f"player: rotation status 'Next cam in M:SS' ({pg.text_content('#lp-status-text')})", re.fullmatch(r"Next cam in \d:\d\d", pg.text_content("#lp-status-text")) is not None)
     sizes = {s: box(pg, f"#bar [data-action={s}]") for s in ("prev", "play-pause", "next")}
@@ -353,7 +355,7 @@ with sync_playwright() as p:
     meta = rx.text_content("#cap-meta")
     check("tv: lower third visible after the cam loads", cap_opacity() == 1 and rx.is_visible("#caption"))
     check(f"tv: title is the cam name ({rx.text_content('#cap-title')})", rx.text_content("#cap-title") == tcam["title"])
-    check(f"tv: meta is city and country ({meta})", meta == f"{tcam['city']}, {tcam['country']}")
+    check(f"tv: meta is city and country, then the built-in local time ({meta})", re.fullmatch(re.escape(f"{tcam['city']}, {tcam['country']}") + r" · \d{1,2}:\d\d (AM|PM)", meta) is not None)
     check("tv: no type tag and no channel in the lower third", tcam["channel"] not in rx.text_content("#caption") and (not tcam["type"] or tcam["type"] not in meta.lower()))
     cb = rx.locator("#caption").bounding_box()
     check(f"tv: lower third bottom left of the 5% safe area, at most ~46% wide ({cb})", abs(cb["x"] - 96) <= 1 and abs(cb["y"] + cb["height"] - (1080 - 54)) <= 1 and cb["width"] <= 0.46 * 1920 + 1)

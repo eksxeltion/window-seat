@@ -57,6 +57,33 @@ export function isSleeping(cam, now = new Date()) {
   return !!t && t.hour < 6;
 }
 
+/** Outside 7 AM to 7 PM local. Without a valid timezone this is never true, so such a cam is never excluded. */
+export function isOutsideDaytime(cam, now = new Date()) {
+  const t = cam ? localTime(cam.timezone, now) : null;
+  return !!t && (t.hour < 7 || t.hour >= 19);
+}
+
+/** Session-only time-of-day rules for auto-rotation: Skip sleeping cams is on and Only daytime is off by default. */
+export const DEFAULT_TIME_RULES = Object.freeze({ skipSleeping: true, onlyDaytime: false });
+
+/** True when the time-of-day rules let this cam take part in auto-rotation right now. Play now and Pin ignore this. */
+export function rotationAllows(cam, rules = DEFAULT_TIME_RULES, now = new Date()) {
+  if (!cam) return false;
+  if (rules.skipSleeping !== false && isSleeping(cam, now)) return false;
+  if (rules.onlyDaytime && isOutsideDaytime(cam, now)) return false;
+  return true;
+}
+
+/**
+ * The auto-rotation pool: the checked cams that the time-of-day rules allow right now. When the rules leave
+ * nothing (every checked cam is asleep), the checked cams are used anyway so the window never goes dark.
+ */
+export function rotationPool(checked, rules = DEFAULT_TIME_RULES, now = new Date()) {
+  const list = (Array.isArray(checked) ? checked : []).filter(Boolean);
+  const awake = list.filter((c) => rotationAllows(c, rules, now));
+  return awake.length ? awake : list;
+}
+
 /** In-rotation cams that are not sleeping right now ("windows awake"). */
 export function awakeCams(cams, now = new Date()) {
   return (Array.isArray(cams) ? cams : []).filter((c) => c && c.default && !isSleeping(c, now));

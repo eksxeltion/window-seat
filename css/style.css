@@ -565,21 +565,37 @@ body:not(.lp-on) #tuning { display: none; }
 .panel-foot { margin: 0; padding: var(--space-8) var(--space-24) var(--space-16); border-top: 1px solid var(--color-line); font-size: 0.75rem; color: var(--color-ink-tertiary); }
 .panel-help { margin: 0 0 var(--space-8); font-size: 0.875rem; color: var(--color-ink-secondary); }
 
-.place {
-  margin: var(--space-20) 0 var(--space-8);
-  font-size: 0.75rem;
-  line-height: 1rem;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-ink-tertiary);
+/* Cams sheet: count under the title, Time of day, Quick picks, the full list, then Playback. */
+.cams-count { margin: var(--space-4) 0 0; font-size: 0.875rem; line-height: 1.25rem; color: var(--color-ink-secondary); }
+.btn-done { color: var(--color-accent); }
+.cams-section { padding: var(--space-8) 0 var(--space-16); }
+.cams-section + .cams-section { border-top: 1px solid var(--color-line); padding-top: var(--space-16); }
+.cams-label { margin: 0 0 var(--space-8); font-size: 0.75rem; line-height: 1rem; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-ink-tertiary); }
+.cams-switches { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.cams-hint { margin: var(--space-8) 0 0; font-size: 0.75rem; line-height: 1rem; color: var(--color-ink-tertiary); }
+.cams-quick { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.chip {
+  min-height: 2.25rem;
+  padding: 0 var(--space-12);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 200ms ease-out, border-color 200ms ease-out, color 200ms ease-out;
 }
+.chip:hover { background: var(--color-surface-raised); }
+.chip[aria-pressed="true"] { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-primary-ink); }
+.cams-secondary { margin-top: var(--space-16); border-top: 1px solid var(--color-line); padding-top: var(--space-16); }
+
 .cam-list { list-style: none; margin: 0; padding: 0; }
 .cam-row {
   display: flex;
   align-items: center;
-  gap: var(--space-12);
-  padding: var(--space-12) var(--space-16);
+  gap: var(--space-8);
+  padding: var(--space-4) var(--space-12) var(--space-4) var(--space-4);
   border-radius: var(--radius-md);
   background: var(--color-surface);
   transition: background 200ms ease-out;
@@ -587,9 +603,37 @@ body:not(.lp-on) #tuning { display: none; }
 .cam-row + .cam-row { margin-top: var(--space-8); }
 .cam-row.is-current { background: var(--color-accent-soft); }
 .cam-row.is-failed .cam-info { opacity: 0.55; }
+.cam-check {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  min-height: 3.5rem;
+  padding: var(--space-8);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.check-box { flex: none; position: relative; width: 1.375rem; height: 1.375rem; border: 2px solid var(--color-ink-tertiary); border-radius: 0.375rem; background: var(--color-surface); transition: background 150ms ease-out, border-color 150ms ease-out; }
+.cam-check[aria-checked="true"] .check-box { border-color: var(--color-accent); background: var(--color-accent); }
+.cam-check[aria-checked="true"] .check-box::after { content: ""; position: absolute; left: 0.375rem; top: 0.125rem; width: 0.3125rem; height: 0.625rem; border: solid var(--color-primary-ink); border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .cam-info { flex: 1; min-width: 0; }
-.cam-title { display: block; font-size: 1rem; font-weight: 600; }
-.cam-sub { display: block; font-size: 0.875rem; color: var(--color-ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cam-title { display: block; font-size: 1rem; font-weight: 600; line-height: 1.375rem; }
+.cam-sub { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--space-8); font-size: 0.875rem; line-height: 1.25rem; color: var(--color-ink-secondary); }
+.cam-clock { font-variant-numeric: tabular-nums; color: var(--color-ink-tertiary); }
+.cam-clock:empty { display: none; }
+.sleep-mark { padding: 0 var(--space-8); border-radius: var(--radius-pill); background: var(--color-surface-raised); color: var(--color-sleeping); font-size: 0.75rem; font-weight: 600; }
+.sleep-mark[hidden] { display: none; }
+.cam-row.is-off .cam-title { color: var(--color-ink-secondary); }
+.cam-row.is-sleeping .cam-title { color: var(--color-sleeping); }
+.btn-play { flex: none; min-height: 2.5rem; padding: 0 var(--space-12); border-radius: var(--radius-pill); font-size: 0.875rem; }
+.remote-cams-btn { width: 100%; }
+body.casting #panel-cams { z-index: 55; } /* the Cams sheet opens over the casting remote (other sheets keep their place) */
 .badge {
   display: inline-block;
   margin-left: var(--space-8);
@@ -601,7 +645,6 @@ body:not(.lp-on) #tuning { display: none; }
 }
 .badge-now { background: var(--color-accent); color: var(--color-primary-ink); }
 .badge-failed { background: var(--color-danger-soft); color: var(--color-danger); }
-.cam-row .switch, .cam-row .btn { font-size: 0.875rem; }
 
 .mix-list { list-style: none; margin: 0; padding: 0; }
 .mix-btn {
@@ -721,8 +764,6 @@ body:not(.lp-on) #tuning { display: none; }
 @media (max-width: 700px) {
   .panel { top: calc(var(--safe-top) + var(--space-12)); bottom: 0; width: 100vw; border-radius: var(--radius-lg) var(--radius-lg) 0 0; border-bottom: 0; }
   .panel-head, .panel-tools, .panel-body, .panel-foot { padding-left: var(--space-16); padding-right: var(--space-16); }
-  .cam-row { flex-wrap: wrap; }
-  .cam-info { flex-basis: 100%; }
 }
 /* Short screens: tighter glass so the picture still shows. */
 @media (max-height: 640px) {
