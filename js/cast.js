@@ -40,6 +40,8 @@ let pauseEnded = false; // the TV said it is ending the session after 30 minutes
 let pauseEndTimer = 0; // safety net: end the phone's side if the session has not ended a few seconds later
 const PAUSE_END_SAFETY_MS = 5000;
 let stopRequested = false; // the user tapped Stop casting on this phone
+let pauseEndAt = 0; // phone clock time the TV's pause timer is due to end (from pauseEndsInMs), 0 when unknown or not running
+const PAUSE_END_TOLERANCE_MS = 2000; // covers the TV's stop delay and clock skew
 
 // Stage 2 failures: the TV app launched, but a command could not be delivered to it.
 const SEND_ERRORS = {
@@ -393,6 +395,7 @@ function onMessage(_ns, raw) {
   warnedNoReply = false;
   if (msg.build) dbg.tvBuild = msg.build;
   remote = { ...remote, ...msg, pauseWarning: msg.pauseWarning === true };
+  pauseEndAt = typeof msg.pauseEndsInMs === "number" && msg.paused !== false ? Date.now() + msg.pauseEndsInMs : 0;
   // Play or Keep paused reached the TV in its stop delay: the feed plays or the timer runs again, so no end is coming.
   if (pauseEnded && (msg.paused === false || typeof msg.pauseEndsInMs === "number")) clearPauseEnd("TV state");
   setRemoteStatus(`Connected. The TV confirms each tap.${msg.build ? ` (TV build ${msg.build})` : ""}`);
@@ -442,9 +445,13 @@ function clearPauseEnd(why) {
 
 function leaveRemote() {
   if (!remoteOn && !session) return;
-  // A session that ends while the TV's warning was up (and not by Stop casting) also ended by the timeout,
-  // in case the phone slept through the pauseTimeout message.
-  const byTimeout = pauseEnded || (remote.paused && remote.pauseWarning && !stopRequested);
+  // A session that ends while the TV's warning was up (and not by Stop casting) ended by the timeout only if the
+  // TV's timer had really run out (the phone slept through the pauseTimeout message). Earlier, it is a disconnect.
+  const timerDone = !!pauseEndAt && Date.now() >= pauseEndAt - PAUSE_END_TOLERANCE_MS;
+  const warningUp = !!(remote.paused && remote.pauseWarning);
+  const byTimeout = pauseEnded || (!stopRequested && warningUp && timerDone);
+  const endReason = stopRequested ? "stop" : byTimeout ? "pause_timeout" : "disconnect";
+  logEvent(`session ended: ${endReason}${warningUp ? " (pause warning was up)" : ""}`);
   // Telemetry, read before the flags reset, and only if a session actually started.
   if (session && session.__wsTelConnectAt && !session.__wsTelEnded) {
     session.__wsTelEnded = true;
@@ -454,12 +461,14 @@ function leaveRemote() {
       seconds_in_session: Math.round((Date.now() - session.__wsTelConnectAt) / 1000),
       was_paused: !!remote.paused,
       pause_warning_up: !!remote.pauseWarning,
+      end_reason: endReason,
     });
   }
   pauseEnded = false;
   clearTimeout(pauseEndTimer);
   pauseEndTimer = 0;
   stopRequested = false;
+  pauseEndAt = 0;
   remote = { ...remote, pauseWarning: false };
   session = null;
   remoteOn = false;
@@ -528,6 +537,7 @@ function onSessionStarted(s, resumed, via = "event") {
     ui.device.textContent = quietly(() => s.getCastDevice().friendlyName) || "TV";
     lastReplyAt = 0;
     warnedNoReply = false;
+    pauseEndAt = 0;
     const hint = quietly(channelCheck) || "";
     setRemoteStatus(hint || "Waiting for the TV app to reply...");
     renderRemote();

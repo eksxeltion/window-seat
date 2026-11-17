@@ -13,7 +13,7 @@ base = sys.argv[1].rstrip("/")
 HERE = os.path.dirname(os.path.abspath(__file__))
 MOCK_SENDER = open(os.path.join(HERE, "mock_cast_sender.js")).read()
 FAKE_YT = open(os.path.join(HERE, "fake_youtube.js")).read()
-BUILD = "2026-11-17.15"
+BUILD = "2026-11-17.16"
 NS = "urn:x-cast:com.windowseat"
 # PostHog drops events from browsers that look automated (webdriver flag, HeadlessChrome brand). These tests need it
 # to behave as in a normal Chrome, so they present one. Existing tests keep the headless defaults.

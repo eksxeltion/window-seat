@@ -38,7 +38,7 @@ with sync_playwright() as p:
         clear(pg); pg.locator("#remote " + sel).tap(); pg.wait_for_timeout(150)
         check(f"ii: remote {t} goes to the TV", types(pg) == [t])
     check("ii: no local iframe after controls", pg.evaluate(YT) == 0)
-    check("debug line shows builds and states", re.search(r"Phone build 2026-11-17\.13 \| TV build \S+ \| cast CONNECTED \| session SESSION_STARTED", pg.text_content("#remote-debug")) is not None)
+    check("debug line shows builds and states", re.search(r"Phone build 2026-11-17\.16 \| TV build \S+ \| cast CONNECTED \| session SESSION_STARTED", pg.text_content("#remote-debug")) is not None)
     # (vi) keyboard and media keys go to the TV
     for key, t in [("n", "next"), ("p", "pin"), ("u", "mute"), ("MediaTrackNext", "next"), ("MediaTrackPrevious", "prev"), ("MediaPlayPause", "pause")]:
         clear(pg); pg.keyboard.press(key); pg.wait_for_timeout(150)
@@ -52,8 +52,8 @@ with sync_playwright() as p:
         check(f"vi: {key} sends pause {val}", len(sent) == 1 and sent[0]["type"] == "pause" and sent[0]["value"] is val)
     # (vii) build stamps
     pg.evaluate("()=>document.querySelector('[data-action=open-about]').click()"); pg.wait_for_timeout(200)
-    check("vii: About shows the build", pg.text_content("#about-build") == "Build 2026-11-17.15")
-    check("vii: window.__windowSeat.build", pg.evaluate("()=>__windowSeat.build") == "2026-11-17.15")
+    check("vii: About shows the build", pg.text_content("#about-build") == "Build 2026-11-17.16")
+    check("vii: window.__windowSeat.build", pg.evaluate("()=>__windowSeat.build") == "2026-11-17.16")
     # (viii) ending the session (real CAF order) returns to the Start screen
     pg.locator('#remote [data-cmd="stop"]').tap(); pg.wait_for_timeout(500)
     check("viii: Stop casting hides the remote, Start screen back", (not pg.is_visible("#remote")) and pg.is_visible("#start-btn"))
@@ -95,7 +95,7 @@ read = lambda *a: open(os.path.join(root, *a)).read()
 build = re.search(r'BUILD = "([^"]+)"', read("js", "build.js")).group(1)
 recv = re.search(r'BUILD = "([^"]+)"', read("js", "receiver.js")).group(1)
 sw = re.search(r'CACHE_VERSION = "([^"]+)"', read("sw.js")).group(1)
-check(f"vii: build.js == receiver.js == sw.js ({build}, {recv}, {sw})", build == recv == sw == "2026-11-17.15")
+check(f"vii: build.js == receiver.js == sw.js ({build}, {recv}, {sw})", build == recv == sw == "2026-11-17.16")
 check("vii: receiver.html ?v= matches", set(re.findall(r"\?v=([\d.-]+)", read("receiver.html"))) == {build})
 check("vii: sw.js precaches build.js", '"/js/build.js"' in read("sw.js"))
 print(logs); sys.exit(1 if fails or logs else 0)
