@@ -231,9 +231,13 @@ with sync_playwright() as p:
     check(f"remote: play during the warning resumes ({sent()})", sent() == [{"type": "pause", "value": False}])
     check("remote: play hides the warning and the hairline", not pg.is_visible("#remote-pause-warn") and not pg.is_visible("#remote-hairline"))
 
-    # The TV ends the session after 30 minutes paused.
+    # The TV ends the session after 30 minutes paused. The TV owns the stop: pauseTimeout alone keeps the session.
     state(paused=True, pauseWarning=True)
     pg.evaluate("()=>__mockCast.reply({type:'pauseTimeout'})")
+    pg.wait_for_timeout(400)
+    check("remote: pauseTimeout alone keeps the session until the TV ends it", pg.is_visible("#remote") and pg.evaluate("()=>__windowSeat.isCasting()") is True)
+    check("remote: no end toast before the session ends", (pg.text_content("#toast") or "") != ENDED)
+    pg.evaluate("()=>cast.framework.CastContext.getInstance().endCurrentSession()")  # the TV stopped
     pg.wait_for_timeout(400)
     check("remote: the remote closes", not pg.is_visible("#remote") and pg.evaluate("()=>__windowSeat.isCasting()") is False)
     check(f"remote: end toast ({pg.text_content('#toast')!r})", pg.text_content("#toast") == ENDED and pg.evaluate("()=>document.querySelector('#toast').classList.contains('show')"))
@@ -242,6 +246,98 @@ with sync_playwright() as p:
     pg.wait_for_timeout(1500)
     check("remote: no local playback after the timeout", pg.evaluate("()=>!__windowSeat.state.started && __yt.players.filter(p=>!p.destroyed).every(p=>p.state!==1 && p.state!==3 && !p.calls.some(c=>c[0]==='loadVideoById'||c[0]==='playVideo'))"))
     pg.context.close()
+
+    # Safety net: the session has not ended 5 s after pauseTimeout and no newer state cancelled it, so the phone ends its side.
+    pg = phone()
+    pg.evaluate("()=>__mockCast.start()")
+    pg.wait_for_timeout(400)
+    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-16.12', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
+    state(paused=True, pauseWarning=True)
+    pg.evaluate("()=>__mockCast.reply({type:'pauseTimeout'})")
+    pg.wait_for_timeout(4000)
+    check("safety net: still casting before 5 s", pg.evaluate("()=>__windowSeat.isCasting()") is True)
+    check("safety net: the phone ends its side after 5 s", wait_until(pg, "()=>!__windowSeat.isCasting() && document.querySelector('#remote').hidden", 2500))
+    check(f"safety net: end toast ({pg.text_content('#toast')!r})", pg.text_content("#toast") == ENDED)
+    pg.context.close()
+
+    # ------------------------------------------------------------ phone and TV together (mock sender, mocked receiver context)
+    # Messages are relayed both ways; the receiver's stop() ends the phone's mock session, like the real TV.
+    def pair():
+        tv = b.new_context(viewport={"width": 1920, "height": 1080}).new_page()
+        route(tv)
+        tv.goto(base + f"/receiver.html?debug=1&pauseWarnMs={WARN_MS}&pauseEndMs={END_MS}")
+        wait_until(tv, "()=>__receiver.state.camId && __yt.cam() && __yt.cam().state===1", 6000)
+        tv.evaluate(MOCK_CTX)
+        ph = phone()
+        ph.evaluate("()=>{ const c = cast.framework.CastContext.getInstance(), end = c.endCurrentSession; window.__phoneEnds = 0;"
+                    " c.endCurrentSession = function () { if (!window.__tvEnding) window.__phoneEnds++; return end.apply(this, arguments); }; }")
+        ph.evaluate("()=>__mockCast.start()")
+        ph.wait_for_timeout(300)
+        seen = {"tv": 0, "ph": 0, "ended": False}
+
+        def pump():
+            for m in tv.evaluate("(n)=>__ctx.sent.slice(n).map(s=>s.msg)", seen["tv"]):
+                seen["tv"] += 1
+                ph.evaluate("(o)=>__mockCast.reply(o)", m)
+            for m in ph.evaluate("(n)=>__mockCast.sent.slice(n).map(m=>m.data)", seen["ph"]):
+                seen["ph"] += 1
+                tv.evaluate("(o)=>__receiver.send(o)", json.loads(m))
+            if not seen["ended"] and tv.evaluate("()=>__ctx.stops") > 0:
+                seen["ended"] = True
+                ph.evaluate("()=>{ window.__tvEnding = true; cast.framework.CastContext.getInstance().endCurrentSession(); window.__tvEnding = false; }")
+
+        def pump_for(ms, until=None):
+            for _ in range(ms // 50):
+                pump()
+                if until and until():
+                    return True
+                ph.wait_for_timeout(50)
+            return False
+
+        return tv, ph, pump, pump_for
+
+    # Play or Keep paused reaches the TV in its stop delay: the phone keeps the session and shows no toast.
+    for cmd, label in [("play", "Play"), ("keep-paused", "Keep paused")]:
+        tv, ph, pump, pump_for = pair()
+        pump_for(300)
+        ph.locator('#remote [data-cmd="play"]').tap()
+        pump_for(300)
+        check(f"pair {label}: paused on both", tv.evaluate("()=>__receiver.state.paused") is True and ph.text_content("#remote-play") == "Play")
+        got = pump_for(END_MS + 1500, lambda: tv.evaluate("()=>__receiver.pauseTimer().phase") == "ended")
+        check(f"pair {label}: TV sent pauseTimeout, stop pending", got and tv.evaluate("()=>__ctx.stops") == 0)
+        pump()  # pauseTimeout reaches the phone
+        check(f"pair {label}: phone still casting after pauseTimeout", ph.evaluate("()=>__windowSeat.isCasting()") is True)
+        if cmd == "play":
+            ph.locator('#remote [data-cmd="play"]').tap()
+        else:
+            # The restarted timer must outlast the 6 s check below (the hook applies to the next start).
+            tv.evaluate("()=>__receiver.setPauseTimeout({warnMs: 20000, endMs: 30000})")
+            ph.locator("#remote-keep-paused").tap()
+        pump_for(300)
+        t = tv.evaluate("()=>__receiver.pauseTimer()")
+        check(f"pair {label}: TV cancelled its stop ({t['phase']})", t["phase"] == ("off" if cmd == "play" else "running"))
+        pump_for(6000)  # past the TV's stop delay and the phone's 5 s safety net
+        check(f"pair {label}: TV never stopped", tv.evaluate("()=>__ctx.stops") == 0)
+        check(f"pair {label}: phone kept the session", ph.evaluate("()=>__windowSeat.isCasting()") is True and ph.is_visible("#remote") and ph.evaluate("()=>__phoneEnds") == 0)
+        check(f"pair {label}: no end toast", (ph.text_content("#toast") or "") != ENDED)
+        tv.context.close()
+        ph.context.close()
+
+    # Normal path: pauseTimeout, then the TV ends the session: end toast, idle, no local playback.
+    tv, ph, pump, pump_for = pair()
+    pump_for(300)
+    ph.locator('#remote [data-cmd="play"]').tap()
+    got = pump_for(END_MS + 2500, lambda: not ph.evaluate("()=>__windowSeat.isCasting()"))
+    check("pair end: the TV stopped and the phone left the session", got and tv.evaluate("()=>__ctx.stops") == 1)
+    check("pair end: the phone did not end the session itself", ph.evaluate("()=>__phoneEnds") == 0)
+    check(f"pair end: end toast ({ph.text_content('#toast')!r})", ph.text_content("#toast") == ENDED)
+    check("pair end: idle (remote hidden, Cast pill idle, Start screen)", not ph.is_visible("#remote") and ph.is_visible("#start-btn")
+          and ph.evaluate("()=>[...document.querySelectorAll('[data-cast]')].every(b=>b.dataset.state==='idle')"))
+    ph.wait_for_timeout(1000)
+    check("pair end: no local iframe or playback", ph.evaluate("()=>!__windowSeat.state.started && document.querySelectorAll('iframe').length===0"
+                                                             " && __yt.players.filter(p=>!p.destroyed).every(p=>p.state!==1 && p.state!==3)"))
+    tv.context.close()
+    ph.context.close()
 
     # Reconnecting (session resumed) while the TV is in the warning shows it.
     pg = phone(resume=True)

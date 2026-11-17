@@ -34,7 +34,9 @@ const ui = {};
 const PAUSE_HAIRLINE = "Paused. The TV rests after 30 minutes paused.";
 const PAUSE_WARNING = "The TV will go back to its home screen in 5 minutes. Tap play to keep watching.";
 const PAUSE_ENDED = "Paused for 30 minutes, so the TV went back to its home screen. Cast again whenever you like.";
-let pauseEnded = false; // the TV said it is ending the session after 30 minutes paused
+let pauseEnded = false; // the TV said it is ending the session after 30 minutes paused (it owns the stop)
+let pauseEndTimer = 0; // safety net: end the phone's side if the session has not ended a few seconds later
+const PAUSE_END_SAFETY_MS = 5000;
 let stopRequested = false; // the user tapped Stop casting on this phone
 
 // Stage 2 failures: the TV app launched, but a command could not be delivered to it.
@@ -377,6 +379,8 @@ function onMessage(_ns, raw) {
   warnedNoReply = false;
   if (msg.build) dbg.tvBuild = msg.build;
   remote = { ...remote, ...msg, pauseWarning: msg.pauseWarning === true };
+  // Play or Keep paused reached the TV in its stop delay: the feed plays or the timer runs again, so no end is coming.
+  if (pauseEnded && (msg.paused === false || typeof msg.pauseEndsInMs === "number")) clearPauseEnd("TV state");
   setRemoteStatus(`Connected. The TV confirms each tap.${msg.build ? ` (TV build ${msg.build})` : ""}`);
   renderRemote();
 }
@@ -398,12 +402,28 @@ function enterRemote(status) {
   renderCastButtons();
 }
 
-/* The TV ended the session after 30 minutes paused: end it here too, so the phone goes idle right away
-   (the TV is already stopping). leaveRemote explains why; nothing starts playing on the phone. */
+/* The TV says it is ending the session after 30 minutes paused. The TV owns the stop (Play or Keep paused in its
+   short stop delay cancels it), so the phone only notes that a timeout end is expected and waits for the session
+   to end; leaveRemote then explains why and nothing starts playing on the phone. Safety net: if the session is
+   still up a few seconds later and no newer state cancelled the end, the phone ends its side as before. */
 function onPauseTimeout() {
   pauseEnded = true;
   logEvent("TV pause timeout");
-  quietly(() => cast.framework.CastContext.getInstance().endCurrentSession(true));
+  clearTimeout(pauseEndTimer);
+  pauseEndTimer = setTimeout(() => {
+    pauseEndTimer = 0;
+    if (!pauseEnded || !session) return;
+    logEvent("pause timeout: ending the phone side");
+    quietly(() => cast.framework.CastContext.getInstance().endCurrentSession(true));
+  }, PAUSE_END_SAFETY_MS);
+}
+
+function clearPauseEnd(why) {
+  if (!pauseEnded && !pauseEndTimer) return;
+  pauseEnded = false;
+  clearTimeout(pauseEndTimer);
+  pauseEndTimer = 0;
+  logEvent(`pause timeout cancelled (${why})`);
 }
 
 function leaveRemote() {
@@ -412,6 +432,8 @@ function leaveRemote() {
   // in case the phone slept through the pauseTimeout message.
   const byTimeout = pauseEnded || (remote.paused && remote.pauseWarning && !stopRequested);
   pauseEnded = false;
+  clearTimeout(pauseEndTimer);
+  pauseEndTimer = 0;
   stopRequested = false;
   remote = { ...remote, pauseWarning: false };
   session = null;
