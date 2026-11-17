@@ -154,6 +154,14 @@ function notify() {
 
 /* ---------------------------------------------------------------- super properties */
 
+/** The phone: its own. The receiver: once any phone marks the session as a test, it is a verification session
+ *  (the same rule the phone applies to itself), so test errors never land in the production environment. */
+function receiverEnvironment() {
+  if (!t.receiver) return t.environment;
+  if (t.rx.test || t.test) return "verification";
+  return t.rx.environment || t.environment;
+}
+
 /** Computed at capture time (never posthog.register, which would persist across loads). */
 function superProps() {
   const p = {
@@ -162,7 +170,7 @@ function superProps() {
     surface: t.surface,
     device_class: t.receiver ? "tv" : safe(t.providers.deviceClass, "desktop"),
     cast_state: t.receiver ? "connected" : safe(t.providers.castState, "none") || "none",
-    environment: t.receiver ? t.rx.environment || t.environment : t.environment,
+    environment: receiverEnvironment(),
     test: t.receiver ? !!(t.rx.test || t.test) : t.test,
     $geoip_disable: true,
   };

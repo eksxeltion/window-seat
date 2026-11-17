@@ -86,7 +86,7 @@ The receiver has no UI, so it uses the phone's setting through a new message on 
 - The phone sends it on every new or resumed session once the namespace is available, and again on every switch change. It is a small, backward compatible addition to the protocol.
 - The receiver stays off until it gets one. If on, it loads the SDKs, sets the phone's `installId` as its distinct ID, and flushes its buffer. The buffer holds at most 50 events and is dropped after 2 minutes without a message.
 - Several phones: the receiver sends only while every phone that has told it is on. Any phone saying off turns it off for the rest of that receiver session. When the last phone disconnects, the setting stays as it was (the TV keeps playing on its own).
-- `test` and `environment` come from the phone, so verification events from the TV are marked too.
+- `test` and `environment` come from the phone, so verification events from the TV are marked too. Once any phone says `test: true`, the receiver session is a test session and its environment is `verification`, whatever an earlier phone said, so test errors never land in `production`.
 - A receiver opened directly in a browser (`receiver.html?debug=1`) sends nothing unless `?telemetry=1` is added.
 - **Known blind spot:** if the custom channel never opens, the TV never hears the phone and its events are dropped. That failure is measured from the phone instead (`cast_channel_missing`, `cast_no_reply`). Missing receiver events must not be read as healthy launches.
 
