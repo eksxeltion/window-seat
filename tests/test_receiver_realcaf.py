@@ -17,7 +17,7 @@ with sync_playwright() as p:
     check("strip has no FAILED", "FAILED" not in strip)
     check("no Invalid messageType", "Invalid messageType" not in strip)
     check("listener registered (or ready)", "listener registered" in strip or "listener ready" in strip)
-    check("strip shows build 2026-11-16.10", "build 2026-11-16.10" in strip)
+    check("strip shows build 2026-11-16.11", "build 2026-11-16.11" in strip)
     b.close()
 print("FAILED:" if fails else "ALL PASS", fails)
 sys.exit(1 if fails else 0)
