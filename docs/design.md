@@ -306,7 +306,7 @@ These decisions are locked for the v2 and v3 mocks.
 5. **While casting, the phone is a remote.** No live cam on the phone. Same transport and menus, plus a persistent casting pill with the official connected Cast icon.
 6. **Local play is full screen.** Controls overlay the cam, with a floating toggle and an exit.
 
-7. **Debug mode is opt-in.** Off by default, toggled in About, remembered in localStorage, and synced to the TV while casting.
+7. **Debug mode is opt-in.** Off by default, toggled in About, resets every session (sessionStorage or in-memory, not localStorage), and synced to the TV while casting.
 8. **Shuffle starts mixes from the top.** A random mix, played from the beginning.
 9. **A paused TV rests after 30 minutes.** The Cast session ends so the TV can return to its ambient screen.
 10. **Local time comes from the sheet's timezone column.** IANA names such as Asia/Tokyo.
@@ -319,9 +319,9 @@ Debug mode is a calm, opt-in diagnostic surface for the person running the app. 
 
 - **Default:** off.
 - **Where:** a "Debug mode" switch in the "This copy" card in About (opened from Home, About and credits), next to the build and list lines.
-- **Helper:** "Shows build, list, and Cast details on this phone and on the TV. Off unless you turn it on. This browser remembers your choice."
-- **Persistence:** stored in localStorage on the phone. It survives reloads until turned off.
-- **Sync:** while casting, the phone sends the existing `debug` command on `urn:x-cast:com.windowseat` (shown as windowseat STRING) with the current value. It sends it when the switch changes and again every time a session starts or resumes. The receiver hides its strip by default and shows it only after `debug` with value true.
+- **Helper:** "Shows build, list, and Cast details on this phone and on the TV. Off unless you turn it on. It resets when you reload the app."
+- **Persistence:** sessionStorage or in-memory state on the phone, not localStorage. Off by default and on each new app load.
+- **Sync:** while casting, the phone sends the existing `debug` command on `urn:x-cast:com.windowseat` (shown as windowseat STRING) with the current value. It sends it when the switch changes and again every time a session starts or resumes. The receiver hides its strip by default and shows it only after `debug` with value true. The strip turns off when the Cast session ends.
 - **Off:** hides the phone overlay and the TV strip together.
 - **Feedback toasts:** "Debug on." / "Debug on. Showing details on the TV too." / "Debug off."
 
@@ -338,14 +338,14 @@ Required fields:
 
 **Phone overlay.** A collapsed pill (`DEBUG  {build}`, with a status dot that turns danger red and reads `DEBUG  error` when there is an error). On the local player it sits centered in the top scrim. It stays visible at 70% opacity when the chrome auto-hides, and expands into a night-glass panel that drops from the top and never covers the bottom panel or the floating button. On the casting remote it is a slim row under the casting pill and expands as a white card over the now-playing panel, never over transport or volume. Labels use Caption. Values and ids use Roboto Mono 500 13/18 (debug surfaces only). "Copy details" copies one plain line.
 
-**TV strip.** Bottom right in the 5% safe area, right-aligned, max 44% width. Overlay glass, 24/32 type, overlay-dim text, error text `#E8A3A3`. No auto-fade. It coexists with the lower third (bottom left, 46% max) with a 10% gutter. The pin toast is top center and the Paused pill is top right, so there is no overlap. If space is ever contested, the strip moves; guest-facing elements do not. Hidden by default.
+**TV strip.** Bottom right in the 5% safe area, right-aligned, max 44% width. Overlay glass, 24/32 type, overlay-dim text, error text `#E8A3A3`. No auto-fade. It coexists with the lower third (bottom left, 46% max) with a 10% gutter. The pin toast is top center and the Paused pill is top right, so there is no overlap. If space is ever contested, the strip moves; guest-facing elements do not. Hidden by default. The strip turns off when the Cast session ends.
 
 ## Pause timeout while casting
 
 A Cast session that stays paused for 30 minutes ends so the TV can return to its ambient screen. The receiver owns the timer, so it still works if the phone sleeps. The timer starts when the feed pauses during a live session. Any phone command while paused (next, previous, pin, mix pick, volume) restarts it. Resume, disconnect, or stop casting cancels it. Local play has no timeout.
 
 - Remote hairline while paused: "Paused. The TV rests after 30 minutes paused."
-- At 25 minutes, the TV Paused pill adds "Closing in 5 minutes". Phone toast: "The TV will go back to its home screen in 5 minutes. Tap play to keep watching."
+- At 25 minutes, the TV Paused pill adds "Closing in 5 minutes". Phone toast: "The TV will go back to its home screen in 5 minutes. Tap play to keep watching." A "Keep paused" button on the remote restarts the 30-minute timer without resuming.
 - At 30 minutes, the phone Cast pill returns to idle. Toast: "Paused for 30 minutes, so the TV went back to its home screen. Cast again whenever you like."
 
 ## Out of scope for this pass
@@ -355,7 +355,3 @@ A Cast session that stays paused for 30 minutes ends so the TV can return to its
 - Building the UI in the app. This document and the Paper file are the brief.
 - Changing `js/data.js`. The sheet is gaining a `timezone` column; this document describes how the UI uses it, but this PR does not edit the sheet.
 
-## Open questions
-
-1. Should Debug mode reset each session, like Skip sleeping cams? The brief persists it in localStorage. The risk is that it stays on for weeks and the TV strip becomes wallpaper. If it stays persistent, a softer option is a once-per-session "Debug on." reminder toast.
-2. Should the remote let you dismiss the 5-minute warning without resuming, with something like "Keep it paused" that restarts the 30 minutes?
