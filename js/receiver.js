@@ -199,11 +199,24 @@ function camPlay() {
   quietly(() => camPlayer.playVideo());
   camMute();
 }
-/* Resume a live cam at the live edge, not where it froze. */
+/*
+ * Resume the cam. A live stream jumps to the live edge (its duration), not where it froze.
+ * A recording (archive, VOD) resumes from the pause point: seeking it to its duration would land
+ * on the end, fire ENDED and get the cam skipped as failed, even when pinned.
+ * Live check: getVideoData().isLive (exposed by the IFrame player, not documented). Only an explicit
+ * true counts as live; a missing or non-boolean flag is treated as a recording, so a finite video is
+ * never sent to its end. The worst case for a live cam is resuming slightly behind the edge.
+ */
+function camIsLive() {
+  const data = quietly(() => camPlayer.getVideoData());
+  return !!data && data.isLive === true;
+}
 function camToLiveEdge() {
   camMute();
-  const d = quietly(() => camPlayer.getDuration());
-  if (typeof d === "number" && d > 0) quietly(() => camPlayer.seekTo(d, true));
+  if (camIsLive()) {
+    const d = quietly(() => camPlayer.getDuration());
+    if (typeof d === "number" && d > 0) quietly(() => camPlayer.seekTo(d, true));
+  }
   camPlay();
 }
 

@@ -1,5 +1,8 @@
 // Deterministic stand-in for the YouTube IFrame API (served in place of /iframe_api by tests).
 // Every call on every player is recorded in player.calls, and state changes fire onStateChange.
+// Cams look live by default (getVideoData().isLive === true). Video ids listed in window.__ytArchive
+// (an array set by a test) behave as recordings: isLive is false, and seeking one to its duration
+// lands on the end and fires ENDED, like the real player.
 (function () {
   const players = [];
   const S = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
@@ -54,9 +57,13 @@
     this._rec("stopVideo", arguments);
     this._set(S.CUED);
   };
+  P._isArchive = function () {
+    return this.kind === "cam" && Array.isArray(window.__ytArchive) && window.__ytArchive.includes(this.vid);
+  };
   P.seekTo = function (t) {
     this._rec("seekTo", arguments);
     this.time = t;
+    if (this._isArchive() && t >= this.getDuration()) this._set(S.ENDED);
   };
   P.getDuration = function () {
     return this.kind === "cam" ? 5000 : 3600;
@@ -86,7 +93,9 @@
     return this.state;
   };
   P.getVideoData = function () {
-    return { video_id: this.vid || "" };
+    const data = { video_id: this.vid || "" };
+    if (this.kind === "cam") data.isLive = !this._isArchive();
+    return data;
   };
   P.getIframe = function () {
     return null;

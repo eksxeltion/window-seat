@@ -11,6 +11,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 FAKE_YT = open(os.path.join(here, "fake_youtube.js")).read()
 MOCK = open(os.path.join(here, "mock_cast_sender.js")).read()
 PIN_COPY = "Pinned. Staying on this cam."
+ARCHIVE = "JXY8_HX99q8"  # "Tokaido Shinkansen, Odawara (archive)": a recording, not a live stream
 fails, logs = [], []
 
 
@@ -190,6 +191,39 @@ with sync_playwright() as p:
     loads_muted = pg.evaluate("""()=>{const c=__yt.cam().calls; return c.every((x,i)=>!['loadVideoById','playVideo'].includes(x[0]) || c.slice(0,i).some(y=>y[0]==='mute'))}""")
     check("phone: every cam load/play is preceded by mute()", loads_muted)
 
+    # Archived cam (a recording): resume plays from the pause point and never seeks to the end.
+    # The fake fires ENDED when a recording is seeked to its duration, so a wrong seek would skip the cam.
+    pg.evaluate(f"()=>{{window.__ytArchive=[{json.dumps(ARCHIVE)}]}}")
+    pg.evaluate(f"()=>document.querySelector('[data-action=watch][data-id={json.dumps(ARCHIVE)}]').click()")
+    check("phone archive: Watch now plays the archived cam", wait_until(pg, f"()=>__windowSeat.currentCamId()==={json.dumps(ARCHIVE)} && !__windowSeat.state.pending && __yt.cam().state===1", 6000))
+    check("phone archive: fake reports isLive false", pg.evaluate("()=>__yt.cam().getVideoData().isLive") is False)
+
+    def archive_round(label):
+        pg.evaluate("()=>{__yt.cam().time=1234}")
+        pg.click("#bar [data-action=play-pause]")
+        pg.wait_for_timeout(250)
+        check(f"phone archive{label}: pause pauses the archived cam", ws("feedPaused") is True and ystate(pg, "cam") == 2)
+        before = len(calls(pg, "cam"))
+        pg.click("#bar [data-action=play-pause]")
+        pg.wait_for_timeout(1500)
+        after = pg.evaluate(f"()=>__yt.cam().calls.slice({before})")
+        names = [c[0] for c in after]
+        check(f"phone archive{label}: resume plays without any seek ({names})", "playVideo" in names and "seekTo" not in names)
+        check(f"phone archive{label}: never seeks to the duration", not any(c[0] == "seekTo" and c[1] == 5000 for c in after))
+        check(f"phone archive{label}: resumes from the pause position", pg.evaluate("()=>__yt.cam().getCurrentTime()") == 1234)
+        check(f"phone archive{label}: still on the archived cam and playing", ws("currentCamId") == ARCHIVE and ystate(pg, "cam") == 1 and not pg.evaluate("()=>__windowSeat.state.pending"))
+        check(f"phone archive{label}: not marked failed", pg.evaluate(f"()=>!__windowSeat.state.failed.has({json.dumps(ARCHIVE)}) && !__windowSeat.state.allFailed"))
+        check(f"phone archive{label}: cam still muted", pg.evaluate("()=>__yt.cam().isMuted() && __yt.cam().getVolume()===0"))
+
+    archive_round("")
+    pg.click("#pin-pill")
+    pg.wait_for_timeout(200)
+    check("phone archive: pinned", ws("pinned") is True)
+    archive_round(" (pinned)")
+    pg.click("#pin-pill")
+    pg.wait_for_timeout(200)
+    pg.evaluate("()=>{window.__ytArchive=[]}")
+
     # About keyboard help.
     help_text = pg.evaluate("()=>[...document.querySelectorAll('#panel-about li')].map(l=>l.textContent).join(' ')")
     check("phone: About says Space plays or pauses the cam and the music", "Space play or pause (the cam and the music)" in help_text and "pause music" not in help_text)
@@ -309,6 +343,37 @@ with sync_playwright() as p:
     cam4 = st()["camId"]
     rx.evaluate("()=>__receiver.expireRotation()")
     check("tv: rotation advances when playing and unpinned", wait_until(rx, f"()=>__receiver.state.camId!=={json.dumps(cam4)}", 4000))
+
+    # Archived cam on the TV: resume from the pause point, no seek to the end, no skip (also when pinned).
+    rx.evaluate(f"()=>{{window.__ytArchive=[{json.dumps(ARCHIVE)}]}}")
+    send({"type": "cam", "id": ARCHIVE})
+    check("tv archive: cam command plays the archived cam", wait_until(rx, f"()=>__receiver.state.camId==={json.dumps(ARCHIVE)} && __yt.cam().vid==={json.dumps(ARCHIVE)} && __yt.cam().state===1", 6000))
+    rx.wait_for_timeout(300)
+
+    def tv_archive_round(label):
+        rx.evaluate("()=>{__yt.cam().time=1234}")
+        send({"type": "pause", "value": True})
+        rx.wait_for_timeout(200)
+        check(f"tv archive{label}: pause pauses the archived cam", ystate(rx, "cam") == 2 and st()["paused"] is True)
+        before = len(calls(rx, "cam"))
+        send({"type": "pause", "value": False})
+        rx.wait_for_timeout(1500)
+        after = rx.evaluate(f"()=>__yt.cam().calls.slice({before})")
+        names = [c[0] for c in after]
+        check(f"tv archive{label}: resume plays without any seek ({names})", "playVideo" in names and "seekTo" not in names)
+        check(f"tv archive{label}: never seeks to the duration", not any(c[0] == "seekTo" and c[1] == 5000 for c in after))
+        check(f"tv archive{label}: resumes from the pause position", rx.evaluate("()=>__yt.cam().getCurrentTime()") == 1234)
+        check(f"tv archive{label}: still on the archived cam and playing", st()["camId"] == ARCHIVE and ystate(rx, "cam") == 1)
+        check(f"tv archive{label}: not marked failed", ARCHIVE not in st()["failedCams"])
+        check(f"tv archive{label}: cam still muted", rx.evaluate("()=>__receiver.cam().muted===true && __receiver.cam().vol===0"))
+
+    tv_archive_round("")
+    send({"type": "pin", "value": True})
+    rx.wait_for_timeout(150)
+    check("tv archive: pinned", st()["pinned"] is True)
+    tv_archive_round(" (pinned)")
+    send({"type": "pin", "value": False})
+    rx.evaluate("()=>{window.__ytArchive=[]}")
     check("tv: no cam player was ever unmuted", cam_never_unmuted(rx))
     rx.context.close()
     b.close()
