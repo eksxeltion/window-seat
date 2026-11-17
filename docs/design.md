@@ -259,13 +259,15 @@ Each row: checkbox, name, country and type, local time, Sleeping mark when relev
 
 The starting point is the sheet's `in_rotation` set (today, 44 cams), all checked. The user unchecks from that list, or uses shortcuts. Group actions apply to the current filter.
 
-Mock local times in the v2 artboards assume Monday 16 November 2026, 4:51 PM Pacific (UTC-8).
+Local times and the sleeping-cam rule use the sheet's new `timezone` column, which holds an IANA name such as `Asia/Tokyo`. Country is no longer used to guess the clock. If a cell is blank or not a valid IANA name, the cam shows no local time and is never marked Sleeping, so a missing value errs toward showing the cam.
+
+Mock local times in the v2 and v3 artboards assume Monday 16 November 2026, 4:51 PM Pacific (UTC-8), with Tokyo at Asia/Tokyo (9:51 AM).
 
 ### Mix picker (sheet)
 
 Same sheet pattern. Header "Mix". Subhead "Tokyo Chill Lab".
 
-**Shuffle is on by default for every session**, so the first mix is not always the same. The user can turn it off for the current session.
+**Shuffle is on by default for every session.** When it is on, Window Seat picks a random mix and plays it from the beginning. It does not start partway through a playlist, for now. When a mix ends, shuffle picks another random mix, never the same one twice in a row, and that one also starts at the beginning. The user can turn shuffle off for the current session. With it off, mixes play in sheet order from the current one.
 
 Volume slider lives here too, with the helper "Cam sound is always off."
 
@@ -291,11 +293,11 @@ A pin toast ("Pinned. Staying on this cam.") appears top-center in the safe area
 
 While the feed is paused, a persistent "Paused" pill stays on the TV.
 
-No persistent debug strip in the designed state (the current debug strip stays a development-only flag).
+No debug strip unless Debug mode is on. See Debug mode.
 
 ## Interaction model
 
-These decisions are locked for the v2 mocks.
+These decisions are locked for the v2 and v3 mocks.
 
 1. **Pause pauses the entire feed.** Video and music both stop. Resume jumps the cam to the live edge and continues the mix.
 2. **Pin stops auto rotation only.** The current cam stays on screen and music keeps playing. Pin and pause are visually distinct and can combine.
@@ -304,17 +306,56 @@ These decisions are locked for the v2 mocks.
 5. **While casting, the phone is a remote.** No live cam on the phone. Same transport and menus, plus a persistent casting pill with the official connected Cast icon.
 6. **Local play is full screen.** Controls overlay the cam, with a floating toggle and an exit.
 
+7. **Debug mode is opt-in.** Off by default, toggled in About, remembered in localStorage, and synced to the TV while casting.
+8. **Shuffle starts mixes from the top.** A random mix, played from the beginning.
+9. **A paused TV rests after 30 minutes.** The Cast session ends so the TV can return to its ambient screen.
+10. **Local time comes from the sheet's timezone column.** IANA names such as Asia/Tokyo.
+
 Lite mode and "Open in TV browser" stay available but are secondary. They are not in the primary transport.
+
+## Debug mode
+
+Debug mode is a calm, opt-in diagnostic surface for the person running the app. It replaces the development-only strip, which was always on or set by a query flag.
+
+- **Default:** off.
+- **Where:** a "Debug mode" switch in the "This copy" card in About (opened from Home, About and credits), next to the build and list lines.
+- **Helper:** "Shows build, list, and Cast details on this phone and on the TV. Off unless you turn it on. This browser remembers your choice."
+- **Persistence:** stored in localStorage on the phone. It survives reloads until turned off.
+- **Sync:** while casting, the phone sends the existing `debug` command on `urn:x-cast:com.windowseat` (shown as windowseat STRING) with the current value. It sends it when the switch changes and again every time a session starts or resumes. The receiver hides its strip by default and shows it only after `debug` with value true.
+- **Off:** hides the phone overlay and the TV strip together.
+- **Feedback toasts:** "Debug on." / "Debug on. Showing details on the TV too." / "Debug off."
+
+Required fields:
+
+| Field | Phone | TV |
+| --- | --- | --- |
+| Build stamp | Phone build, plus TV build while casting | Yes |
+| List source and counts, timezone coverage | `sheet 44/16 · tz 44/44` | `List sheet 44/16` |
+| Cast state | CAF state, session state, last cast attempt or error | CAF state, appstate, last in, error |
+| Namespace | `windowseat STRING`, ns ok | `windowseat STRING`, ready-ns |
+| Messages | rx and tx, mirrored from the TV | rx and tx |
+| Now | Cam name and id, mix English and Japanese name and id | Cam id, mix id |
+
+**Phone overlay.** A collapsed pill (`DEBUG  {build}`, with a status dot that turns danger red and reads `DEBUG  error` when there is an error). On the local player it sits centered in the top scrim. It stays visible at 70% opacity when the chrome auto-hides, and expands into a night-glass panel that drops from the top and never covers the bottom panel or the floating button. On the casting remote it is a slim row under the casting pill and expands as a white card over the now-playing panel, never over transport or volume. Labels use Caption. Values and ids use Roboto Mono 500 13/18 (debug surfaces only). "Copy details" copies one plain line.
+
+**TV strip.** Bottom right in the 5% safe area, right-aligned, max 44% width. Overlay glass, 24/32 type, overlay-dim text, error text `#E8A3A3`. No auto-fade. It coexists with the lower third (bottom left, 46% max) with a 10% gutter. The pin toast is top center and the Paused pill is top right, so there is no overlap. If space is ever contested, the strip moves; guest-facing elements do not. Hidden by default.
+
+## Pause timeout while casting
+
+A Cast session that stays paused for 30 minutes ends so the TV can return to its ambient screen. The receiver owns the timer, so it still works if the phone sleeps. The timer starts when the feed pauses during a live session. Any phone command while paused (next, previous, pin, mix pick, volume) restarts it. Resume, disconnect, or stop casting cancels it. Local play has no timeout.
+
+- Remote hairline while paused: "Paused. The TV rests after 30 minutes paused."
+- At 25 minutes, the TV Paused pill adds "Closing in 5 minutes". Phone toast: "The TV will go back to its home screen in 5 minutes. Tap play to keep watching."
+- At 30 minutes, the phone Cast pill returns to idle. Toast: "Paused for 30 minutes, so the TV went back to its home screen. Cast again whenever you like."
 
 ## Out of scope for this pass
 
 - A native Google TV app, or publishing the Cast app.
 - The Android sender APK (comes after the web remote feels right).
 - Building the UI in the app. This document and the Paper file are the brief.
-- Changing the Google Sheet or `js/data.js`.
+- Changing `js/data.js`. The sheet is gaining a `timezone` column; this document describes how the UI uses it, but this PR does not edit the sheet.
 
 ## Open questions
 
-1. Should the sheet gain an IANA timezone column? Deriving local time from country alone is fragile for places like the United States or Australia.
-2. When shuffle is on, should the first mix also start at a random point inside the playlist, not only at a random mix?
-3. After a long pause on the TV, should the Cast session end so the TV can return to ambient mode? A starting recommendation is 30 minutes.
+1. Should Debug mode reset each session, like Skip sleeping cams? The brief persists it in localStorage. The risk is that it stays on for weeks and the TV strip becomes wallpaper. If it stays persistent, a softer option is a once-per-session "Debug on." reminder toast.
+2. Should the remote let you dismiss the 5-minute warning without resuming, with something like "Keep it paused" that restarts the 30 minutes?
