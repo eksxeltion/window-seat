@@ -552,3 +552,41 @@ body.casting #bar, body.casting #stage, body.casting #caption, body.casting #tap
 .remote-status { margin: 0; font-size: 0.95rem; color: var(--fg-dim, #aaa); }
 .remote-head { margin: 0.4rem 0 0; font-size: 1rem; font-weight: 500; color: var(--fg-dim, #aaa); }
 #remote [aria-pressed="true"] { color: var(--accent, #ffd27f); border-color: currentColor; }
+
+/* ---------- About: This copy card (build, list, Debug mode switch) ---------- */
+.this-copy { margin: 1.2rem 0 0.4rem; padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: 1rem; background: rgba(255, 255, 255, 0.04); }
+.prose .this-copy-title { margin: 0 0 0.6rem; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-faint); }
+.this-copy p { margin: 0.35rem 0; }
+.this-copy .build-line, .this-copy-list { color: var(--fg); }
+.debug-switch { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px solid var(--line); cursor: pointer; }
+.debug-switch-label { color: var(--fg); font-weight: 600; font-size: 1.05rem; }
+.debug-switch input { position: absolute; z-index: 1; opacity: 0; width: 2.6rem; height: 1.5rem; margin: 0; right: 0; bottom: 0; cursor: pointer; }
+.debug-switch { position: relative; }
+.debug-switch-track { position: relative; flex: none; width: 2.6rem; height: 1.5rem; border-radius: 999px; background: rgba(255, 255, 255, 0.22); transition: background 0.2s ease; }
+.debug-switch-thumb { position: absolute; top: 0.2rem; left: 0.2rem; width: 1.1rem; height: 1.1rem; border-radius: 50%; background: var(--fg); transition: transform 0.2s ease; }
+.debug-switch input:checked + .debug-switch-track { background: var(--accent); }
+.debug-switch input:checked + .debug-switch-track .debug-switch-thumb { transform: translateX(1.1rem); background: var(--accent-ink); }
+.debug-switch input:focus-visible + .debug-switch-track { outline: 0.22rem solid var(--focus); outline-offset: 3px; }
+.this-copy-help { font-size: 0.85rem; color: var(--fg-faint); }
+
+/* ---------- Debug panel (only while Debug mode is on) ---------- */
+.debug-panel { position: fixed; top: 0.6rem; left: 50%; z-index: 45; transform: translateX(-50%); width: min(26rem, calc(100vw - 10rem)); display: flex; flex-direction: column; align-items: center; gap: 0.4rem; pointer-events: none; }
+.debug-panel[hidden] { display: none; }
+.debug-panel > * { pointer-events: auto; }
+.debug-pill { display: inline-flex; align-items: center; gap: 0.5rem; max-width: 100%; padding: 0.3rem 0.8rem; border: 1px solid var(--line); border-radius: 999px; background: rgba(10, 14, 20, 0.72); color: var(--fg-dim); font: 500 0.78rem/1.3 ui-monospace, "Roboto Mono", monospace; white-space: pre; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.debug-dot { flex: none; width: 0.45rem; height: 0.45rem; border-radius: 50%; background: #5fbf8f; }
+.debug-panel.has-error .debug-dot { background: #e8665c; }
+.debug-panel.has-error .debug-pill { color: #f2b0aa; }
+.debug-caret::before { content: "\25BE"; }
+.debug-pill[aria-expanded="true"] .debug-caret::before { content: "\25B4"; }
+.debug-body { width: 100%; max-height: 58vh; overflow-y: auto; padding: 0.6rem 0.9rem 0.8rem; border: 1px solid var(--line); border-radius: 1rem; background: rgba(10, 14, 20, 0.9); color: var(--fg-dim); font-size: 0.8rem; }
+.debug-body[hidden] { display: none; }
+.debug-head { margin: 0.5rem 0 0.2rem; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.1em; color: var(--fg-faint); }
+.debug-rows { display: grid; grid-template-columns: 5.2rem 1fr; gap: 0.15rem 0.6rem; margin: 0 0 0.3rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--line); }
+.debug-rows dt { color: var(--fg-faint); }
+.debug-rows dd { margin: 0; color: var(--fg); font: 500 0.78rem/1.35 ui-monospace, "Roboto Mono", monospace; word-break: break-word; }
+.debug-events { list-style: none; margin: 0 0 0.6rem; padding: 0; font: 0.72rem/1.4 ui-monospace, "Roboto Mono", monospace; color: var(--fg-dim); word-break: break-word; }
+.debug-copy { width: 100%; justify-content: center; font-size: 0.9rem; }
+/* Casting: a row in the remote's flow, under its heading, so it never covers transport or volume. */
+.debug-panel.in-remote { position: static; transform: none; width: 100%; align-items: stretch; }
+.debug-panel.in-remote .debug-pill { justify-content: flex-start; white-space: normal; }

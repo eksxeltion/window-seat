@@ -1,7 +1,8 @@
 // Window Seat: rotating Japan live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
 import qrcode from "./qr.js";
-import { initCast, castConfigured, sendConfigToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam } from "./cast.js";
+import { initCast, castConfigured, sendConfigToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam, castDebugInfo, sendDebugToTv } from "./cast.js";
+import { initDebug, isDebugOn } from "./debug.js";
 import { BUILD } from "./build.js";
 import { refreshFromSheet, listLabel } from "./config.js";
 
@@ -1356,6 +1357,22 @@ function setupCast() {
   });
 }
 
+/* ================================================================ debug mode */
+
+// Opt-in diagnostics (About, This copy). Off on every page load; see js/debug.js.
+function setupDebug() {
+  initDebug({
+    now: () => ({ camId: state.currentCamId || (state.pending && state.pending.camId) || null, mixId: state.mixId }),
+    cast: castDebugInfo,
+    toast: (text) => toast(text),
+    onChange: (on) => {
+      const connected = castDebugInfo().connected;
+      sendDebugToTv();
+      toast(on ? (connected ? "Debug on. Showing details on the TV too." : "Debug on.") : "Debug off.");
+    },
+  });
+}
+
 /* ================================================================ api */
 
 let apiTimer = 0;
@@ -1764,6 +1781,7 @@ function boot() {
   setInterval(tick, 1000);
   document.addEventListener("visibilitychange", onVisibility);
   loadYouTubeApi();
+  setupDebug();
   setupCast();
   loadSheetConfig();
   const buildLine = $("#about-build");
@@ -1779,6 +1797,7 @@ function boot() {
     currentMixId: () => state.mixId,
     isTv,
     isCasting,
+    isDebugOn,
   };
 }
 

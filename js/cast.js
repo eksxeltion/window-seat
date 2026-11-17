@@ -3,6 +3,7 @@ import { CAST_APP_ID, RECEIVER_NAMESPACE } from "./cast-config.js";
 import { CAMS, MIXES } from "./data.js";
 import { listInfo, currentConfig } from "./config.js";
 import { BUILD } from "./build.js";
+import { logEvent, isDebugOn, refreshDebug } from "./debug.js";
 
 const SDK_URL = "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
 export const castConfigured = CAST_APP_ID !== "REPLACE_WITH_APP_ID";
@@ -24,6 +25,9 @@ let warnedNoReply = false;
 let hooks = null;
 let remoteOn = false; // remote mode is on (a session, or a connection in progress)
 const dbg = { last: "-", sessionState: "-", tvBuild: "?", lastErr: "" };
+// Debug mode only (observation, no effect on behavior): message counts and the TV's own diagnostics from its state reply.
+const io = { tx: 0, rx: 0 };
+let tvDebug = {};
 const ui = {};
 
 // Stage 2 failures: the TV app launched, but a command could not be delivered to it.
@@ -79,9 +83,11 @@ function send(cmd, opts = {}) {
     // JSON text: the receiver declares this namespace as STRING and parses it itself.
     p = session.sendMessage(RECEIVER_NAMESPACE, JSON.stringify(cmd));
   } catch (e) {
+    logEvent(`tx ${cmd.type} threw: ${errText((e && e.message) || e)}`);
     say(`Could not send to the TV: ${(e && e.message) || e}`);
     return;
   }
+  io.tx++;
   const fail = (raw) => {
     const code = (raw && raw.code) || raw;
     // Only state-setting commands are safe to resend (a resent "next" or "mix" would act twice).
@@ -102,6 +108,12 @@ function send(cmd, opts = {}) {
     setRemoteStatus(`Send failed: ${code}${hint ? ". " + hint : ""}`);
   };
   Promise.resolve(p).then((code) => code && fail(code), fail);
+  // Debug log only: a separate observer on the same promise, registered after the handler above so it never changes it.
+  const tag = `tx ${cmd.type}${opts.retried ? " (retry)" : ""}`;
+  Promise.resolve(p).then(
+    (code) => logEvent(code ? `${tag} FAILED ${errText(code)}` : `${tag} ok`),
+    (raw) => logEvent(`${tag} FAILED ${errText(raw) || "?"}`),
+  );
   if (opts.silent) return;
   clearTimeout(replyTimer);
   replyTimer = setTimeout(() => {
@@ -110,7 +122,7 @@ function send(cmd, opts = {}) {
     setRemoteStatus(`Sent, but no reply from the TV app after 4s.${hint ? " " + hint : ""}`);
     if (!warnedNoReply) {
       warnedNoReply = true;
-      say(`Sent, but the TV app has not replied after 4s.${hint ? " " + hint : " Check the green line at the bottom of the TV."}`);
+      say(`Sent, but the TV app has not replied after 4s.${hint ? " " + hint : " Turn on Debug mode in About to see Cast details on the TV."}`);
     }
   }, 4000);
 }
@@ -299,6 +311,9 @@ function renderRemote() {
 
 function onMessage(_ns, raw) {
   const msg = typeof raw === "string" ? quietly(() => JSON.parse(raw)) : raw;
+  io.rx++;
+  logEvent(`rx ${(msg && msg.type) || "unreadable"}`);
+  if (msg && msg.debug && typeof msg.debug === "object") tvDebug = msg.debug;
   if (!msg || msg.type !== "state") return;
   lastReplyAt = Date.now();
   warnedNoReply = false;
@@ -321,6 +336,7 @@ function enterRemote(status) {
   }
   if (status) setRemoteStatus(status);
   renderRemote();
+  refreshDebug();
 }
 
 function leaveRemote() {
@@ -328,9 +344,12 @@ function leaveRemote() {
   session = null;
   remoteOn = false;
   dbg.tvBuild = "?";
+  tvDebug = {};
   document.body.classList.remove("casting");
   ui.root.hidden = true;
   hooks.onEnd();
+  logEvent("remote off");
+  refreshDebug();
 }
 
 /* Initial setup is held back until the session lists our channel, then sent exactly once (never replayed). */
@@ -349,14 +368,20 @@ function flushInit(s) {
 /* Play services can refresh the app's namespace list after the session started. */
 function watchNamespaces(s) {
   s.__wsNsOk = nsInfo().ok;
-  const onChange = () => {
+  s.__wsNsNames = nsInfo().names.join(",");
+  const onChange = (e) => {
     if (session !== s) return;
-    const ok = nsInfo().ok;
+    const info = nsInfo();
+    const ok = info.ok;
     const appeared = ok && !s.__wsNsOk;
+    const names = info.names.join(",");
+    if (names !== s.__wsNsNames || ok !== s.__wsNsOk) logEvent(`ns ${(e && e.type) || "change"}: windowseat ${ok ? "listed" : "not listed"} [${names}]`);
+    s.__wsNsNames = names;
     s.__wsNsOk = ok;
     renderDebug();
     if (appeared) setRemoteStatus("Connected. The Window Seat channel is now open.");
     flushInit(s);
+    if (appeared) sendDebugToTv(s);
   };
   const T = (window.cast && cast.framework && cast.framework.SessionEventType) || {};
   for (const type of [T.APPLICATION_METADATA_CHANGED || "applicationmetadatachanged", T.APPLICATION_STATUS_CHANGED || "applicationstatuschanged"]) {
@@ -392,7 +417,46 @@ function onSessionStarted(s, resumed) {
     s.__wsInit = true;
     s.__wsPending = "push";
   }
+  const ns = quietly(nsInfo) || { ok: false, names: [] };
+  logEvent(`${resumed ? "session resumed" : "session started"}: windowseat ${ns.ok ? "listed" : "not listed"} [${ns.names.join(",")}]`);
   flushInit(s);
+  sendDebugToTv(s); // the TV strip follows this phone's Debug switch on every start or resume
+}
+
+/** Send the Debug switch to the TV. Waits for the namespace like the other setup messages (no new gating).
+ *  `value` is sent too so an older receiver (which read cmd.value) follows the switch as well. */
+export function sendDebugToTv(s = session) {
+  if (!s || s !== session) return false;
+  if (!nsInfo().ok) {
+    logEvent(`tx debug deferred: windowseat not listed`);
+    return false;
+  }
+  const v = isDebugOn();
+  send({ type: "debug", on: v, value: v, silent: true }, { silent: true });
+  return true;
+}
+
+/** Everything the debug panel shows about Cast. Read only. */
+export function castDebugInfo() {
+  let castState = "not configured";
+  if (castConfigured) castState = castFailed ? "unavailable" : castReady ? liveCastState() : "loading";
+  const attemptErr = lastAttemptCode && lastAttemptCode !== "cancel" ? `cast attempt ${lastAttemptCode}` : "";
+  const tvErr = tvDebug.cafError || tvDebug.error ? `TV ${tvDebug.cafError || tvDebug.error}` : "";
+  return {
+    casting: remoteOn || !!session,
+    connected: !!session,
+    castState,
+    sessionState: dbg.sessionState,
+    ns: session ? nsInfo() : null,
+    tvBuild: dbg.tvBuild,
+    tv: tvDebug,
+    tx: io.tx,
+    rx: io.rx,
+    last: dbg.last,
+    lastAttempt,
+    now: { camId: remote.camId, camTitle: remote.camTitle, mixId: remote.mixId, mixTitle: remote.mixTitle },
+    error: dbg.lastErr ? `send ${dbg.lastErr}` : attemptErr || tvErr,
+  };
 }
 
 /** Push the phone's choices to the TV (first connect), then ask for its state. */
@@ -485,6 +549,7 @@ const ERROR_TEXT = {
 const UNAVAILABLE = "Cast not available in this browser";
 
 /* The last requestSession result stays visible (Start screen, menu bar, remote debug line). */
+let lastAttemptCode = ""; // "" while the last attempt succeeded
 let lastAttempt = ""; // e.g. "Last cast attempt 14:31: session_error (TV found, but the receiver failed to load)"
 let statusText = "";
 
@@ -492,6 +557,8 @@ function recordAttempt(code) {
   const hhmm = new Date().toTimeString().slice(0, 5);
   const reason = code ? String(ERROR_TEXT[code] || "").replace(/^Cast:\s*/, "").replace(/\s*\([a-z_]+\)$/, "") : "";
   lastAttempt = `Last cast attempt ${hhmm}: ${code || "ok"}${reason ? ` (${reason})` : ""}`;
+  lastAttemptCode = code || "";
+  logEvent(`requestSession ${code || "ok"}`);
   setStatus(statusText);
   renderDebug();
 }
@@ -551,6 +618,7 @@ function initFramework() {
   // and a missed SESSION_RESUMED left the phone playing locally while the TV was casting.
   const T = cast.framework.SessionState;
   ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
+    logEvent(`session ${e.sessionState}${e.errorCode ? ` ${e.errorCode}` : ""}`);
     dbg.sessionState = e.sessionState;
     dbg.last = e.sessionState + (e.errorCode ? ` ${e.errorCode}` : "");
     if (e.sessionState === T.SESSION_STARTED) onSessionStarted(e.session || quietly(() => ctx.getCurrentSession()), false);
@@ -560,6 +628,7 @@ function initFramework() {
     renderDebug();
   });
   ctx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, (e) => {
+    logEvent(`cast ${e.castState}`);
     setStatus(STATE_TEXT[e.castState] || `Cast: ${e.castState}`);
     dbg.last = `cast ${e.castState}`;
     syncRemoteMode();
@@ -573,6 +642,7 @@ function initFramework() {
     autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
   });
   castReady = true;
+  logEvent(`CastContext ready: ${quietly(() => ctx.getCastState()) || "?"}`);
   setStatus(STATE_TEXT[ctx.getCastState()] || "");
   syncRemoteMode("init");
 }
@@ -588,16 +658,21 @@ export function initCast(h) {
     b.addEventListener("click", onCastTap);
   });
   window.__onGCastApiAvailable = (available) => {
+    logEvent(`Cast SDK ${available ? "available" : "unavailable"}`);
     if (!available) return markUnavailable();
     try {
       initFramework();
     } catch (e) {
+      logEvent(`CastContext setup failed: ${errText((e && e.message) || e)}`);
       markUnavailable();
     }
   };
   const script = document.createElement("script");
   script.src = SDK_URL;
   script.async = true;
-  script.onerror = markUnavailable; // offline or blocked
+  script.onerror = () => {
+    logEvent("Cast SDK load failed");
+    markUnavailable(); // offline or blocked
+  };
   document.head.append(script);
 }

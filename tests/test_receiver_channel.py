@@ -17,7 +17,7 @@ with sync_playwright() as p:
     pg.route("**/cast_receiver_framework.js", lambda r: r.fulfill(status=200, content_type="text/javascript", body=MOCK))
     pg.route("**/iframe_api", lambda r: r.abort())  # YouTube unavailable: the channel must still work
     pg.on("pageerror", lambda e: logs.append(str(e)))
-    pg.goto(url); pg.wait_for_timeout(2500)
+    pg.goto(url + ("&" if "?" in url else "?") + "strip=1"); pg.wait_for_timeout(2500)  # the strip is hidden unless Debug mode; ?strip=1 still starts CAF
     calls = pg.evaluate("()=>__caf.calls")
     print("calls:", calls)
     check("listener registered", f"addCustomMessageListener:{NS}" in calls)

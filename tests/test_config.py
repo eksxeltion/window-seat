@@ -94,7 +94,8 @@ with sync_playwright() as p:
     rx = ctx.new_page(); rx.on("pageerror", lambda e: logs.append(str(e)))
     rx.route("**/iframe_api", lambda r: r.abort())
     rx.route("**/cast_receiver_framework.js", lambda r: r.fulfill(status=200, content_type="text/javascript", body=CAF))
-    rx.goto(base + "/receiver.html"); rx.evaluate("()=>localStorage.clear()")
+    rx.goto(base + "/receiver.html?strip=1")  # strip is hidden unless Debug mode; ?strip=1 shows it and still starts CAF
+    rx.evaluate("()=>localStorage.clear()")
     sheet(rx.route, CAMS); rx.reload(); rx.wait_for_timeout(2500)
     strip = lambda: rx.text_content("#debug-strip")
     check(f"TV strip shows its own sheet fetch: {strip()[:60]!r}", "list sheet 22/16" in strip())

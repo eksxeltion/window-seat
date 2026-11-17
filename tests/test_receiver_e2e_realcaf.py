@@ -21,7 +21,7 @@ def states(): return [d for ns, sid, d in fp.parsed() if ns == NS and isinstance
 with sync_playwright() as p:
     b = p.chromium.launch()
     pg = b.new_page(viewport={"width": 1920, "height": 1080})
-    pg.goto(url.rstrip("/") + "/receiver.html")  # no ?debug
+    pg.goto(url.rstrip("/") + "/receiver.html?strip=1")  # no ?debug; ?strip=1 shows the strip and still starts CAF
     if not fp.connected.wait(20):
         print("FAIL CAF never connected to the fake platform"); sys.exit(1)
     pg.wait_for_timeout(1500)
@@ -41,7 +41,7 @@ with sync_playwright() as p:
     m = re.search(r"rx (\d+)", strip)
     check("(c) getState reached the listener (strip rx >= 1)", bool(m) and int(m.group(1)) >= 1)
     st = states()
-    check("(c) state reply with build 2026-11-16.5", any(d.get("build") == "2026-11-16.5" for d in st))
+    check("(c) state reply with build 2026-11-16.6", any(d.get("build") == "2026-11-16.6" for d in st))
     check("(c) a state reply is addressed to sender-1", any(ns == NS and sid == "sender-1" and isinstance(d, dict) and d.get("type") == "state" for ns, sid, d in fp.parsed()))
     before = [d.get("camId") for d in states()]
     n_before = len(before)
