@@ -36,7 +36,7 @@ with sync_playwright() as p:
         clear(pg); pg.locator("#remote " + sel).tap(); pg.wait_for_timeout(150)
         check(f"ii: remote {t} goes to the TV", types(pg) == [t])
     check("ii: no local iframe after controls", pg.evaluate(YT) == 0)
-    check("debug line shows builds and states", re.search(r"Phone build 2026-11-16\.10 \| TV build \S+ \| cast CONNECTED \| session SESSION_STARTED", pg.text_content("#remote-debug")) is not None)
+    check("debug line shows builds and states", re.search(r"Phone build 2026-11-16\.11 \| TV build \S+ \| cast CONNECTED \| session SESSION_STARTED", pg.text_content("#remote-debug")) is not None)
     # (vi) keyboard and media keys go to the TV
     for key, t in [("n", "next"), ("p", "pin"), ("u", "mute"), ("MediaTrackNext", "next"), ("MediaTrackPrevious", "prev"), ("MediaPlayPause", "pause")]:
         clear(pg); pg.keyboard.press(key); pg.wait_for_timeout(150)
