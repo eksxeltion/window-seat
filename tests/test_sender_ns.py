@@ -29,8 +29,12 @@ with sync_playwright() as p:
     pg.evaluate("()=>__mockCast.fireSession('applicationmetadatachanged')")
     pg.wait_for_timeout(400)
     sent = [json.loads(m["data"])["type"] for m in pg.evaluate("()=>__mockCast.sent")]
+    check(f"a new session first asks for the TV state, once ({sent})", sent.count("getState") == 1 and not setup(sent))
+    pg.evaluate("()=>__mockCast.reply({type:'state',configured:false})")  # the probe reply: a fresh TV, so the phone pushes its choices
+    pg.wait_for_timeout(200)
+    sent = [json.loads(m["data"])["type"] for m in pg.evaluate("()=>__mockCast.sent")]
     print("sent after event:", sent)
-    check("exactly one getState after namespace appears", sent.count("getState") == 1)
+    check("one more getState after the push", sent.count("getState") == 2)
     check("exactly one mix and volume after namespace appears", sent.count("mix") == 1 and sent.count("volume") == 1)
     pg.evaluate("()=>{__mockCast.sent.length=0; __mockCast.fireSession('applicationstatuschanged')}")
     pg.wait_for_timeout(400)

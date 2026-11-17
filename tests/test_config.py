@@ -87,6 +87,8 @@ with sync_playwright() as p:
     pg.route("**/cast_sender.js*", lambda r: r.fulfill(status=200, content_type="text/javascript", body=SENDER))
     pg.reload(); pg.wait_for_timeout(3000)
     pg.evaluate("()=>__mockCast.start()"); pg.wait_for_timeout(300)
+    # A new session asks for the TV state first; after a fresh TV's reply the push starts with the list.
+    pg.evaluate("()=>{__mockCast.sent.length=0; __mockCast.reply({type:'state',configured:false})}"); pg.wait_for_timeout(200)
     msgs = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     check("on connect the phone sends the sheet list first", msgs and msgs[0]["type"] == "config" and len(msgs[0]["cams"]) == 23 and len(msgs[0]["mixes"]) == 16)
     check("remote lists show the sheet rows", pg.locator('#remote-cams [data-cam="TESTROW0001"]').count() == 1)

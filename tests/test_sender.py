@@ -20,6 +20,8 @@ with sync_playwright() as p:
     check("on connect, before any TV reply: local YouTube players destroyed", pg.evaluate(yt) == 0)
     check("on connect, before any TV reply: remote shown, page in casting mode", pg.is_visible("#remote") and pg.evaluate("()=>document.body.classList.contains('casting')"))
     check("Start does nothing while casting", pg.evaluate("()=>{__windowSeat.start(); return document.querySelectorAll('iframe[src*=youtube]').length}") == 0)
+    # A new session asks first; a fresh TV (configured false) gets this phone's choices (tests/test_join_running.py).
+    pg.evaluate("()=>__mockCast.reply({type:'state',configured:false})"); pg.wait_for_timeout(200)
     init=[json.loads(m['data']) for m in pg.evaluate("()=>__mockCast.sent")]
     print("connect messages:", init)
     check("connect sends cams filter", any(m['type']=='cams' and len(m['ids'])>0 for m in init))

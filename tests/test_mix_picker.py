@@ -259,6 +259,8 @@ with sync_playwright() as p:
     phone_mix = mix_id(pg)
     pg.evaluate("()=>__mockCast.start()")
     pg.wait_for_timeout(500)
+    pg.evaluate("()=>__mockCast.reply({type:'state',configured:false})")  # probe reply: a fresh TV gets the phone's choices
+    pg.wait_for_timeout(200)
     sent = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     types = [m["type"] for m in sent]
     sh = [m for m in sent if m["type"] == "shuffle"]

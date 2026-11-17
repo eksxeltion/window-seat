@@ -65,7 +65,7 @@ Computed by the wrapper at capture time (not `posthog.register`, which persists 
 | Property | Values | Notes |
 | --- | --- | --- |
 | `app` | `window-seat` | Identifies the app inside the shared "Eksxel" PostHog project. Required on every event. |
-| `build` | e.g. `2026-11-17.16` | `BUILD` from `js/build.js` or `js/receiver.js`. |
+| `build` | e.g. `2026-11-17.17` | `BUILD` from `js/build.js` or `js/receiver.js`. |
 | `surface` | `web`, `pwa`, `receiver` | `web` is a browser tab, `pwa` is the installed app (display-mode standalone), `receiver` is the TV page. The Android app adds `android`. The spec's single `web` is split into `web` and `pwa`. |
 | `device_class` | `phone`, `tablet`, `desktop`, `tv` | Coarse, from screen size and the existing TV detection. Receiver is always `tv`. |
 | `cast_state` | `none`, `connecting`, `connected` | Phone side, at capture time. Receiver is always `connected`. |
@@ -103,7 +103,7 @@ All names are snake_case. "Where" names the file and function. Each event fires 
 | `cast_connect_success` | `attempt_id` (if tapped), `trigger` (`tap`, `auto_join`, `adopted`), `ms_to_connect` (tap only) | `js/cast.js` `onSessionStarted`, once per session (guarded by a flag on the session object, like `__wsPushed`). Covers sessions started from Chrome's own Cast menu too (`adopted`). A tap stays open for 10 s after `requestSession` resolves, since CAF can run the session callback after the promise, so that success still counts as `tap` with its `attempt_id`. |
 | `cast_connect_fail` | `attempt_id`, `error_code` (raw CAF code: `cancel`, `timeout`, `session_error`, `receiver_unavailable`, `channel_error`, `extension_missing`, `api_not_initialized`, or `exception`) | `js/cast.js` `onCastTap` promise rejection only (not `recordAttempt` and SESSION_START_FAILED as well). Exception text is never sent. |
 | `cast_resume` | `trigger` (`auto_join`, `adopted`) | `js/cast.js` `onSessionStarted` with resumed true, once per session. Success of a resume is read from `cast_first_state` following it. |
-| `cast_first_state` | `ms_since_connect`, `resumed` | `js/cast.js` `onMessage`, first state message from the TV in a session. Phone clock only. |
+| `cast_first_state` | `ms_since_connect`, `resumed`, `joined_running` | `js/cast.js` `onMessage`, first state message from the TV in a session. Phone clock only. `joined_running` is true when a new (not resumed) session found the receiver already set up by a sender (state `configured: true`), so the phone adopted the TV's state instead of sending its own choices. |
 | `cast_channel_missing` | `ms_since_connect` | `js/cast.js`, once per session, when the namespace is still not listed 8 s after the session started (initial setup waits for the namespace, so this cannot rely on a command), or 4 s after a command with no reply. |
 | `cast_send_failed` | `code`, `type` | `js/cast.js` `send` failure path (not for each retry, only the final failure). |
 | `cast_no_reply` | `type` | `js/cast.js` `send`, when a command never gets a state reply. |
