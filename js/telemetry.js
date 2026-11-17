@@ -55,7 +55,7 @@ function writePref(on) {
   safe(() => localStorage.setItem(PREF_KEY, JSON.stringify(!!on)));
 }
 
-/** Remove every key PostHog keeps in this browser (its ID, session and opt-out flags). */
+/** Remove every key PostHog keeps in localStorage (its ID and session), and its session keys in sessionStorage. */
 function removePosthogKeys() {
   safe(() => {
     const doomed = [];
@@ -65,10 +65,11 @@ function removePosthogKeys() {
     }
     doomed.forEach((k) => localStorage.removeItem(k));
   });
+  // sessionStorage: PostHog's session keys go too; its opt-out flag stays for this tab (it holds no ID).
   safe(() => {
     for (let i = sessionStorage.length - 1; i >= 0; i--) {
       const k = sessionStorage.key(i);
-      if (k && (k.startsWith("ph_") || k.startsWith("__ph_"))) sessionStorage.removeItem(k);
+      if (k && k.startsWith("ph_")) sessionStorage.removeItem(k);
     }
   });
 }
@@ -209,7 +210,8 @@ function posthogConfig() {
     save_referrer: false,
     save_campaign_params: false,
     persistence: "localStorage",
-    opt_out_capturing_persistence_type: "localStorage",
+    // The opt-out flag lives in sessionStorage, so turning off leaves no PostHog key in localStorage.
+    opt_out_capturing_persistence_type: "sessionStorage",
     before_send: beforeSend,
   };
   if (t.receiver) {
