@@ -505,6 +505,35 @@ function turnOn() {
   notify();
 }
 
+/**
+ * Phone: the switch is one setting for every open copy of the app (tabs, the installed window). Another copy
+ * changing it fires a storage event here; the saved value is also re-read whenever this page comes back into view,
+ * in case an event was missed. Off applies at once (and the subscribers tell this page's TV). On does too, but
+ * without a telemetry_enabled event: the copy where the user flipped the switch sends that one.
+ */
+function syncPref() {
+  try {
+    if (t.receiver || t.forcedOff) return;
+    const pref = readPref();
+    if (pref === null || pref === t.on) return; // no saved choice (cleared storage): leave this page as it is
+    if (pref) turnOn();
+    else turnOff();
+  } catch {
+    /* never into app code */
+  }
+}
+
+function watchPref() {
+  safe(() => {
+    window.addEventListener("storage", (e) => {
+      if (e.key === PREF_KEY || e.key === null) syncPref();
+    });
+    document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && syncPref());
+    window.addEventListener("pageshow", syncPref);
+    window.addEventListener("focus", syncPref);
+  });
+}
+
 /* ---------------------------------------------------------------- early errors */
 
 function onEarlyError(e) {
@@ -551,6 +580,7 @@ export function initTelemetry(opts = {}) {
       t.on = !t.forcedOff && (pref === null ? DEFAULT_ON : pref);
       if (t.on) loadSdks();
       else removePosthogKeys(); // off: no ID kept from an earlier run
+      watchPref();
     }
   } catch {
     t.on = false;

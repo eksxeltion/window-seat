@@ -5,7 +5,7 @@ import { initCast, castConfigured, sendConfigToTv, sendCamsToTv, isCasting, sync
 import { initDebug, isDebugOn } from "./debug.js";
 import { BUILD } from "./build.js";
 import { refreshFromSheet, listLabel, listInfo } from "./config.js";
-import { initTelemetry, capture, captureError, setTelemetryEnabled, isTelemetryOn, telemetryForcedOff } from "./telemetry.js";
+import { initTelemetry, capture, captureError, setTelemetryEnabled, isTelemetryOn, telemetryForcedOff, onTelemetryChange } from "./telemetry.js";
 import { localTime, camLocalTime, awakeCams, placeLine, partOfDay, isSleeping, rotationPool, DEFAULT_TIME_RULES } from "./localtime.js";
 
 /* ---------------------------------------------------------------- config */
@@ -1912,6 +1912,10 @@ function setupTelemetrySwitch() {
   toggle.addEventListener("change", () => {
     const on = setTelemetryEnabled(toggle.checked);
     toggle.checked = on;
+  });
+  // Another open copy of the app can flip the setting: the switch here follows it.
+  onTelemetryChange(() => {
+    toggle.checked = !forced && isTelemetryOn();
   });
 }
 
