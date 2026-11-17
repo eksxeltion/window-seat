@@ -41,7 +41,10 @@ let pauseEndTimer = 0; // safety net: end the phone's side if the session has no
 const PAUSE_END_SAFETY_MS = 5000;
 let stopRequested = false; // the user tapped Stop casting on this phone
 let pauseEndAt = 0; // phone clock time the TV's pause timer is due to end (from pauseEndsInMs), 0 when unknown or not running
-const PAUSE_END_TOLERANCE_MS = 2000; // covers the TV's stop delay and clock skew
+// pauseEndAt is the phone's receive time plus the TV's relative pauseEndsInMs, so there is no cross-device skew and
+// message latency only makes it later than the TV's real end; the TV then stops about 600 ms after its end. A real
+// timeout end therefore lands at or after pauseEndAt, and this early margin only absorbs jitter in that latency.
+const PAUSE_END_TOLERANCE_MS = 500;
 
 // Stage 2 failures: the TV app launched, but a command could not be delivered to it.
 const SEND_ERRORS = {
@@ -445,12 +448,14 @@ function clearPauseEnd(why) {
 
 function leaveRemote() {
   if (!remoteOn && !session) return;
-  // A session that ends while the TV's warning was up (and not by Stop casting) ended by the timeout only if the
-  // TV's timer had really run out (the phone slept through the pauseTimeout message). Earlier, it is a disconnect.
+  // An unasked end while paused is the timeout only if the TV's timer had really run out, whether or not the warning
+  // reached the phone (it may have slept through the warning and the pauseTimeout message). Earlier, it is a
+  // disconnect. Date.now(), not performance.now(): the monotonic clock stops while a phone sleeps, which is this case.
   const timerDone = !!pauseEndAt && Date.now() >= pauseEndAt - PAUSE_END_TOLERANCE_MS;
   const warningUp = !!(remote.paused && remote.pauseWarning);
-  const byTimeout = pauseEnded || (!stopRequested && warningUp && timerDone);
-  const endReason = stopRequested ? "stop" : byTimeout ? "pause_timeout" : "disconnect";
+  const byTimeout = pauseEnded || (!stopRequested && !!remote.paused && timerDone);
+  // pauseTimeout wins over a later Stop casting tap: the TV was already ending the session.
+  const endReason = byTimeout ? "pause_timeout" : stopRequested ? "stop" : "disconnect";
   logEvent(`session ended: ${endReason}${warningUp ? " (pause warning was up)" : ""}`);
   // Telemetry, read before the flags reset, and only if a session actually started.
   if (session && session.__wsTelConnectAt && !session.__wsTelEnded) {

@@ -271,13 +271,14 @@ with sync_playwright() as p:
     END_REASONS = ("()=>[...__telemetry.queue().filter(e=>e.name==='cast_session_end').map(e=>e.props.end_reason),"
                    " ...__telemetry.sent().filter(e=>e.event==='cast_session_end').map(e=>e.properties.end_reason)]")
 
-    def end_case(label, setup, reason, toast):
+    def end_case(label, setup, reason, toast, tv_ends=True):
         pg = phone(not_bot=True)
         pg.evaluate("()=>__mockCast.start()")
         pg.wait_for_timeout(400)
         st = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.16', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
         setup(pg, st)
-        pg.evaluate("()=>cast.framework.CastContext.getInstance().endCurrentSession()")  # the session ends, not asked by this phone
+        if tv_ends:
+            pg.evaluate("()=>cast.framework.CastContext.getInstance().endCurrentSession()")  # the session ends, not asked by this phone
         pg.wait_for_timeout(400)
         check(f"{label}: idle (remote hidden, Cast pill idle, Start screen)", not pg.is_visible("#remote") and pg.evaluate("()=>__windowSeat.isCasting()") is False
               and pg.is_visible("#start-btn") and pg.evaluate("()=>[...document.querySelectorAll('[data-cast]')].every(b=>b.dataset.state==='idle')"))
@@ -292,11 +293,19 @@ with sync_playwright() as p:
 
     # (a) The session drops during the warning, well before the TV's end time, with no pauseTimeout: a disconnect.
     end_case("drop in warning", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=300000), pg.wait_for_timeout(100)), "disconnect", False)
+    # (a2) Same, but 1.5 s before the TV's end time (more than the 500 ms tolerance): still a disconnect.
+    end_case("drop just before end", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=3000), pg.wait_for_timeout(1500)), "disconnect", False)
     # (b) The TV's end time passes, then the session ends without pauseTimeout reaching the phone (it slept): a timeout.
-    end_case("slept through", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=500), pg.wait_for_timeout(700)), "pause_timeout", True)
+    end_case("slept through", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=1500), pg.wait_for_timeout(1700)), "pause_timeout", True)
+    # (b2) The phone slept before the warning went out: it only knows the running timer's end time. Past it: a timeout.
+    end_case("slept before warning", lambda pg, st: (st(paused=True, pauseWarning=False, pauseEndsInMs=1500), pg.wait_for_timeout(1700)), "pause_timeout", True)
     # (c) pauseTimeout arrives, then the TV ends the session: a timeout.
     end_case("pauseTimeout then end", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=60000),
                                                       pg.evaluate("()=>__mockCast.reply({type:'pauseTimeout'})"), pg.wait_for_timeout(200)), "pause_timeout", True)
+    # (d) pauseTimeout arrives, then Stop casting is tapped before the TV stops: the timeout wins (reason and toast agree).
+    end_case("pauseTimeout then Stop", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=60000),
+                                                       pg.evaluate("()=>__mockCast.reply({type:'pauseTimeout'})"), pg.wait_for_timeout(200),
+                                                       pg.locator('#remote [data-cmd="stop"]').tap()), "pause_timeout", True, tv_ends=False)
 
     # ------------------------------------------------------------ phone and TV together (mock sender, mocked receiver context)
     # Messages are relayed both ways; the receiver's stop() ends the phone's mock session, like the real TV.
