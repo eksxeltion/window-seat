@@ -339,6 +339,155 @@ with sync_playwright() as p:
     check("receiver: and sends nothing", not vendor_loads(rq) and not host_hits(rq))
     rx.context.close()
 
+    # ---------------------------------------------------------------- 7. A verification phone joining a production receiver
+    rx, rq = open_receiver("?debug=1&telemetry=1")
+    msg(rx, {"type": "telemetry", "on": True, "installId": "phone-install-1", "test": False, "environment": "production"}, "s1")
+    check("env: receiver on for a production phone", wait_until(rx, "()=>__telemetry.state().sentry==='ready' && __telemetry.state().posthog==='ready'", 10000))
+    check("env: production while only a production phone spoke", rx.evaluate("()=>__telemetry.superProps().environment") == "production")
+    msg(rx, {"type": "telemetry", "on": True, "installId": "phone-install-2", "test": True, "environment": "verification"}, "s2")
+    sp = rx.evaluate("()=>__telemetry.superProps()")
+    check(f"env: a test phone joining makes it a verification session ({sp['environment']}, {sp['test']})", sp["environment"] == "verification" and sp["test"] is True)
+    rx.evaluate("()=>{setTimeout(()=>{throw new Error('telemetry test error on the TV')},0)}")
+    check("env: the TV error went to Sentry", wait_until(rx, "()=>__telemetry.errorsSent().some(e=>e.value.includes('on the TV'))", 5000))
+    e7 = [e for e in rx.evaluate("()=>__telemetry.errorsSent()") if "on the TV" in e["value"]][0]
+    check(f"env: test errors are never in production ({e7['environment']}, test {e7['tags']['test']})", e7["environment"] == "verification" and e7["tags"]["test"] == "true")
+    rx.context.close()
+
+    # ---------------------------------------------------------------- 8. Receiver stop waits for PostHog to send what it queued
+    ctx = b.new_context(user_agent=UA, viewport={"width": 1920, "height": 1080})
+    ctx.add_init_script(NOT_A_BOT)
+    held = []
+    ctx.route("**/js/vendor/posthog-*", lambda r: held.append(r))  # PostHog still loading when the stop comes
+    rx = ctx.new_page()
+    rx.on("pageerror", lambda e: page_errors.append("receiver: " + str(e)))
+    rx.route("**/iframe_api", lambda r: r.abort())
+    rx.route(re.compile(r"docs\.google\.com"), lambda r: r.abort())
+    rx.goto(f"{base}/receiver.html?debug=1&telemetry=1")
+    rx.wait_for_timeout(1000)
+    # A Cast context that records each stop and what PostHog had been given by then.
+    rx.evaluate("""()=>{window.__stops=[];__receiver.useContext({
+      stop(){ window.__stops.push(__telemetry.sent().map(e=>e.event)); },
+      sendCustomMessage(){}, getSenders(){ return [{id:'s1'}]; }, setApplicationState(){}, getApplicationData(){ return null; },
+    })}""")
+    msg(rx, {"type": "telemetry", "on": True, "installId": "phone-install-1", "test": True, "environment": "verification"}, "s1")
+    wait_until(rx, "()=>__telemetry.state().posthog==='loading'", 8000)
+    rx.evaluate("()=>__receiver.send({type:'stop'})")
+    rx.evaluate("()=>__receiver.send({type:'stop'})")
+    rx.wait_for_timeout(500)
+    check(f"stop: not stopped while PostHog still holds the queued receiver_stop ({rx.evaluate('()=>__stops')})", rx.evaluate("()=>__stops.length") == 0)
+    check("stop: one receiver_stop queued for two stop commands", [q["name"] for q in rx.evaluate("()=>__telemetry.queue()")].count("receiver_stop") == 1)
+    for r in held:
+        r.continue_()
+    ctx.unroute("**/js/vendor/posthog-*")
+    check("stop: stopped once PostHog had sent the queue", wait_until(rx, "()=>__stops.length>=1", 5000))
+    rx.wait_for_timeout(1500)
+    stops = rx.evaluate("()=>__stops")
+    check(f"stop: exactly one context.stop() ({len(stops)})", len(stops) == 1)
+    check(f"stop: receiver_stop went out before the stop, once ({stops[:1]})", stops and stops[0].count("receiver_stop") == 1)
+    check("stop: no second receiver_stop afterwards", [e["event"] for e in rx.evaluate("()=>__telemetry.sent()")].count("receiver_stop") == 1)
+    ctx.close()
+
+    # ---------------------------------------------------------------- 9. A failed telemetry send to the TV is not marked sent
+    pg, reqs = open_phone(b, query="?telemetry_test=1")
+    wait_until(pg, "()=>__telemetry.state().posthog==='ready'", 10000)
+    pg.evaluate("()=>__mockCast.start()")
+    tel_msgs = lambda: [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent") if json.loads(m["data"]).get("type") == "telemetry"]
+    check("tv consent: on sent at connect", wait_until(pg, "()=>__mockCast.sent.some(m=>JSON.parse(m.data).type==='telemetry')", 3000) and tel_msgs()[-1]["on"] is True)
+    status_before = pg.text_content("#remote-status")
+    pg.evaluate("()=>{window.__mockFail={code:'channel_error'}; const t=document.getElementById('telemetry-toggle');t.checked=false;t.dispatchEvent(new Event('change'))}")
+    pg.wait_for_timeout(300)
+    offs = [m for m in tel_msgs() if m["on"] is False]
+    check(f"tv consent: off attempted ({len(offs)})", len(offs) == 1)
+    check(f"tv consent: a telemetry failure leaves the Cast status and toast alone ({pg.text_content('#remote-status')!r}, {pg.text_content('#toast')!r})",
+          pg.text_content("#remote-status") == status_before and "Send failed" not in (pg.text_content("#toast") or "") and "Send failed" not in (pg.text_content(".cast-status") or ""))
+    check("tv consent: failed off retried", wait_until(pg, "()=>__mockCast.sent.filter(m=>JSON.parse(m.data).type==='telemetry' && JSON.parse(m.data).on===false).length>=2", 2500))
+    pg.evaluate("()=>{window.__mockFail=null}")
+    n_off = len([m for m in tel_msgs() if m["on"] is False])
+    pg.evaluate("()=>__mockCast.start()")  # the same session object again (as on resume)
+    pg.wait_for_timeout(300)
+    check(f"tv consent: the same session sends the undelivered off again ({n_off} before)", len([m for m in tel_msgs() if m["on"] is False]) == n_off + 1)
+    pg.wait_for_timeout(9000)  # past every retry
+    n_off = len([m for m in tel_msgs() if m["on"] is False])
+    pg.evaluate("()=>__mockCast.start()")
+    pg.evaluate("()=>__mockCast.fireSession('applicationstatuschanged')")
+    pg.wait_for_timeout(500)
+    check("tv consent: once delivered, it is not sent again", len([m for m in tel_msgs() if m["on"] is False]) == n_off)
+    pg.context.close()
+
+    # ---------------------------------------------------------------- 10. Off in one open copy turns the others off
+    pg, reqs = open_phone(b, query="?telemetry_test=1")
+    other = pg.context.new_page()
+    other.on("pageerror", lambda e: page_errors.append("other tab: " + str(e)) if not expected_error(e) else None)
+    other.route("**/cast_sender.js*", lambda r: r.fulfill(status=200, content_type="text/javascript", body=MOCK_SENDER))
+    other.route("**/iframe_api", lambda r: r.fulfill(status=200, content_type="text/javascript", body=FAKE_YT))
+    other.route(re.compile(r"docs\.google\.com"), lambda r: r.abort())
+    other.goto(f"{base}/?telemetry_test=1")
+    check("tabs: both copies on", wait_until(pg, "()=>__telemetry.state().posthog==='ready'", 10000) and wait_until(other, "()=>__telemetry.state().posthog==='ready'", 10000))
+    other.evaluate("()=>__mockCast.start()")
+    wait_until(other, "()=>__mockCast.sent.some(m=>JSON.parse(m.data).type==='telemetry' && JSON.parse(m.data).on===true)", 3000)
+    pg.evaluate("()=>{const t=document.getElementById('telemetry-toggle');t.checked=false;t.dispatchEvent(new Event('change'))}")
+    check("tabs: the other copy turns off", wait_until(other, "()=>__telemetry.state().on===false", 3000))
+    check("tabs: its switch follows, and its PostHog is opted out", other.evaluate("()=>!document.getElementById('telemetry-toggle').checked && posthog.has_opted_out_capturing()"))
+    check("tabs: its TV is told off", wait_until(other, "()=>__mockCast.sent.some(m=>JSON.parse(m.data).type==='telemetry' && JSON.parse(m.data).on===false)", 3000))
+    n_hits, n_sent = len(host_hits(reqs)), len(other.evaluate("()=>__telemetry.sent()"))
+    other.evaluate("()=>__mockCast.reply({type:'state', build:'%s', paused:false})" % BUILD)
+    other.locator("#remote [data-cmd='next']").click()
+    other.evaluate("()=>{setTimeout(()=>{throw new Error('telemetry test error in the other tab')},0)}")
+    other.wait_for_timeout(4000)
+    check(f"tabs: the other copy sends nothing after off ({host_hits(reqs)[n_hits:]})", len(host_hits(reqs)) == n_hits and len(other.evaluate("()=>__telemetry.sent()")) == n_sent)
+    pg.evaluate("()=>{const t=document.getElementById('telemetry-toggle');t.checked=true;t.dispatchEvent(new Event('change'))}")
+    check("tabs: on again follows too", wait_until(other, "()=>__telemetry.state().on===true && document.getElementById('telemetry-toggle').checked", 3000))
+    other.wait_for_timeout(1500)
+    check("tabs: only the copy that was switched sends telemetry_enabled", not any(e["event"] == "telemetry_enabled" for e in other.evaluate("()=>__telemetry.sent()")))
+    pg.context.close()
+
+    # ---------------------------------------------------------------- 11. Cast funnel: late session callback, a channel that never opens
+    pg, reqs = open_phone(b, query="?telemetry_test=1", init="window.__mockNs=[];")
+    wait_until(pg, "()=>__telemetry.state().posthog==='ready'", 10000)
+    wait_until(pg, "()=>document.querySelector('[data-cast]') && !document.querySelector('[data-cast]').hidden && __windowSeat && true", 3000)
+    pg.wait_for_timeout(500)
+    # requestSession resolves first; the session callback comes 300 ms later.
+    pg.evaluate("()=>{const c=cast.framework.CastContext.getInstance(); c.requestSession=()=>{setTimeout(()=>__mockCast.start(),300); return Promise.resolve();}; document.querySelector('[data-cast]').click();}")
+    check("funnel: success counted", wait_until(pg, "()=>__telemetry.sent().some(e=>e.event==='cast_connect_success')", 5000))
+    sent = pg.evaluate("()=>__telemetry.sent()")
+    att = [e["properties"] for e in sent if e["event"] == "cast_connect_attempt"]
+    ok = [e["properties"] for e in sent if e["event"] == "cast_connect_success"]
+    check(f"funnel: a tap whose promise resolved first is still a tap with its attempt_id ({ok})", att and ok and ok[0]["trigger"] == "tap" and ok[0].get("attempt_id") == att[0]["attempt_id"] and isinstance(ok[0].get("ms_to_connect"), int))
+    check("funnel: and not a resume", not any(e["event"] == "cast_resume" for e in sent))
+    check("funnel: a channel that never opens is reported without any command", wait_until(pg, "()=>__telemetry.sent().some(e=>e.event==='cast_channel_missing')", 11000))
+    pg.wait_for_timeout(5000)
+    check("funnel: once per session", [e["event"] for e in pg.evaluate("()=>__telemetry.sent()")].count("cast_channel_missing") == 1)
+    pg.context.close()
+
+    # ---------------------------------------------------------------- 12. Cam pool: one command per action, nothing across off and on
+    pg, reqs = open_phone(b, query="?telemetry_test=1")
+    wait_until(pg, "()=>__telemetry.state().posthog==='ready'", 10000)
+    pg.evaluate("()=>document.querySelector('[data-action=open-cams]').click()")
+    pg.wait_for_timeout(300)
+    toggle_cam = lambda i: pg.evaluate(f"()=>document.querySelectorAll('[data-action=toggle-cam]')[{i}].click()")
+    set_tel = lambda on: pg.evaluate("(on)=>{const t=document.getElementById('telemetry-toggle');t.checked=on;t.dispatchEvent(new Event('change'))}", on)
+    toggle_cam(0)
+    toggle_cam(1)
+    pg.wait_for_timeout(3000)
+    names = [e["event"] for e in pg.evaluate("()=>__telemetry.sent()")]
+    cams_cmds = [e["properties"] for e in pg.evaluate("()=>__telemetry.sent()") if e["event"] == "command" and e["properties"].get("type") == "cams"]
+    check(f"pool: one command per action, one settled cam_pool_changed ({len(cams_cmds)}, {names.count('cam_pool_changed')})", len(cams_cmds) == 2 and names.count("cam_pool_changed") == 1 and all(c["mode"] == "local" for c in cams_cmds))
+    n_sent = len(pg.evaluate("()=>__telemetry.sent()"))
+    set_tel(False)
+    toggle_cam(2)  # changed while off
+    set_tel(True)
+    pg.wait_for_timeout(3000)
+    after = [e["event"] for e in pg.evaluate("()=>__telemetry.sent()")[n_sent:]]
+    check(f"pool: a change made while off is never sent after turning on ({after})", "cam_pool_changed" not in after and "command" not in after)
+    n_sent = len(pg.evaluate("()=>__telemetry.sent()"))
+    toggle_cam(3)
+    set_tel(False)
+    set_tel(True)
+    pg.wait_for_timeout(3000)
+    after = [e["event"] for e in pg.evaluate("()=>__telemetry.sent()")[n_sent:]]
+    check(f"pool: an off and on cycle drops the pending change ({after})", "cam_pool_changed" not in after)
+    pg.context.close()
+
     b.close()
 
 real = [h["url"] for h in telemetry_guard.hits if not TELEMETRY_HOST.match(h["url"])]
