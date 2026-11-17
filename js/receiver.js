@@ -9,7 +9,7 @@ import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 
-export const BUILD = "2026-11-16.11"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.12"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -23,11 +23,19 @@ const RETRY_ALL_FAILED_MS = 60000;
 const FLASH_MS = 1800; // on-TV confirmation of a phone command
 const PIN_FLASH_MS = 5000; // the pin-on toast stays longer so it can be read from the couch
 const LOWER_THIRD_MS = 10000; // the lower third shows this long after a cam loads, then fades (800ms) to a quiet TV
+const PAUSE_WARN_MS_DEFAULT = 25 * 60 * 1000; // paused this long while casting: warn the phone and the TV pill
+const PAUSE_END_MS_DEFAULT = 30 * 60 * 1000; // paused this long while casting: end the session, the TV goes home
+const PAUSE_STOP_DELAY_MS = 600; // the pauseTimeout message goes out first, then the receiver stops
 const FONTS_URL = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Plus+Jakarta+Sans:wght@500;600&display=swap";
 
 const PARAMS = new URLSearchParams(location.search);
 const DEBUG = PARAMS.get("debug") === "1";
 const STRIP_FORCED = DEBUG || PARAMS.get("strip") === "1"; // strip stays on after a session ends
+/* Test override for the pause timeout: ?pauseWarnMs=...&pauseEndMs=... (positive numbers), or __receiver.setPauseTimeout. */
+function msParam(name, fallback) {
+  const n = Number(PARAMS.get(name));
+  return PARAMS.has(name) && Number.isFinite(n) && n > 0 ? n : fallback;
+}
 const $ = (id) => document.getElementById(id);
 const quietly = (fn) => {
   try {
@@ -84,9 +92,12 @@ function snapshot() {
     skipSleeping: s.skipSleeping,
     onlyDaytime: s.onlyDaytime,
     failedCams: Array.from(s.failed),
+    // Pause timeout (receiver owned): true from the warning point until resume, Keep paused or another command.
+    pauseWarning: pt.phase === "warning",
+    pauseEndsInMs: pt.phase === "running" || pt.phase === "warning" ? Math.max(0, pt.endAt - Date.now()) : null,
     list: { source: listInfo.source, cams: listInfo.cams, mixes: listInfo.mixes },
     // Diagnostics mirrored on the phone's debug panel (small, always sent).
-    debug: { strip: stripOn, caf: dbg.caf, cafError: dbg.cafError, readyNs: dbg.readyNs, rx: dbg.rx, tx: dbg.tx, appState: dbg.appState, senders: dbg.senders, error: dbg.error },
+    debug: { strip: stripOn, pause: pauseText(), caf: dbg.caf, cafError: dbg.cafError, readyNs: dbg.readyNs, rx: dbg.rx, tx: dbg.tx, appState: dbg.appState, senders: dbg.senders, error: dbg.error },
   };
 }
 
@@ -131,7 +142,7 @@ function renderStrip() {
     `build ${BUILD} | list ${listInfo.source} ${listInfo.cams}/${listInfo.mixes}`,
     `${caf} | listener ${dbg.listener} | senders ${dbg.senders} | ns windowseat STRING | ready-ns ${dbg.readyNs} | appstate ${dbg.appState}`,
     `rx ${dbg.rx} | tx ${dbg.tx} | last in: ${dbg.lastIn} | last reply: ${out}`,
-    `cam ${s.camId || "-"} | mix ${s.mixId || "-"}`,
+    `cam ${s.camId || "-"} | mix ${s.mixId || "-"} | pause timer ${pauseText()}`,
   ];
   if (ev) lines.push(`ev ${ev.t} ${ev.text}${ev.n ? ` x${ev.n}` : ""}`);
   if (dbg.error) lines.push(`error: ${dbg.error}`);
@@ -162,6 +173,19 @@ function reply(senderId) {
 
 function broadcast() {
   reply(undefined);
+}
+
+/* One extra message (not the state) to every sender, with the same guards as a broadcast. */
+function sendJson(obj) {
+  if (!context || !cafStarted) return;
+  if (dbg.caf !== "ready" && !injected) return;
+  try {
+    context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify(obj));
+    dbg.tx++;
+    castEvent(`tx ${obj.type} ok`);
+  } catch (e) {
+    castEvent(`tx ${obj.type} FAILED ${String((e && e.message) || e).slice(0, 60)}`);
+  }
 }
 
 /* Small on-TV confirmation for every phone command, so a tap is visibly received. */
@@ -203,6 +227,98 @@ function showLowerThird() {
 function showPausedPill(on) {
   const el = $("paused-pill");
   if (el) el.hidden = !on;
+  const closing = $("paused-closing");
+  // Emptied (not just hidden) so the pill reads exactly "Paused" until the warning point.
+  if (closing) closing.textContent = on && pt.phase === "warning" ? "Closing in 5 minutes" : "";
+}
+
+/* ---------------------------------------------------------------- pause timeout */
+
+// A paused Cast session rests after 30 minutes: warning at 25, then the receiver stops so the TV goes home.
+// The receiver owns the timer, so it runs even while the phone sleeps. Resume or the stop command cancels it;
+// a phone command while paused (and Keep paused) restarts it. A sender leaving does not cancel it, so a TV
+// paused and forgotten still rests.
+const pt = {
+  warnMs: msParam("pauseWarnMs", PAUSE_WARN_MS_DEFAULT),
+  endMs: msParam("pauseEndMs", PAUSE_END_MS_DEFAULT),
+  phase: "off", // off | running | warning | ended
+  startedAt: 0,
+  warnAt: 0,
+  endAt: 0,
+  restarts: 0,
+  stops: 0, // receiver stops requested by the timeout (tests)
+};
+let ptWarnTimer = 0;
+let ptEndTimer = 0;
+
+function mmss(ms) {
+  const sec = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+}
+function pauseText() {
+  if (pt.phase === "running" || pt.phase === "warning") return `${pt.phase} ${mmss(pt.endAt - Date.now())}`;
+  return pt.phase;
+}
+
+function clearPauseTimers() {
+  clearTimeout(ptWarnTimer);
+  clearTimeout(ptEndTimer);
+}
+
+/** Start (or restart) the full timer. Only while the feed is paused. */
+function startPauseTimer(why) {
+  if (!s.paused) return;
+  clearPauseTimers();
+  const now = Date.now();
+  if (pt.phase !== "off") pt.restarts++;
+  pt.phase = "running";
+  pt.startedAt = now;
+  pt.warnAt = now + Math.min(pt.warnMs, pt.endMs);
+  pt.endAt = now + pt.endMs;
+  ptWarnTimer = setTimeout(pauseWarn, pt.warnAt - now);
+  ptEndTimer = setTimeout(pauseEnd, pt.endAt - now);
+  note("pauseTimer", { action: "start", why, warnMs: pt.warnMs, endMs: pt.endMs });
+  showPausedPill(true);
+  renderStrip();
+}
+
+function cancelPauseTimer(why) {
+  if (pt.phase === "off") return;
+  clearPauseTimers();
+  pt.phase = "off";
+  note("pauseTimer", { action: "cancel", why });
+  showPausedPill(s.paused);
+  renderStrip();
+}
+
+function pauseWarn() {
+  if (!s.paused || pt.phase !== "running") return;
+  pt.phase = "warning";
+  note("pauseTimer", { action: "warn" });
+  castEvent("pause warning");
+  showPausedPill(true);
+  renderStrip();
+  broadcast(); // the phone shows the warning from pauseWarning in the state
+}
+
+/* Stop the receiver so the TV returns to its home screen. Guarded: the debug page has no CAF. */
+function stopReceiver() {
+  const ctx = context || quietly(() => window.cast.framework.CastReceiverContext.getInstance());
+  if (ctx && typeof ctx.stop === "function") quietly(() => ctx.stop());
+}
+
+function pauseEnd() {
+  if (!s.paused || (pt.phase !== "running" && pt.phase !== "warning")) return;
+  clearPauseTimers();
+  pt.phase = "ended";
+  pt.stops++;
+  note("pauseTimer", { action: "end" });
+  castEvent("pause timeout: stopping");
+  // Tell the phone first (it goes idle and explains why), then stop the session.
+  sendJson({ type: "pauseTimeout" });
+  if (!STRIP_FORCED) stripOn = false;
+  renderStrip();
+  setTimeout(stopReceiver, PAUSE_STOP_DELAY_MS);
 }
 
 /* ---------------------------------------------------------------- cam */
@@ -555,6 +671,8 @@ function setPaused(on, { music = true } = {}) {
     stall = null;
     if (camReady && s.camId && !pending) camToLiveEdge();
   }
+  if (s.paused) startPauseTimer("pause");
+  else cancelPauseTimer("resume");
   showPausedPill(s.paused);
   note("pause", { value: s.paused });
   return true;
@@ -568,11 +686,16 @@ export function parseCommand(raw) {
   return cmd && typeof cmd === "object" && typeof cmd.type === "string" ? cmd : null;
 }
 
+const RESTARTS_PAUSE_TIMER = new Set(["next", "prev", "pin", "mix", "nextMix", "prevMix", "volume", "mute", "cam", "cams", "interval", "shuffle", "keepPaused"]);
+
 function handle(raw) {
   const cmd = parseCommand(raw);
   if (!cmd) return;
   note("command", cmd);
   const quiet = cmd.silent === true; // setup messages sent on connect: no on-TV flash
+  // A phone command while paused restarts the pause timeout (setup messages sent on connect do not,
+  // so a phone reconnecting during the warning still sees it). Commands that resume cancel it instead.
+  if (s.paused && (RESTARTS_PAUSE_TIMER.has(cmd.type) && (!quiet || cmd.type === "cams"))) startPauseTimer(cmd.type);
   switch (cmd.type) {
     case "next":
     case "prev": {
@@ -650,8 +773,12 @@ function handle(raw) {
         if (!quiet) flash(camById(cmd.id).title);
       }
       break;
+    case "keepPaused":
+      // "Keep paused" on the phone: the full timer again, still paused (restarted above). Never resumes.
+      break;
     case "stop":
       // The only way to end the receiver: an explicit command from the remote.
+      cancelPauseTimer("stop");
       if (!STRIP_FORCED) stripOn = false;
       if (context) quietly(() => context.stop());
       break;
@@ -981,6 +1108,13 @@ if (DEBUG) {
       },
       // Test probe: ms left on the rotation clock (the frozen value while paused).
       rotationRemaining: () => (s.paused ? pausedRemaining : nextSwapAt - Date.now()),
+      // Pause timeout: current timer state, and an override of the durations (applies to the next start).
+      pauseTimer: () => ({ ...pt, remainingMs: pt.phase === "running" || pt.phase === "warning" ? Math.max(0, pt.endAt - Date.now()) : null }),
+      setPauseTimeout: ({ warnMs, endMs } = {}) => {
+        if (Number.isFinite(warnMs) && warnMs > 0) pt.warnMs = warnMs;
+        if (Number.isFinite(endMs) && endMs > 0) pt.endMs = endMs;
+        return { warnMs: pt.warnMs, endMs: pt.endMs };
+      },
     },
   });
 }
