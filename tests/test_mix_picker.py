@@ -73,8 +73,14 @@ def music_loads(pg):
 
 
 def start(pg):
+    wait_until(pg, "()=>window.__windowSeat && window.__yt && __yt.music()", 8000)
     pg.click("#start-btn")
-    return wait_until(pg, "()=>__windowSeat.currentCamId() && __yt.music() && __yt.music().state===1", 8000)
+    ok = wait_until(pg, "()=>__windowSeat.currentCamId() && __yt.music() && __yt.music().state===1", 15000)
+    if not ok:
+        print("  start diagnostics:", pg.evaluate("""()=>({started:__windowSeat.state.started, api:__windowSeat.state.apiReady,
+            cam:__windowSeat.currentCamId(), pending:JSON.stringify(__windowSeat.state.pending), music:__yt.music()&&__yt.music().state,
+            mcalls:__yt.music()&&__yt.music().calls.map(c=>c[0]).join(',')})"""))
+    return ok
 
 
 def open_mix(pg, opener="#bar [data-action=open-music]"):
