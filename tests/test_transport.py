@@ -297,6 +297,32 @@ with sync_playwright() as p:
     check("tv: music resumed without reloading the mix", ystate(rx, "music") == 1 and calls(rx, "music").count("loadVideoById") == n_mload)
     check("tv: cam muted after resume", rx.evaluate("()=>__receiver.cam().muted===true && __receiver.cam().vol===0"))
 
+    # A repeated resume (Cast retry after a lost ack) is a no-op: no mix reload, no second seek.
+    def snap():
+        return rx.evaluate("()=>({mix: __receiver.state.mixId, mvid: __yt.music().vid, mt: __yt.music().getCurrentTime(), ct: __yt.cam().getCurrentTime(), cvid: __yt.cam().vid})")
+    rx.evaluate("()=>{__yt.cam().time=4321; __yt.music().time=777}")
+    for repeat in ({"type": "pause", "value": False}, {"type": "playMusic", "value": True}):
+        s0, cb, mb = snap(), len(calls(rx, "cam")), len(calls(rx, "music"))
+        send(repeat)
+        rx.wait_for_timeout(300)
+        cnew, mnew = calls(rx, "cam")[cb:], calls(rx, "music")[mb:]
+        tag = f"{repeat['type']} {repeat['value']}"
+        check(f"tv: repeated resume ({tag}) does not reload the mix ({mnew})", "loadVideoById" not in mnew and "playVideo" not in mnew)
+        check(f"tv: repeated resume ({tag}) does not seek the cam again ({cnew})", "seekTo" not in cnew and "playVideo" not in cnew)
+        check(f"tv: repeated resume ({tag}) leaves mix, playheads and cam unchanged", snap() == s0)
+        check(f"tv: repeated resume ({tag}) keeps playing, pill hidden", ystate(rx, "cam") == 1 and ystate(rx, "music") == 1 and not pill() and st()["paused"] is False)
+    # And a repeated pause does not pause again or touch the players.
+    send({"type": "pause", "value": True})
+    rx.wait_for_timeout(200)
+    cb, mb = len(calls(rx, "cam")), len(calls(rx, "music"))
+    send({"type": "pause", "value": True})
+    rx.wait_for_timeout(200)
+    check("tv: repeated pause leaves the players alone", calls(rx, "cam")[cb:] == [] and calls(rx, "music")[mb:] == [] and pill() and st()["paused"] is True)
+    cb = len(calls(rx, "cam"))
+    send({"type": "pause", "value": False})
+    rx.wait_for_timeout(300)
+    check("tv: first resume after a repeated pause still seeks the live edge once", calls(rx, "cam")[cb:].count("seekTo") == 1 and ystate(rx, "cam") == 1)
+
     # Older playMusic command is still the whole-feed pause.
     send({"type": "playMusic", "value": False})
     rx.wait_for_timeout(200)

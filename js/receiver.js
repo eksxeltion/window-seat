@@ -472,8 +472,16 @@ function prevMix() {
   playMix(MIXES[(i - 1 + MIXES.length) % MIXES.length].id);
 }
 
-/* Pause or resume the whole feed: the cam and the music. Pin is separate and untouched. */
+/* Pause or resume the whole feed: the cam and the music. Pin is separate and untouched.
+ * Idempotent: a command for the state the feed is already in (a Cast retry after a lost ack, a
+ * second Play) only refreshes the pill. It never reloads the mix, seeks the cam or resets the
+ * rotation clock. Returns true only when the state actually changed. */
 function setPaused(on, { music = true } = {}) {
+  if (!!on === s.paused) {
+    showPausedPill(s.paused);
+    note("pauseRepeat", { value: s.paused });
+    return false;
+  }
   const was = s.paused;
   s.paused = !!on;
   if (s.paused) {
@@ -497,6 +505,7 @@ function setPaused(on, { music = true } = {}) {
   }
   showPausedPill(s.paused);
   note("pause", { value: s.paused });
+  return true;
 }
 
 /** Accepts a command object, or JSON text of one (from any sender or namespace type). */
@@ -564,8 +573,8 @@ function handle(raw) {
       // {type:"pause", value:true} pauses; the older {type:"playMusic", value:false} means the same.
       // Both pause or resume the whole feed (cam and music), so phone and TV can never disagree.
       const paused = cmd.type === "pause" ? !!cmd.value : !cmd.value;
-      setPaused(paused);
-      if (!quiet && !paused) flash("Playing"); // pausing shows the persistent Paused pill instead
+      const changed = setPaused(paused);
+      if (!quiet && changed && !paused) flash("Playing"); // pausing shows the persistent Paused pill instead
       break;
     }
     case "cams": {
