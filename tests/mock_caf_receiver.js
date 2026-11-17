@@ -15,7 +15,7 @@
     },
     addEventListener(t, fn) { (sysListeners[t] = sysListeners[t] || []).push(fn); },
     getPlayerManager() { return { setMediaElement() { calls.push("setMediaElement"); } }; },
-    getSenders() { return [{ id: "sender-1" }]; },
+    getSenders() { return window.__cafSenders || [{ id: "sender-1" }]; },
     sendCustomMessage(ns, senderId, data) {
       if (!started) throw new Error("not started");
       sent.push({ ns, senderId, data });
@@ -39,5 +39,7 @@
     calls, sent,
     message(ns, data, senderId) { listeners[ns]({ data, senderId, type: "message" }); },
     connect() { (sysListeners.senderconnected || []).forEach((f) => f({ senderId: "sender-1" })); },
+    // The last sender leaves (the Cast session ended on the phone side).
+    disconnect() { window.__cafSenders = []; (sysListeners.senderdisconnected || []).forEach((f) => f({ senderId: "sender-1", reason: "requested_by_sender" })); },
   };
 })();

@@ -10,14 +10,14 @@ def check(name, cond):
 with sync_playwright() as p:
     b = p.chromium.launch()
     pg = b.new_page(viewport={"width": 1920, "height": 1080})
-    pg.goto(url.rstrip("/") + "/receiver.html"); pg.wait_for_timeout(6000)  # no ?debug
+    pg.goto(url.rstrip("/") + "/receiver.html?strip=1"); pg.wait_for_timeout(6000)  # no ?debug; ?strip=1 shows the strip and still starts CAF
     strip = pg.text_content("#debug-strip") or ""
     print("strip:", strip)
     check("real CAF framework loaded", pg.evaluate("()=>!!(window.cast && cast.framework && cast.framework.CastReceiverContext)"))
     check("strip has no FAILED", "FAILED" not in strip)
     check("no Invalid messageType", "Invalid messageType" not in strip)
     check("listener registered (or ready)", "listener registered" in strip or "listener ready" in strip)
-    check("strip shows build 2026-11-16.5", "build 2026-11-16.5" in strip)
+    check("strip shows build 2026-11-16.6", "build 2026-11-16.6" in strip)
     b.close()
 print("FAILED:" if fails else "ALL PASS", fails)
 sys.exit(1 if fails else 0)

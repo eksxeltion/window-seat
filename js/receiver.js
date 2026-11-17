@@ -1,9 +1,14 @@
 // Window Seat Cast receiver: one full-screen cam that rotates, plus a visible music player.
 // Runs on the Cast device. With ?debug=1 it runs in any browser without starting the Cast context.
+// The debug strip is hidden unless Debug mode is on: {type:"debug", on:true} from the phone, ?debug=1, or ?strip=1
+// (a test hook that shows the strip but still starts CAF).
+// Launch custom data: the web sender (CastContext.requestSession) has no way to pass custom launch data to the
+// receiver without changing how sessions are created, so a TV whose channel never connects is diagnosed by
+// loading receiver.html?debug=1 (or ?strip=1) instead. The registered receiver URL stays unchanged.
 import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 
-export const BUILD = "2026-11-16.5"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.6"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -15,7 +20,9 @@ const STALL_NUDGE_MS = 20000; // visible cam not PLAYING this long: nudge playVi
 const STALL_SKIP_MS = 15000; // still not PLAYING this long after the nudge: skip it
 const RETRY_ALL_FAILED_MS = 60000;
 
-const DEBUG = new URLSearchParams(location.search).get("debug") === "1";
+const PARAMS = new URLSearchParams(location.search);
+const DEBUG = PARAMS.get("debug") === "1";
+const STRIP_FORCED = DEBUG || PARAMS.get("strip") === "1"; // strip stays on after a session ends
 const $ = (id) => document.getElementById(id);
 const quietly = (fn) => {
   try {
@@ -66,6 +73,8 @@ function snapshot() {
     poolIds: s.poolIds,
     failedCams: Array.from(s.failed),
     list: { source: listInfo.source, cams: listInfo.cams, mixes: listInfo.mixes },
+    // Diagnostics mirrored on the phone's debug panel (small, always sent).
+    debug: { strip: stripOn, caf: dbg.caf, cafError: dbg.cafError, readyNs: dbg.readyNs, rx: dbg.rx, tx: dbg.tx, appState: dbg.appState, senders: dbg.senders, error: dbg.error },
   };
 }
 
@@ -76,19 +85,46 @@ let context = null; // CastReceiverContext, only when running on a Cast device
 const dbg = { caf: "loading", cafError: "", listener: "no", readyNs: "?", rx: 0, tx: 0, appState: "-", senders: 0, lastIn: "none", lastOut: "none", error: "" };
 let injected = false; // test hook: a mocked context stands in for CAF
 let cafStarted = false; // context.start() returned without throwing (or a test injected a context)
-let stripOn = new URLSearchParams(location.search).get("strip") !== "0";
+let stripOn = STRIP_FORCED; // hidden by default: Debug mode on the phone turns it on
 function hhmmss() {
   return new Date().toTimeString().slice(0, 8);
 }
+
+/* Ring buffer of the last Cast events (readable by tests through window.__receiverDebug). Repeats collapse. */
+const EVENTS_MAX = 20;
+const events = [];
+function castEvent(text) {
+  const t = hhmmss();
+  const last = events[events.length - 1];
+  if (last && last.text === text) {
+    last.n = (last.n || 1) + 1;
+    last.t = t;
+  } else {
+    events.push({ t, text: String(text).slice(0, 120) });
+    if (events.length > EVENTS_MAX) events.shift();
+  }
+  if (DEBUG) console.log("[receiver event]", t, text);
+}
+
 function renderStrip() {
   const el = $("debug-strip");
   if (!el) return;
   el.hidden = !stripOn;
+  if (!stripOn) return;
   const caf = dbg.cafError ? `CAF FAILED (${dbg.cafError})` : `CAF ${dbg.caf}`;
   const out = !cafStarted && dbg.lastOut === "none" ? "none (CAF not started)" : dbg.lastOut;
-  el.textContent =
-    `build ${BUILD} | list ${listInfo.source} ${listInfo.cams}/${listInfo.mixes} | ${caf} | listener ${dbg.listener} | senders ${dbg.senders} | ` +
-    `last in: ${dbg.lastIn} | last reply: ${out} | ns windowseat STRING | ready-ns ${dbg.readyNs} | rx ${dbg.rx} | tx ${dbg.tx} | appstate ${dbg.appState}` + (dbg.error ? ` | error: ${dbg.error}` : "");
+  const ev = events[events.length - 1];
+  const lines = [
+    "WINDOW SEAT · DEBUG",
+    `build ${BUILD} | list ${listInfo.source} ${listInfo.cams}/${listInfo.mixes}`,
+    `${caf} | listener ${dbg.listener} | senders ${dbg.senders} | ns windowseat STRING | ready-ns ${dbg.readyNs} | appstate ${dbg.appState}`,
+    `rx ${dbg.rx} | tx ${dbg.tx} | last in: ${dbg.lastIn} | last reply: ${out}`,
+    `cam ${s.camId || "-"} | mix ${s.mixId || "-"}`,
+  ];
+  if (ev) lines.push(`ev ${ev.t} ${ev.text}${ev.n ? ` x${ev.n}` : ""}`);
+  if (dbg.error) lines.push(`error: ${dbg.error}`);
+  el.textContent = lines.join("\n");
+  el.classList.toggle("has-error", !!(dbg.error || dbg.cafError));
 }
 function setDbg(patch) {
   Object.assign(dbg, patch);
@@ -104,8 +140,10 @@ function reply(senderId) {
   try {
     context.sendCustomMessage(NAMESPACE, senderId, JSON.stringify(snapshot()));
     dbg.tx++;
+    castEvent(`tx ${kind} ok`);
     setDbg({ lastOut: `${kind} ${hhmmss()}` });
   } catch (e) {
+    castEvent(`tx ${kind} FAILED ${String((e && e.message) || e).slice(0, 60)}`);
     setDbg({ lastOut: `${kind} FAILED ${hhmmss()}`, error: String((e && e.message) || e).slice(0, 80) });
   }
 }
@@ -192,6 +230,7 @@ function commitPending() {
   $("cap-meta").textContent = `${cam.place} · ${cam.channel}`;
   fadeTo(false);
   note("rotate", { camId: cam.id, reason: rotateReason });
+  renderStrip();
   broadcast();
 }
 
@@ -461,6 +500,7 @@ function handle(raw) {
       break;
     case "stop":
       // The only way to end the receiver: an explicit command from the remote.
+      if (!STRIP_FORCED) stripOn = false;
       if (context) quietly(() => context.stop());
       break;
     case "getState":
@@ -470,8 +510,9 @@ function handle(raw) {
       if (applyConfig(cmd, "phone")) afterListChange();
       break;
     case "debug":
-      // Toggle the on-TV debug strip from the phone.
-      stripOn = !!cmd.value;
+      // Toggle the on-TV debug strip from the phone: {on:true|false}, or the older {value:true|false}.
+      stripOn = !!("on" in cmd ? cmd.on : cmd.value);
+      castEvent(`debug ${stripOn ? "on" : "off"}`);
       renderStrip();
       break;
     default:
@@ -522,6 +563,7 @@ function onCustomMessage(event) {
   dbg.rx++;
   const raw = event && event.data;
   const cmd = parseCommand(raw);
+  castEvent(`rx ${cmd ? cmd.type : "unreadable"}${event && event.senderId ? ` from ${String(event.senderId).slice(0, 24)}` : ""}`);
   setDbg({ lastIn: `${cmd ? cmd.type : "unreadable " + typeof raw} ${hhmmss()}` });
   try {
     handle(cmd);
@@ -538,8 +580,10 @@ function refreshAppState() {
   if (!context || !cafStarted) return;
   try {
     context.setApplicationState(`Window Seat ready ${++appStateGeneration}`);
+    castEvent("appstate ok");
     setDbg({ appState: "ok" });
   } catch (e) {
+    castEvent("appstate FAILED");
     setDbg({ appState: "fail", error: `appstate: ${String((e && e.message) || e).slice(0, 60)}` });
   }
 }
@@ -553,6 +597,7 @@ function watchOutgoing() {
       const d = typeof m.data === "string" ? JSON.parse(m.data) : m.data;
       if (d && d.type === "ready") {
         const list = Array.isArray(d.activeNamespaces) ? d.activeNamespaces : [];
+        castEvent(`system ready: windowseat ${list.includes(NAMESPACE) ? "listed" : "not listed"} (${list.length} ns)`);
         setDbg({ readyNs: list.includes(NAMESPACE) ? "yes" : "no" });
       }
     } catch {
@@ -588,6 +633,7 @@ function startCast() {
   const cast = window.cast;
   if (!cast || !cast.framework) {
     note("castUnavailable");
+    castEvent("CAF missing");
     setDbg({ caf: "missing" });
     return;
   }
@@ -607,14 +653,20 @@ function startCast() {
     // Only an explicit {type:'stop'} command calls context.stop().
     context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, (event) => {
       note("senderDisconnected", { reason: event && event.reason });
-      setDbg({ senders: quietly(() => context.getSenders().length) ?? dbg.senders });
+      castEvent(`senderDisconnected ${(event && event.reason) || ""}`.trim());
+      const left = quietly(() => context.getSenders().length) ?? dbg.senders;
+      // The Cast session is over for this TV: the debug strip goes back to hidden (unless forced by the URL).
+      if (left === 0 && !STRIP_FORCED) stripOn = false;
+      setDbg({ senders: left });
     });
-    context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => {
+    context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
+      castEvent(`senderConnected ${String((event && event.senderId) || "").slice(0, 24)}`.trim());
       setDbg({ senders: quietly(() => context.getSenders().length) ?? dbg.senders + 1 });
       refreshAppState();
       broadcast();
     });
     context.addEventListener(cast.framework.system.EventType.READY, () => {
+      castEvent("CAF ready");
       setDbg({ caf: "ready", listener: "ready" });
       refreshAppState();
     });
@@ -628,6 +680,7 @@ function startCast() {
     }
     setDbg({ caf: "starting" });
     watchOutgoing();
+    castEvent("CAF start");
     context.start(options);
     cafStarted = true;
     // Same synchronous block as start(): no message can arrive before the listener exists.
@@ -635,10 +688,14 @@ function startCast() {
     setDbg({ listener: dbg.caf === "ready" ? "ready" : "registered" });
     if (dbg.caf === "starting") setDbg({ caf: "started (waiting for ready)" });
     setTimeout(() => {
-      if (dbg.caf !== "ready") setDbg({ caf: "started, no READY after 10s" });
+      if (dbg.caf !== "ready") {
+        castEvent("CAF no READY after 10s");
+        setDbg({ caf: "started, no READY after 10s" });
+      }
     }, 10000);
   } catch (e) {
     const name = (e && e.name) || "Error";
+    castEvent(`CAF FAILED ${name}: ${String((e && e.message) || e).slice(0, 60)}`);
     setDbg({ caf: "FAILED", cafError: `${name}: ${String((e && e.message) || e).slice(0, 80)}` });
   }
 }
@@ -672,8 +729,10 @@ window.addEventListener("error", (e) => setDbg({ error: String(e.message || "scr
 
 // Cast first: the message channel must come up even if YouTube is slow or failing.
 if (!DEBUG) {
+  castEvent("CAF loading");
   loadScript(CAF_URL).then(startCast, () => {
     note("castUnavailable");
+    castEvent("CAF load failed");
     setDbg({ caf: "load failed" });
   });
 } else {
@@ -730,6 +789,16 @@ try {
   setDbg({ error: `youtube: ${String((e && e.message) || e).slice(0, 60)}` });
 }
 
+// Read-only diagnostics for tests and remote debugging (also without ?debug=1).
+Object.defineProperty(window, "__receiverDebug", {
+  value: {
+    events,
+    dbg,
+    get stripOn() { return stripOn; },
+    get strip() { return ($("debug-strip") || {}).textContent || ""; },
+  },
+});
+
 if (DEBUG) {
   // No Cast context in debug mode: same player logic, driven through window.__receiver.send.
   Object.defineProperty(window, "__receiver", {
@@ -744,6 +813,7 @@ if (DEBUG) {
         injected = true;
       },
       log,
+      events,
       // Test probes for the soak run.
       music: () => ({ state: quietly(() => musicPlayer.getPlayerState()), time: quietly(() => musicPlayer.getCurrentTime()), vol: quietly(() => musicPlayer.getVolume()), muted: quietly(() => musicPlayer.isMuted()) }),
       cam: () => ({ state: quietly(() => camPlayer.getPlayerState()) }),

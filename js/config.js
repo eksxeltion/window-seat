@@ -92,6 +92,7 @@ export function buildConfig(camsCsv, mixesCsv) {
       channel: r.channel || base.channel || "YouTube",
       channelUrl: r.channel_url || base.channelUrl || `https://www.youtube.com/watch?v=${id}`,
       default: truthy(r.in_rotation, true),
+      timezone: String(r.timezone || base.timezone || "").trim().slice(0, 64),
     });
   }
   const mixes = [];
@@ -109,6 +110,16 @@ export function buildConfig(camsCsv, mixesCsv) {
     mixes.push({ id, title: r.title || base.title || id, en: r.title_en || base.en || r.title || id, minutes });
   }
   return { cams, mixes, skipped };
+}
+
+/** Looks like an IANA zone name: Area/Location, maybe nested (Asia/Tokyo, America/Indiana/Indianapolis). */
+const TZ_RE = /^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+)+$/;
+export const isTimezone = (v) => typeof v === "string" && TZ_RE.test(v.trim());
+
+/** Timezone coverage for the debug panel: cams with a valid-looking IANA name, out of all cams. */
+export function tzCoverage(cams) {
+  const list = Array.isArray(cams) ? cams : [];
+  return { valid: list.filter((c) => c && isTimezone(c.timezone)).length, total: list.length };
 }
 
 /** A config is usable only with at least one cam in rotation and one mix. */
@@ -136,6 +147,7 @@ export function sanitize(cfg) {
       channel: String(c.channel || "YouTube").slice(0, 120),
       channelUrl: /^https:\/\//.test(c.channelUrl || "") ? c.channelUrl : `https://www.youtube.com/watch?v=${c.id}`,
       default: c.default !== false,
+      timezone: String(c.timezone || "").trim().slice(0, 64),
     });
   }
   const mixes = [];
