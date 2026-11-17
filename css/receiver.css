@@ -63,6 +63,9 @@ html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color:
   color: var(--color-overlay-ink); font-size: max(20px, 1.458vw); line-height: 1.286; font-weight: 600; letter-spacing: 0.04em; pointer-events: none;
 }
 #paused-pill[hidden] { display: none; }
+/* Pause timeout warning (25 minutes paused while casting): the pill adds "Closing in 5 minutes", in overlay-dim. */
+#paused-closing { color: var(--color-overlay-dim); font-weight: 500; letter-spacing: 0; }
+#paused-closing:not(:empty)::before { content: "\00B7"; margin: 0 0.5em; color: var(--color-overlay-dim); }
 
 /* Debug strip (Debug mode only): bottom right in the 5% safe area, clear of the caption at the bottom left.
    Build, list, Cast channel state, message counts, current ids and the latest Cast event. */

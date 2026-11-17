@@ -858,6 +858,12 @@ body.casting #stage, body.casting #tap-music, body.casting #tuning { display: no
 .remote-debug { margin: 0; font-size: 0.6875rem; line-height: 1rem; color: var(--color-ink-tertiary); overflow-wrap: anywhere; }
 .remote-head { margin: var(--space-8) 0 0; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 500; color: var(--color-ink-tertiary); }
 .remote-stop { width: 100%; min-height: 3.25rem; }
+/* Pause timeout while casting: the hairline under now playing, and the 25 minute warning (toast level) with Keep paused. */
+.remote-hairline { margin: var(--space-8) 0 0; padding-top: var(--space-8); border-top: 1px solid var(--color-line); font-size: 0.875rem; color: var(--color-ink-secondary); }
+.remote-pause-warn { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-16) var(--space-20); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-3); color: var(--color-ink); }
+.remote-pause-warn p { margin: 0; font-size: 1rem; line-height: 1.5rem; }
+.remote-pause-warn .btn { width: 100%; min-height: 3.25rem; }
+.remote-hairline[hidden], .remote-pause-warn[hidden] { display: none; }
 #remote [aria-pressed="true"] { background: var(--color-accent-soft); border-color: var(--color-accent); color: var(--color-accent); }
 
 /* ================================================================ About: This copy card (build, list, Debug mode switch) */

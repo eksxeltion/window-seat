@@ -18,7 +18,7 @@ const quietly = (fn) => {
 };
 
 let session = null;
-let remote = { camId: null, camTitle: "", mixId: null, mixTitle: "", pinned: false, interval: 60, volume: 60, muted: false, paused: false, shuffle: true };
+let remote = { camId: null, camTitle: "", mixId: null, mixTitle: "", pinned: false, interval: 60, volume: 60, muted: false, paused: false, shuffle: true, pauseWarning: false };
 let lastReplyAt = 0; // last state message from the TV
 let replyTimer = 0;
 let warnedNoReply = false;
@@ -29,6 +29,15 @@ const dbg = { last: "-", sessionState: "-", tvBuild: "?", lastErr: "" };
 const io = { tx: 0, rx: 0 };
 let tvDebug = {};
 const ui = {};
+
+// Pause timeout while casting (the TV owns the timer; see receiver.js). Copy from docs/design.md.
+const PAUSE_HAIRLINE = "Paused. The TV rests after 30 minutes paused.";
+const PAUSE_WARNING = "The TV will go back to its home screen in 5 minutes. Tap play to keep watching.";
+const PAUSE_ENDED = "Paused for 30 minutes, so the TV went back to its home screen. Cast again whenever you like.";
+let pauseEnded = false; // the TV said it is ending the session after 30 minutes paused (it owns the stop)
+let pauseEndTimer = 0; // safety net: end the phone's side if the session has not ended a few seconds later
+const PAUSE_END_SAFETY_MS = 5000;
+let stopRequested = false; // the user tapped Stop casting on this phone
 
 // Stage 2 failures: the TV app launched, but a command could not be delivered to it.
 const SEND_ERRORS = {
@@ -91,7 +100,7 @@ function send(cmd, opts = {}) {
   const fail = (raw) => {
     const code = (raw && raw.code) || raw;
     // Only state-setting commands are safe to resend (a resent "next" or "mix" would act twice).
-    const repeatable = ["pin", "interval", "volume", "mute", "pause", "playMusic", "cams", "getState", "shuffle"].includes(cmd.type);
+    const repeatable = ["pin", "interval", "volume", "mute", "pause", "playMusic", "cams", "getState", "shuffle", "keepPaused"].includes(cmd.type);
     if (code === "timeout" && repeatable && !opts.retried) {
       // The channel can lag right after connecting: try once more before reporting,
       // but only on the same session and only if no newer command of this type went out.
@@ -133,6 +142,8 @@ function setRemoteStatus(text) {
 
 /* Update the phone UI right away; the TV's state reply then confirms or corrects it. */
 function act(cmd, patch) {
+  // Any command restarts the TV's pause timer (or resumes the feed), so the warning goes until the TV says otherwise.
+  if (remote.pauseWarning && cmd.type !== "getState") patch = { ...patch, pauseWarning: false };
   if (patch) {
     remote = { ...remote, ...patch };
     renderRemote();
@@ -174,7 +185,11 @@ function runCmd(name) {
       return act({ type: "pause", value: !remote.paused }, { paused: !remote.paused });
     case "next-mix":
       return act({ type: "nextMix" });
+    case "keep-paused":
+      // Restart the TV's full 30 minute timer without resuming.
+      return act({ type: "keepPaused" }, { pauseWarning: false });
     case "stop":
+      stopRequested = true;
       return quietly(() => cast.framework.CastContext.getInstance().endCurrentSession(true));
     default:
   }
@@ -189,6 +204,11 @@ function buildRemote() {
     <div class="remote-card">
       <p class="remote-now"><span class="remote-label">Cam</span> <strong id="remote-cam">...</strong></p>
       <p class="remote-now"><span class="remote-label">Music</span> <strong id="remote-mix">...</strong></p>
+      <p class="remote-hairline" id="remote-hairline" hidden>${PAUSE_HAIRLINE}</p>
+    </div>
+    <div class="remote-pause-warn" id="remote-pause-warn" role="alert" hidden>
+      <p id="remote-pause-warn-text">${PAUSE_WARNING}</p>
+      <button class="btn" type="button" data-cmd="keep-paused" id="remote-keep-paused">Keep paused</button>
     </div>
     <div class="remote-row">
       <button class="btn" type="button" data-cmd="prev">Prev cam</button>
@@ -229,6 +249,8 @@ function buildRemote() {
   ui.play = $("#remote-play");
   ui.status = $("#remote-status");
   ui.debug = $("#remote-debug");
+  ui.hairline = $("#remote-hairline");
+  ui.pauseWarn = $("#remote-pause-warn");
   fillRemoteLists();
   root.addEventListener("click", (e) => {
     const b = e.target.closest("button");
@@ -340,6 +362,8 @@ function renderRemote() {
   ui.mute.textContent = remote.muted ? "Unmute" : "Mute";
   ui.pin.textContent = remote.pinned ? "Pinned" : "Pin cam";
   ui.play.textContent = remote.paused ? "Play" : "Pause";
+  ui.hairline.hidden = !remote.paused;
+  ui.pauseWarn.hidden = !(remote.paused && remote.pauseWarning);
   // The phone's own views of the TV (the Cams sheet "Now showing") follow every confirmed or optimistic change.
   if (hooks && hooks.onRemoteChange) quietly(() => hooks.onRemoteChange());
 }
@@ -349,11 +373,14 @@ function onMessage(_ns, raw) {
   io.rx++;
   logEvent(`rx ${(msg && msg.type) || "unreadable"}`);
   if (msg && msg.debug && typeof msg.debug === "object") tvDebug = msg.debug;
+  if (msg && msg.type === "pauseTimeout") return onPauseTimeout();
   if (!msg || msg.type !== "state") return;
   lastReplyAt = Date.now();
   warnedNoReply = false;
   if (msg.build) dbg.tvBuild = msg.build;
-  remote = { ...remote, ...msg };
+  remote = { ...remote, ...msg, pauseWarning: msg.pauseWarning === true };
+  // Play or Keep paused reached the TV in its stop delay: the feed plays or the timer runs again, so no end is coming.
+  if (pauseEnded && (msg.paused === false || typeof msg.pauseEndsInMs === "number")) clearPauseEnd("TV state");
   setRemoteStatus(`Connected. The TV confirms each tap.${msg.build ? ` (TV build ${msg.build})` : ""}`);
   renderRemote();
 }
@@ -375,8 +402,40 @@ function enterRemote(status) {
   renderCastButtons();
 }
 
+/* The TV says it is ending the session after 30 minutes paused. The TV owns the stop (Play or Keep paused in its
+   short stop delay cancels it), so the phone only notes that a timeout end is expected and waits for the session
+   to end; leaveRemote then explains why and nothing starts playing on the phone. Safety net: if the session is
+   still up a few seconds later and no newer state cancelled the end, the phone ends its side as before. */
+function onPauseTimeout() {
+  pauseEnded = true;
+  logEvent("TV pause timeout");
+  clearTimeout(pauseEndTimer);
+  pauseEndTimer = setTimeout(() => {
+    pauseEndTimer = 0;
+    if (!pauseEnded || !session) return;
+    logEvent("pause timeout: ending the phone side");
+    quietly(() => cast.framework.CastContext.getInstance().endCurrentSession(true));
+  }, PAUSE_END_SAFETY_MS);
+}
+
+function clearPauseEnd(why) {
+  if (!pauseEnded && !pauseEndTimer) return;
+  pauseEnded = false;
+  clearTimeout(pauseEndTimer);
+  pauseEndTimer = 0;
+  logEvent(`pause timeout cancelled (${why})`);
+}
+
 function leaveRemote() {
   if (!remoteOn && !session) return;
+  // A session that ends while the TV's warning was up (and not by Stop casting) also ended by the timeout,
+  // in case the phone slept through the pauseTimeout message.
+  const byTimeout = pauseEnded || (remote.paused && remote.pauseWarning && !stopRequested);
+  pauseEnded = false;
+  clearTimeout(pauseEndTimer);
+  pauseEndTimer = 0;
+  stopRequested = false;
+  remote = { ...remote, pauseWarning: false };
   session = null;
   remoteOn = false;
   dbg.tvBuild = "?";
@@ -387,6 +446,7 @@ function leaveRemote() {
   logEvent("remote off");
   refreshDebug();
   renderCastButtons();
+  if (byTimeout) say(PAUSE_ENDED);
 }
 
 /* Initial setup is held back until the session lists our channel, then sent exactly once (never replayed). */
