@@ -1,7 +1,7 @@
 // Window Seat: rotating live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
 import qrcode from "./qr.js";
-import { initCast, castConfigured, sendConfigToTv, sendCamsToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam, castDebugInfo, sendDebugToTv } from "./cast.js";
+import { initCast, castConfigured, sendConfigToTv, sendCamsToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam, remoteVolume, remoteState, castDebugInfo, sendDebugToTv, sendShuffleToTv } from "./cast.js";
 import { initDebug, isDebugOn } from "./debug.js";
 import { BUILD } from "./build.js";
 import { refreshFromSheet, listLabel } from "./config.js";
@@ -82,6 +82,17 @@ const storedLite = store.get("lite", null); // null: the user never chose
 const savedInterval = store.get("interval", 60);
 const savedMix = store.get("mix", null);
 const savedVolume = Number(store.get("volume", 60));
+store.remove("shuffle"); // Shuffle is session-only now (on at every load); drop the value older builds stored
+
+/** A random mix from the list, never `avoidId` when there is another one to choose. */
+function randomMixId(avoidId) {
+  if (!MIXES.length) return null;
+  if (MIXES.length === 1) return MIXES[0].id;
+  let m;
+  do m = MIXES[Math.floor(Math.random() * MIXES.length)];
+  while (m.id === avoidId);
+  return m.id;
+}
 
 /* ---------------------------------------------------------------- state */
 
@@ -105,10 +116,11 @@ const state = {
   allFailed: false,
   lite: storedLite === null ? isTv : storedLite === true,
   // music
-  mixId: MIXES.some((m) => m.id === savedMix) ? savedMix : MIXES[0].id,
+  // Shuffle is on at every load, so the first mix is a random one (not the last one played), from its beginning.
+  mixId: randomMixId(savedMix),
   volume: Number.isFinite(savedVolume) ? Math.min(100, Math.max(0, Math.round(savedVolume))) : 60,
   muted: store.get("muted", false) === true,
-  shuffle: store.get("shuffle", false) === true,
+  shuffle: true, // session-only, like Debug mode: on at every load, never stored
   musicWantsPlay: true,
   musicState: YS.UNSTARTED,
   musicErrors: 0,
@@ -165,6 +177,8 @@ const el = {
   mixList: $("#mix-list"),
   volume: $("#music-volume"),
   volumeOut: $("#music-volume-out"),
+  mixVolume: $("#mix-volume"),
+  mixVolumeOut: $("#mix-volume-out"),
   panels: { cams: $("#panel-cams"), music: $("#panel-music"), tv: $("#panel-tv"), about: $("#panel-about") },
 };
 
@@ -207,10 +221,7 @@ function tvCamIds() {
 }
 
 function formatLength(minutes) {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (!h) return `${m} min`;
-  return m ? `${h} h ${m} min` : `${h} h`;
+  return `${minutes} min`;
 }
 
 /* ---------------------------------------------------------------- toast */
@@ -881,7 +892,7 @@ function playMix(mixId, { userChoice = false } = {}) {
     // Paused (an error moved to the next mix): cue it, keep everything paused.
     state.mixId = mixId;
     store.set("mix", mixId);
-    if (musicReady) quietly(() => musicPlayer.cueVideoById(mixId));
+    if (musicReady) quietly(() => musicPlayer.cueVideoById({ videoId: mixId, startSeconds: 0 }));
     return render();
   }
   if (state.feedPaused) resumeCam(); // choosing a mix plays the whole feed again
@@ -895,25 +906,21 @@ function playMix(mixId, { userChoice = false } = {}) {
   if (state.casting) return render();
   if (musicReady && state.started) {
     applyVolume();
-    quietly(() => musicPlayer.loadVideoById(mixId));
+    // Every mix starts at its beginning (a tap, shuffle, or the next one in order), never partway.
+    quietly(() => musicPlayer.loadVideoById({ videoId: mixId, startSeconds: 0 }));
     scheduleMusicCheck();
   } else if (musicReady) {
-    quietly(() => musicPlayer.cueVideoById(mixId));
+    quietly(() => musicPlayer.cueVideoById({ videoId: mixId, startSeconds: 0 }));
   }
   render();
 }
 
 function nextMix() {
   if (viaTv(() => remoteCmd("next-mix"))) return;
+  // Shuffle: a random mix, never the same one twice in a row. Off: the next one in sheet order.
+  if (state.shuffle) return playMix(randomMixId(state.mixId));
   const i = MIXES.findIndex((m) => m.id === state.mixId);
-  let j;
-  if (state.shuffle && MIXES.length > 1) {
-    do j = Math.floor(Math.random() * MIXES.length);
-    while (j === i);
-  } else {
-    j = (i + 1) % MIXES.length;
-  }
-  playMix(MIXES[j].id);
+  playMix(MIXES[(i + 1) % MIXES.length].id);
 }
 
 function onMusicState(s) {
@@ -1000,7 +1007,7 @@ function togglePause() {
 }
 
 function setVolume(v, announce = true) {
-  if (viaTv(() => remoteCmd(v > state.volume ? "vol-up" : "vol-down"))) return;
+  if (viaTv(() => remoteVolume(v))) return;
   state.volume = Math.min(100, Math.max(0, Math.round(v)));
   if (state.volume > 0 && state.muted) state.muted = false;
   store.set("volume", state.volume);
@@ -1019,10 +1026,19 @@ function toggleMute() {
   render();
 }
 
+/* Shuffle is this session only. While casting the TV picks the next mix itself, so it gets the setting too. */
 function toggleShuffle() {
   state.shuffle = !state.shuffle;
-  store.set("shuffle", state.shuffle);
+  if (isCasting()) sendShuffleToTv(state.shuffle);
+  toast(state.shuffle ? "Shuffle on. A random mix plays next." : "Shuffle off. Mixes play in list order.");
   render();
+}
+
+/** A new local start (Home, or back from casting) with shuffle on gets a fresh random mix, from the beginning. */
+function reshuffleForStart() {
+  if (!state.shuffle) return;
+  state.mixId = randomMixId(state.mixId);
+  store.set("mix", state.mixId);
 }
 
 function tapToPlay() {
@@ -1132,19 +1148,41 @@ function render() {
 
   renderCamsPanel();
 
-  // Music panel
-  $("#music-mute").setAttribute("aria-pressed", String(state.muted));
+  renderMusicPanel();
+  syncChrome();
+}
+
+/** The mix and volume to show: the TV's reported state while casting (this phone plays nothing then), else local. */
+function shownMusic() {
+  if (isCasting()) {
+    const r = remoteState();
+    return { mixId: r.mixId || null, volume: Number.isFinite(r.volume) ? r.volume : state.volume, muted: !!r.muted };
+  }
+  return { mixId: state.mixId, volume: state.volume, muted: state.muted };
+}
+
+function showVolume(input, out, value) {
+  if (!input) return;
+  if (document.activeElement !== input) input.value = String(value);
+  setText(out, String(value));
+  input.style.setProperty("--vol", `${input.value}%`);
+}
+
+/* Mix sheet: Shuffle, the music volume, and every mix with one Playing row (the TV's mix while casting). */
+function renderMusicPanel() {
+  const shown = shownMusic();
+  $("#music-mute").setAttribute("aria-pressed", String(shown.muted));
   $("#music-shuffle").setAttribute("aria-pressed", String(state.shuffle));
-  if (document.activeElement !== el.volume) el.volume.value = String(state.volume);
-  setText(el.volumeOut, String(state.volume));
-  el.volume.style.setProperty("--vol", `${el.volume.value}%`);
+  showVolume(el.volume, el.volumeOut, state.volume);
+  showVolume(el.mixVolume, el.mixVolumeOut, shown.volume);
   for (const btn of $$(".mix-btn", el.mixList)) {
-    const current = btn.dataset.id === state.mixId;
+    const current = btn.dataset.id === shown.mixId;
     btn.classList.toggle("is-current", current);
     if (current) btn.setAttribute("aria-current", "true");
     else btn.removeAttribute("aria-current");
+    const mark = $(".mix-playing", btn);
+    if (mark) mark.hidden = !current;
   }
-  syncChrome();
 }
 
 /** The cam on screen right now: the TV's current cam while casting (local playback is stopped then), else the local one. */
@@ -1295,10 +1333,17 @@ function buildMusicPanel() {
     ja.className = "mix-ja";
     ja.lang = "ja";
     ja.textContent = mix.title;
+    const side = document.createElement("span");
+    side.className = "mix-side";
+    const mark = document.createElement("span");
+    mark.className = "mix-playing";
+    mark.textContent = "Playing";
+    mark.hidden = true;
     const len = document.createElement("span");
     len.className = "mix-len";
     len.textContent = formatLength(mix.minutes);
-    btn.append(en, ja, len);
+    side.append(mark, len);
+    btn.append(en, ja, side);
     li.append(btn);
     el.mixList.append(li);
   }
@@ -1493,7 +1538,7 @@ function openPanel(name, opener) {
   render();
   let target = null;
   if (name === "cams") target = $(`.cam-row[data-id="${showingCamId()}"] [data-action="watch"]`, panel);
-  if (name === "music") target = $(`.mix-btn[data-id="${state.mixId}"]`, panel);
+  if (name === "music") target = $(`.mix-btn[data-id="${shownMusic().mixId}"]`, panel);
   if (name === "tv") renderTvQr();
   if (!target) target = $(FOCUSABLE, panel);
   if (target) {
@@ -1642,6 +1687,7 @@ function goHome() {
   showTapMusic(false);
   cover(true);
   exitFullscreen();
+  reshuffleForStart();
   if (state.apiReady) {
     createCamPlayer();
     createMusicPlayer();
@@ -1719,6 +1765,7 @@ function resumeAfterCast() {
   state.currentCamId = null;
   state.pending = null;
   state.musicWantsPlay = true;
+  reshuffleForStart();
   // Fresh players; nothing plays until the user presses Start.
   if (state.apiReady && !cp.player) createCamPlayer();
   if (state.apiReady && !musicPlayer) createMusicPlayer();
@@ -1733,10 +1780,13 @@ function setupCast() {
   }
   if (note) note.textContent = "Tap the Cast button in Chrome and pick your TV. This page then becomes a remote.";
   initCast({
-    getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume, muted: state.muted, camIds: tvCamIds(), ...timeRules() }),
+    getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume, muted: state.muted, shuffle: state.shuffle, camIds: tvCamIds(), ...timeRules() }),
     onStart: pauseLocalForCast,
     onEnd: resumeAfterCast,
-    onRemoteChange: () => state.openPanel === "cams" && renderCamsPanel(),
+    onRemoteChange: () => {
+      if (state.openPanel === "cams") renderCamsPanel();
+      if (state.openPanel === "music") renderMusicPanel(); // the Playing row follows the TV
+    },
     toast: (text) => toast(text, 6000),
   });
 }
@@ -2170,6 +2220,12 @@ function bindInput() {
   el.noticeBtn.addEventListener("click", () => noticeAction && noticeAction());
 
   el.volume.addEventListener("input", () => setVolume(Number(el.volume.value), false));
+  // The Mix sheet slider: local volume while playing here; while casting it sends one volume to the TV on release.
+  el.mixVolume.addEventListener("input", () => {
+    if (isCasting()) return showVolume(el.mixVolume, el.mixVolumeOut, Number(el.mixVolume.value));
+    setVolume(Number(el.mixVolume.value), false);
+  });
+  el.mixVolume.addEventListener("change", () => isCasting() && setVolume(Number(el.mixVolume.value), false));
 
   window.addEventListener(
     "pointerdown",
@@ -2269,6 +2325,7 @@ function boot() {
     build: BUILD,
     currentCamId: () => state.currentCamId,
     currentMixId: () => state.mixId,
+    shuffle: () => state.shuffle,
     isTv,
     isCasting,
     isDebugOn,

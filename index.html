@@ -140,20 +140,32 @@
     <p class="panel-foot"><span class="list-status" role="status"></span></p>
   </section>
 
-  <!-- Music panel -->
-  <section id="panel-music" class="panel" role="dialog" aria-modal="true" aria-labelledby="music-title" hidden>
+  <!-- Mix sheet: Shuffle, the music volume, and every mix. While casting it drives the TV. -->
+  <section id="panel-music" class="panel panel-mix" role="dialog" aria-modal="true" aria-labelledby="music-title" aria-describedby="music-sub" hidden>
     <header class="panel-head">
-      <h2 id="music-title">Music</h2>
-      <button class="btn" type="button" data-action="close-panel">Close</button>
+      <div>
+        <h2 id="music-title">Mix</h2>
+        <p class="cams-count" id="music-sub">Tokyo Chill Lab</p>
+      </div>
+      <button class="btn btn-ghost btn-done" type="button" data-action="close-panel">Done</button>
     </header>
-    <div class="panel-tools">
-      <button class="btn" type="button" data-action="play-pause" id="music-play" title="Pauses or plays the cam and the music">Pause</button>
-      <button class="switch" type="button" data-action="mute" id="music-mute" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Mute</span></button>
-      <button class="switch" type="button" data-action="shuffle" id="music-shuffle" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Shuffle</span></button>
-    </div>
-    <div class="panel-body">
-      <p class="panel-help">Music volume is on the player. Cam sound is always off.</p>
-      <ol class="mix-list" id="mix-list"></ol>
+    <div class="panel-body mix-body">
+      <section class="cams-section mix-controls" aria-label="Playback">
+        <div class="cams-switches">
+          <button class="switch" type="button" data-action="shuffle" id="music-shuffle" aria-pressed="true" aria-describedby="shuffle-hint"><span class="switch-track"><span class="switch-thumb"></span></span><span>Shuffle</span></button>
+          <button class="switch" type="button" data-action="mute" id="music-mute" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Mute</span></button>
+          <button class="btn mix-play" type="button" data-action="play-pause" id="music-play" title="Pauses or plays the cam and the music">Pause</button>
+        </div>
+        <p class="cams-hint" id="shuffle-hint">Shuffle plays a random mix from the beginning. Off, mixes play in list order. It turns on again each visit.</p>
+        <label class="volume mix-volume">
+          <svg class="icon" aria-hidden="true"><use href="#i-music"></use></svg>
+          <span>Music</span>
+          <input id="mix-volume" type="range" min="0" max="100" step="5" value="60" aria-label="Music volume" aria-describedby="mix-volume-help">
+          <output id="mix-volume-out">60</output>
+        </label>
+        <p class="cams-hint" id="mix-volume-help">Cam sound is always off.</p>
+      </section>
+      <ol class="mix-list" id="mix-list" aria-label="All mixes"></ol>
       <p class="fineprint">Mixes by <a id="music-credit" target="_blank" rel="noopener"></a>.</p>
     </div>
   </section>
