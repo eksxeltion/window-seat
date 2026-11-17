@@ -1917,7 +1917,7 @@ function setupTelemetrySwitch() {
 
 /** app_open once per page load, once the Cast SDK has answered (or after 5 seconds). */
 function reportAppOpen() {
-  const props = () => ({ installed: body.classList.contains("pwa") || quietly(() => window.matchMedia("(display-mode: standalone)").matches) === true, tv_mode: isTv });
+  const props = () => ({ installed: quietly(() => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true) === true, tv_mode: isTv });
   let sent = false;
   const send = () => {
     if (sent) return;
