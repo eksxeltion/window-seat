@@ -1,8 +1,8 @@
-# Window Seat design system v1
+# Window Seat design system
 
-This is the design source of truth for the Window Seat visual redesign. It is a proposal, not shipped UI. The matching mocks live in the Paper file [Window Seat redesign v1](https://app.paper.design/file/01M7KCRQZVMH15C8SWE16RHQFE). Comment on the artboards there; we will iterate from those notes before any app code changes.
+This is the design source of truth for the Window Seat visual redesign. It is a proposal, not shipped UI. The matching mocks live in the Paper file [Window Seat redesign v1](https://app.paper.design/file/01M7KCRQZVMH15C8SWE16RHQFE). v1 artboards are kept in place. v2 artboards sit next to them and reflect the decisions below. Comment on the artboards there; we will iterate from those notes before any app code changes.
 
-The live app today is a dark, gold-accent media player with a crowded control bar. The redesign keeps the product job (phone as remote, TV as the window) and makes the phone feel like a polished consumer app: bright, calm, and easy to use one-handed.
+The live app today is a dark, gold-accent media player with a crowded control bar. The redesign keeps the product job (phone as remote, TV as the window) and makes the phone feel like a polished consumer app: bright, calm, and easy to use one-handed. Local playback is the exception: once a cam is playing on the phone, it goes full screen, with controls overlaid on the picture.
 
 ## Mood
 
@@ -10,7 +10,7 @@ The live app today is a dark, gold-accent media player with a crowded control ba
 
 This is a deliberate step away from the current black-and-gold look, and also away from the common warm-linen-plus-terracotta palette. Airbnb is a reference for hospitality, spacing, and photography as the hero, not for coral buttons on cream.
 
-On the TV, the same palette goes nocturnal: the video is the picture, and type sits in a dark water-glass overlay that fades after a change.
+On the TV, and on the phone's full-screen local player, the same palette goes nocturnal: the video is the picture, and type sits in a dark water-glass overlay that fades after a change.
 
 ## Personality
 
@@ -22,6 +22,8 @@ On the TV, the same palette goes nocturnal: the video is the picture, and type s
 ## Color
 
 ### Phone and start (bright)
+
+Used on Home, the cam menu, the mix picker, and the casting remote.
 
 | Token | Hex | Role | Object in the scene |
 | --- | --- | --- | --- |
@@ -39,28 +41,34 @@ On the TV, the same palette goes nocturnal: the video is the picture, and type s
 | `--color-focus` | `#2F6F8A` | Focus ring | Horizon blue |
 | `--color-success` | `#2C6A4F` | In-rotation, connected | Harbor pine |
 | `--color-danger` | `#8F3A3A` | Destructive or excluded | Channel marker |
+| `--color-sleeping` | `#6B7C89` | Local times and Sleeping marks for night cams | Late harbor haze |
 
-### TV overlay (nocturnal variant)
+### Night field (local full-screen player and TV)
 
-Used only on top of video, including the TV lower third and any full-bleed cinema moment. Never as the phone's default chrome.
+Used on top of video only: the phone's full-screen local player, the TV lower third, and TV toasts. Never as the phone's default chrome on Home or sheets.
 
 | Token | Value | Role |
 | --- | --- | --- |
-| `--color-overlay` | `rgba(10, 18, 24, 0.62)` | Glass behind the lower third |
-| `--color-overlay-strong` | `rgba(10, 18, 24, 0.82)` | Toasts, command confirmation |
+| `--color-night-field` | `#0A1A26` | Full-screen player field when no still is shown |
+| `--color-night-glass` | `rgba(10, 26, 38, 0.72)` | Glass panels and scrims on the local player |
+| `--color-accent-night` | `#8CC3D6` | Pinned pill, night accent, readable on video |
+| `--color-on-glass` | `#F3F5F7` | Titles and primary labels on glass |
+| `--color-on-glass-secondary` | `#A9B8C3` | Meta on glass |
+| `--color-overlay` | `rgba(10, 18, 24, 0.62)` | Glass behind the TV lower third |
+| `--color-overlay-strong` | `rgba(10, 18, 24, 0.82)` | TV toasts, command confirmation |
 | `--color-overlay-ink` | `#F3F5F7` | Title and brand |
 | `--color-overlay-dim` | `rgba(243, 245, 247, 0.78)` | City, country, mix line |
 | `--color-overlay-line` | `rgba(255, 255, 255, 0.16)` | Hairline on glass |
 | `--color-overlay-accent` | `#8EC4D4` | Playing or pinned marker, readable on video |
 
-The video itself stays untouched. No colored grade on the cam. A soft bottom scrim (black at 45% fading to transparent by 28% of the height) exists only while the lower third is visible.
+The video itself stays untouched. No colored grade on the cam. A soft bottom scrim exists only while chrome is visible on the local player or the TV lower third is on screen.
 
 ### Mapping from the current app
 
 | Today | Redesign |
 | --- | --- |
 | `#000` body, `#ffd27f` gold accent, cream type | Bright fog canvas and navy ink on the phone |
-| Glass bar `rgba(18, 18, 24, 0.82)` | White sheets and a navy transport cluster |
+| Glass bar `rgba(18, 18, 24, 0.82)` | White sheets, and night glass only over video |
 | Gold as the only accent | Horizon blue for selection and "now playing" only |
 
 ## Type
@@ -69,7 +77,9 @@ The video itself stays untouched. No colored grade on the cam. A soft bottom scr
 
 **UI:** Plus Jakarta Sans. Everything else: buttons, meta, lists, chips, mix titles. Weights 500, 600, 700. Labels and small caps use weight 500 with open tracking (`0.06em`).
 
-If either family is missing at build time, fall back to `Source Serif 4` for display and `system-ui` for UI, and keep the same sizes.
+**Japanese:** Noto Sans JP, for mix Japanese titles only. Cam names stay in the sheet language (almost always English).
+
+If a family is missing at build time, fall back to `Source Serif 4` for display, `system-ui` for UI, and `Noto Sans JP` or `system-ui` for Japanese, and keep the same sizes.
 
 ### Phone scale
 
@@ -90,10 +100,10 @@ Type must read from the couch, about 3 meters away. Sizes are px at 1080p and sh
 | Name | Size / line | Weight | Use |
 | --- | --- | --- | --- |
 | TV title | 64 / 76 | Fraunces 600 | Cam name in the lower third |
-| TV meta | 32 / 40 | Plus Jakarta 500 | City, country, type |
+| TV meta | 32 / 40 | Plus Jakarta 500 | City, country, local time |
 | TV mix | 24 / 32 | Plus Jakarta 500 | Current mix, English title |
 | TV brand | 18 / 24 | Plus Jakarta 600, tracking 0.14em, uppercase | WINDOW SEAT |
-| TV toast | 28 / 36 | Plus Jakarta 600 | Command confirmation ("Pinned", "Next cam") |
+| TV toast | 28 / 36 | Plus Jakarta 600 | Command confirmation ("Pinned. Staying on this cam.") |
 
 ## Spacing
 
@@ -122,7 +132,7 @@ Rhythm: tight within a control (8 or 12), comfortable between related blocks (16
 | `--radius-md` | 16px | Buttons, list rows, inputs |
 | `--radius-lg` | 24px | Sheets, video card, transport well |
 | `--radius-xl` | 32px | Start card, large panels |
-| `--radius-pill` | 999px | Primary CTA, cast pill, volume track |
+| `--radius-pill` | 999px | Primary CTA, cast pill, volume track, pin pill |
 
 ## Elevation
 
@@ -133,15 +143,17 @@ Shadows are cool and short, like light from a north window. No heavy 2010s card 
 - **Level 2 (sheet or menu):** `0 16px 40px rgba(16, 37, 54, 0.12)`.
 - **Level 3 (toast):** `0 8px 24px rgba(16, 37, 54, 0.18)`.
 
-On TV, prefer dim glass over drop shadows. Shadows disappear on a 10-foot dark screen.
+On TV and on the night field, prefer dim glass over drop shadows. Shadows disappear on a 10-foot dark screen.
 
 ## Iconography
 
-Simple 24px line icons, 2px stroke, round caps and joins. Navy on bright surfaces, fog-white on TV overlays and on primary buttons. Do not use emoji as icons.
+Simple 24px line icons, 2px stroke, round caps and joins. Navy on bright surfaces, fog-white on night glass and on primary buttons. Do not use emoji as icons.
 
-Needed set: previous, play, pause, next, volume, volume muted, pin, pinned, cam, mix, cast, cast connected, close, search, check, exclude, chevron, TV.
+Needed set: previous, play, pause, next, volume (music note is acceptable next to the mix slider), pin, pinned, cam, mix, close, search, check, exclude, chevron, fullscreen, fullscreen_exit, Home back.
 
-Hit targets on the phone are at least 48px, and 64px for transport (previous, play/pause, next).
+**Cast icons must be the official Google Cast (Material) glyphs:** a rectangle with signal arcs rising from the lower left. Use `cast` when idle and `cast_connected` when a session is live. Do not invent a substitute glyph.
+
+Hit targets on the phone are at least 48px, and 64px for transport (previous, play/pause, next). The floating show/hide-controls button is 52px and always sits at the bottom right of the local player.
 
 ## Motion
 
@@ -152,17 +164,19 @@ Calm and short. The living room should feel still.
 | Fade | 200ms | ease-out | Sheets, toasts, chips |
 | Slide | 280ms | cubic-bezier(0.2, 0.8, 0.2, 1) | Bottom sheets, lower third in |
 | Cam crossfade | 400ms | ease | Existing cam blackout, keep this |
-| Lower third hold | 5s visible after a cam or mix change, then 800ms fade out |  | TV only |
+| Local chrome hold | 6s visible after a tap, then fade, except when paused or a sheet is open |  | Local player only |
+| Lower third hold | 10s visible after a cam loads, then 800ms fade out |  | TV only |
+| Pin toast hold | 5s visible after pinning, then fade |  | TV only |
 | Press | 80ms | ease-out | Button scale to 0.98 |
 
 No bounce. No looping decorative motion. The cam is already moving.
 
 ## Layout principles
 
-- Phone artboards are Pixel-sized, 412x915, with a status bar except where the OS chrome is intentionally hidden.
-- Local playback: the cam is a rounded 16:9 card near the top of a bright canvas. Transport and now-playing live *under* the picture, not on top of it. The phone is a player, not a tiny TV.
-- Casting: the phone drops the live video and becomes a remote. A clear "Casting to TV" pill is always visible. The TV holds the picture.
-- TV: full-bleed cam, no chrome except a lower third that appears on change or when a command arrives.
+- Phone artboards are Pixel-sized, 412x915, with a status bar except on the full-screen local player, where system bars are hidden.
+- Local playback: the cam plays full screen with controls overlaid on the picture. A floating button shows or hides the chrome. Exit full screen restores system bars and leaves the player.
+- Casting: the phone drops the live video and becomes a remote. A clear "Casting to {room}" pill with the official connected Cast icon is always visible. The TV holds the picture.
+- TV: full-bleed cam, no chrome except a lower third for the first 10 seconds after a cam loads, a 5-second pin toast, and a persistent Paused pill while paused.
 
 ## Component specs
 
@@ -178,84 +192,89 @@ Height 52px, pill radius, navy fill, white label in Plus Jakarta 600. Full width
 
 Same height, transparent fill, navy label, no border (or a hairline only if it sits on a busy photo). Used for "Open in TV browser" and "About".
 
-### Now-playing bar
+### Start screen (Home)
 
-A block under the video card (local) or under the casting pill (remote).
+Bright canvas. Wordmark, a one-line tagline, a "Right now" hero, a full-width Start watching button, then Cast to your TV (official Cast icon), then quieter ghost actions for "Open in TV browser" and "About and credits".
 
-- Line 1: cam name, Title sm, ink.
-- Line 2: `{city}, {country}` plus a type chip (street, harbor, airport, and so on). Body sm and caption.
-- Line 3: mix English title, body sm, tertiary, with a small mix note icon. Japanese title can sit in a caption if there is room; otherwise it lives in the mix sheet.
-- Trailing: a pin icon button. Pinned state fills the icon and uses `--color-accent-soft` behind it.
+Tagline: "Live windows onto the world, with soft music, made for your TV." This is intentionally wider than Japan. About copy can still lead with Japan.
 
-Tapping the cam name or the type chip opens the cam menu. Tapping the mix line opens the mix picker.
+The "Right now" hero shows a current cam still, the local time in that city, and a short line about how many windows are awake. Example, for a Monday afternoon in Pacific time: "It's 9:51 AM in Tokyo." and "Morning on the harbor. 33 windows are awake." Counts come from the sheet plus the sleeping-cam rule, not from invented places.
+
+### Local player
+
+Full-screen night field, no status bar.
+
+- Top scrim: Home (exit back to the start screen), official Cast icon, and fullscreen_exit.
+- Bottom glass panel: cam name, `{city}, {country}` and local time, rotation status, pin pill, previous / pause / next, Music volume slider, Cams and Mix.
+- A 52px floating button at the bottom right shows or hides the chrome. Auto-hide after 6 seconds, except when paused or a sheet is open.
+- Exit full screen restores system bars.
+
+### Pause and pin
+
+These are independent controls with independent states: Playing, Pinned, Paused, and Paused and pinned. Never use the word "pause" on the pin control.
+
+**Pause** is the large center transport button, icon only. It pauses the entire feed: the cam and the music. On resume, the cam jumps to the live edge and the mix continues where it stopped. While paused, the local player keeps chrome visible, and the TV shows a persistent "Paused" pill so a frozen frame is not mistaken for a crash.
+
+**Pin** is a text pill in the info row, labeled "Pin cam" when idle (outline) and "Pinned" when on (filled with accent-night on the local player, accent-soft on the bright remote). Pin stops auto rotation and keeps showing the current cam. Music keeps playing. Next and previous while pinned still change the cam and keep the pin. Pin wins over the sleeping-cam skip: a pinned cam stays on screen even after local midnight.
+
+The rotation hairline ("Next cam in 2:14") is visible only when rotation is on. When pinned, replace it with "Pinned. Rotation off." When paused and not pinned, show "Paused" and freeze the hairline.
 
 ### Transport controls
 
-A centered cluster, like a music player, but it operates on the *cam*:
+A centered cluster, like a music player:
 
 - Previous cam (64px).
-- Play / pause (72px, navy filled circle, white icon). Pause means "hold this view, do not rotate." Play means "resume rotation."
+- Pause / play (72px, filled circle, contrasting icon). This pauses or resumes the whole feed, not rotation.
 - Next cam (64px).
-
-This is the main interaction on both the local player and the remote. It replaces the current wrap-around bar of many equal buttons.
 
 Rotation interval ("Every 60s") is a quieter control in the cam menu, not in the transport row.
 
 ### Volume
 
-A horizontal pill track, 8px tall, 44px hit height, navy fill for the current level. Label "Mix" to the left so it is obvious this is music volume, not cam volume. Value `0` to `100`, step `5`, default `60` (same as today). A speaker icon on the left mutes or unmutes.
-
-Cam audio stays muted unless we later add an explicit "cam sound" control. Some feeds carry their own music (for example Victoria Harbour from TST) and would clash with the mix.
+A horizontal pill track, 8px tall, 44px hit height, navy fill for the current level, labeled "Music". Value `0` to `100`, step `5`, default `60`. This slider controls only the mix. Cam audio is always muted. There is no cam volume control and no cam mute toggle. Helper copy in the mix picker: "Cam sound is always off."
 
 ### Cast state indicator
 
-- Idle: a ghost "Cast to TV" button with the Cast icon, same as today in placement on the start screen and on the local player.
+Use the official Material Cast icons, never a custom glyph.
+
+- Idle: "Cast to your TV" with the `cast` icon, on Home and in the local player top scrim.
 - Connecting: pill, canvas color, "Connecting to TV..."
-- Connected: pill, `--color-accent-soft` fill, horizon-blue text, "Casting to TV". The local video card is replaced by a still or a simple navy panel so the phone is clearly a remote.
+- Connected: pill, `--color-accent-soft` fill, horizon-blue text, official `cast_connected` icon, "Casting to {room}". The phone shows no live cam. A small still or navy panel can stand in for the current window.
 - Failed or "TV found, not connected": the same pill in danger-soft, plus a short status line. Do not hide the failure.
 
 ### Cam picker (sheet)
 
-Full-height phone sheet, canvas background, rounded top 32px if presented as a modal, or a full screen if pushed.
+Full-height phone sheet, canvas background.
 
-Header: "Cams", close, and a short count such as "38 of 44 in rotation".
+Header: "Cams", Done, and a short count such as "33 in rotation now. 9 checked cams are sleeping."
 
-Tools row:
+Time of day:
 
-- Pin current cam (also available on the now-playing bar).
-- Rotation interval (60s, 2m, 5m, off).
-- "All defaults" and "All on" to reset the multi-select.
+- **Skip sleeping cams** is on by default and resets each session. A cam is sleeping when local time is midnight to 6 AM. Sleeping cams stay visible in list order, marked with their local time and a "Sleeping" label. They sit out of rotation until morning unless the toggle is turned off.
+- **Only daytime** is off by default. When on, rotate only cams where it is 7 AM to 7 PM local time.
 
-Filter chips, horizontal, scrollable:
+Quick picks, in addition to unchecking from the full list: All, None, and a few country or type shortcuts. A filled chip means every cam in that group is currently checked. These change inclusion; they do not hide rows.
 
-- Grouped by country (Japan, France, Italy, Australia, and others present in the sheet).
-- Then city, when a country is selected.
-- Then type: street, crossing, skyline, landscape, mountain, beach, harbor, river, train, airport, temple, nature, animals, snow, nightlife.
+Each row: checkbox, name, country and type, local time, Sleeping mark when relevant, and a Play now button. Tapping Play now starts that cam immediately and does not change the checkbox. Play now can open a sleeping cam. Pinning also wins over the night rule.
 
-Chips are inclusive filters for *browsing* the list. They do not by themselves change the rotation. A selected chip uses accent-soft fill and accent text.
+The starting point is the sheet's `in_rotation` set (today, 44 cams), all checked. The user unchecks from that list, or uses shortcuts. Group actions apply to the current filter.
 
-Multi-select for the rotation:
-
-- Each row has a checkbox, a name, `{city}, {country}`, and a type chip.
-- Checked means the cam is in rotation. Unchecked excludes it.
-- The starting point is the sheet's `in_rotation` flag (today, 44 cams). The user subtracts or adds from that set.
-- Group actions: "Include all visible" and "Exclude all visible" apply to the current filter, so "exclude all Airport" or "include only Kyoto" is two taps.
-- The current cam, if excluded, keeps playing until the next rotation or until the user hits Next.
-
-Pin is independent of inclusion. Pinning an excluded cam plays it now and holds it; unpinning returns to the included set.
+Mock local times in the v2 artboards assume Monday 16 November 2026, 4:51 PM Pacific (UTC-8).
 
 ### Mix picker (sheet)
 
 Same sheet pattern. Header "Mix". Subhead "Tokyo Chill Lab".
 
-Tools: play/pause for *music* (separate from cam transport), mute, shuffle, and the volume slider.
+**Shuffle is on by default for every session**, so the first mix is not always the same. The user can turn it off for the current session.
+
+Volume slider lives here too, with the helper "Cam sound is always off."
 
 List of the 16 mixes, one current row:
 
 - English title, body, ink.
-- Japanese title, body sm, secondary.
+- Japanese title in Noto Sans JP, body sm, secondary.
 - Duration in minutes, caption, tertiary, trailing.
-- The playing row uses accent-soft and a small playing mark.
+- The playing row uses accent-soft and a "Playing" mark.
 
 Tapping a row starts that mix immediately on the phone or, while casting, on the TV.
 
@@ -263,30 +282,27 @@ Tapping a row starts that mix immediately on the phone or, while casting, on the
 
 Sits in the bottom-left of the 5% safe area. Max width about 46% of the screen.
 
-- Brand line first, small, uppercase, overlay-dim.
 - Cam name, TV title, overlay-ink.
-- Meta: `{city}, {country}` then a mid-dot then type.
-- Mix English title, TV mix size, overlay-dim.
+- Meta: `{city}, {country}` then a mid-dot then local time. No type tag.
 
-A compact command toast ("Next", "Pinned", "Mix changed") appears top-center in the safe area for about 2 seconds after a remote command.
+The lower third shows for the first 10 seconds after the cam loads, then fades so more of the video is visible. After it fades, the quiet TV is video only.
 
-The lower third appears when the cam or mix changes, and when the remote is first used after a quiet period. It holds for 5 seconds, then fades. No persistent debug strip in the designed state (the current debug strip stays a development-only flag).
+A pin toast ("Pinned. Staying on this cam.") appears top-center in the safe area for 5 seconds after pinning, then fades. It is temporary, not persistent.
 
-### Start screen
+While the feed is paused, a persistent "Paused" pill stays on the TV.
 
-Bright canvas. Wordmark, a one-line tagline, a full-width Start button, then Cast to TV, then quieter ghost actions for "Open in TV browser" and "About and credits".
+No persistent debug strip in the designed state (the current debug strip stays a development-only flag).
 
-Proposed tagline, open for comment: "Live windows onto the world, with soft music, made for your TV." This reflects the list as it stands (Japan plus other cities). The About copy can still lead with Japan.
+## Interaction model
 
-## Proposed interaction model
+These decisions are locked for the v2 mocks.
 
-These are design decisions baked into the mocks, and they are the main things to confirm or reject in Paper comments.
-
-1. **Transport is for the cam.** Previous, pause (hold this view), next. Pin is a stronger hold: stay on this cam until I unpin, even if I leave the session and come back (once that persistence exists). Pause is session-only.
-2. **Volume is for the mix only.** Cam audio stays muted by default.
-3. **Two menus, not one overflow bar.** Cam menu and Mix menu. Interval, lite, caption, and select tools live in the cam menu. Shuffle and volume live in the mix menu.
-4. **Inclusion, not a blank playlist.** The sheet's 44 in-rotation cams are the default set. Multi-select excludes or includes from that set, including by country, city, or type.
-5. **While casting, the phone is a remote.** No live cam on the phone. Same transport, same menus, plus a persistent casting pill.
+1. **Pause pauses the entire feed.** Video and music both stop. Resume jumps the cam to the live edge and continues the mix.
+2. **Pin stops auto rotation only.** The current cam stays on screen and music keeps playing. Pin and pause are visually distinct and can combine.
+3. **Volume is for the mix only.** Cam audio is always muted, with no control for it.
+4. **Inclusion from the full list, plus shortcuts.** The 44 in-rotation cams start checked. Users uncheck from that list, or use All / None / country / type shortcuts. Skip sleeping cams (midnight to 6 AM local) is on by default and resets each session. Only daytime is optional.
+5. **While casting, the phone is a remote.** No live cam on the phone. Same transport and menus, plus a persistent casting pill with the official connected Cast icon.
+6. **Local play is full screen.** Controls overlay the cam, with a floating toggle and an exit.
 
 Lite mode and "Open in TV browser" stay available but are secondary. They are not in the primary transport.
 
@@ -299,10 +315,6 @@ Lite mode and "Open in TV browser" stay available but are secondary. They are no
 
 ## Open questions
 
-See the companion note in the Paper file and the pull request. The short list:
-
-1. Pause versus pin, as described above. Is the distinction useful, or should one control do both?
-2. Should volume ever expose cam audio, especially for feeds that already play their own sound?
-3. Keep a Japan-first tagline, or widen it now that other cities are in the rotation?
-4. Is "exclude from the 44" the right multi-select model, or would you rather build a short include-only playlist each time?
-5. For local playback on the phone, is a rounded cam card on a bright canvas right, or do you want full-bleed video with controls overlaid?
+1. Should the sheet gain an IANA timezone column? Deriving local time from country alone is fragile for places like the United States or Australia.
+2. When shuffle is on, should the first mix also start at a random point inside the playlist, not only at a random mix?
+3. After a long pause on the TV, should the Cast session end so the TV can return to ambient mode? A starting recommendation is 30 minutes.
