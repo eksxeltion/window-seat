@@ -64,7 +64,7 @@ The receiver reads these URL overrides (see the top of `js/receiver.js`):
 
 - `?debug=1` runs the receiver in any browser. It does not start the Cast context (CAF). It shows the debug strip. Good for a laptop check, not for a real Cast session.
 - `?strip=1` shows the debug strip but still starts CAF. So it works as a registered receiver URL.
-- `pauseWarnMs` and `pauseEndMs` set the pause warning and the pause end in milliseconds. The defaults are 25 minutes (warning) and 30 minutes (end). A value is used only if it is a positive number. If it is missing, zero, negative or not a number, the default applies. These two work with or without `debug=1`. The code reads them from the URL on every load. If the warning is set later than the end, the warning fires at the end time.
+- `pauseWarnMs` and `pauseEndMs` set the pause warning and the pause end in milliseconds. The defaults are 25 minutes (warning) and 30 minutes (end). A value is used only if it is a positive number. If it is missing, zero, negative or not a number, the default applies. These two work with or without `debug=1`. The code reads them from the URL on every load. If the warning is set later than the end, the warning and the end are due at the same moment, so the warning may never show.
 
 Example for a laptop browser (1 minute warning, 2 minute end):
 
@@ -75,7 +75,9 @@ https://window-seat-lemon.vercel.app/receiver.html?debug=1&pauseWarnMs=60000&pau
 3. Run `__receiver.send({ type: "pause", value: true })` to pause the feed. The timer starts.
 4. Watch the debug strip. The warning shows after 1 minute and the end after 2 minutes.
 
-The limit: a real Cast session loads the receiver URL registered in the Cast console. The phone cannot add query parameters to it. So testing short timers on the TV needs a second, unpublished test app whose registered URL already has the overrides.
+The limit: a real Cast session loads the receiver URL registered in the Cast console. The phone cannot add query parameters to it. So testing short timers on the TV needs a registered URL that already has the overrides. A second, unpublished test app is the clean way, because the main app keeps its normal URL.
+
+Quick alternative with no code change: in the console, temporarily edit the main Window Seat app's Receiver Application URL to the short-timer URL below, test, then change it back. Console edits can take a few minutes to reach the TV. While it is changed, every cast uses the short timers, so do not forget to revert it.
 
 ## One-time console step for Stephane (needs your Google sign-in)
 
