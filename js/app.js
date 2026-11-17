@@ -1,10 +1,11 @@
 // Window Seat: rotating live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
 import qrcode from "./qr.js";
-import { initCast, castConfigured, sendConfigToTv, sendCamsToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam, remoteVolume, remoteState, castDebugInfo, sendDebugToTv, sendShuffleToTv } from "./cast.js";
+import { initCast, castConfigured, sendConfigToTv, sendCamsToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam, remoteVolume, remoteState, castDebugInfo, sendDebugToTv, sendShuffleToTv, telemetryCastState, telemetryCastSessionId, castAvailable } from "./cast.js";
 import { initDebug, isDebugOn } from "./debug.js";
 import { BUILD } from "./build.js";
-import { refreshFromSheet, listLabel } from "./config.js";
+import { refreshFromSheet, listLabel, listInfo } from "./config.js";
+import { initTelemetry, capture, captureError, setTelemetryEnabled, isTelemetryOn, telemetryForcedOff } from "./telemetry.js";
 import { localTime, camLocalTime, awakeCams, placeLine, partOfDay, isSleeping, rotationPool, DEFAULT_TIME_RULES } from "./localtime.js";
 
 /* ---------------------------------------------------------------- config */
@@ -77,6 +78,20 @@ function detectTv() {
   return window.screen.width >= 1600 && (mq("(pointer: coarse)") || mq("(hover: none)"));
 }
 const isTv = detectTv();
+
+/* Telemetry (docs/telemetry.md): started first so early errors are kept; the SDKs load after first paint. */
+function deviceClass() {
+  if (isTv) return "tv";
+  const w = Math.min(window.screen.width || 0, window.screen.height || 0);
+  const coarse = !!(window.matchMedia && (window.matchMedia("(pointer: coarse)").matches || window.matchMedia("(hover: none)").matches));
+  if (w && w < 600) return "phone";
+  return coarse ? "tablet" : "desktop";
+}
+initTelemetry({ surface: "web", build: BUILD, deviceClass, castState: telemetryCastState, castSessionId: telemetryCastSessionId });
+const cmdMode = () => (isCasting() ? "cast" : "local");
+/** One `command` event for a local action (the cast path reports from js/cast.js act()). */
+const localCommand = (type) => capture("command", { type, mode: "local" });
+const AUTO_REASONS = new Set(["start", "rotate", "skip", "retry", "list"]);
 const storedLite = store.get("lite", null); // null: the user never chose
 
 const savedInterval = store.get("interval", 60);
@@ -343,7 +358,7 @@ function createCamPlayer() {
         cp.waiters.splice(0).forEach((fn) => fn());
       },
       onStateChange: (e) => onCamState(e.data),
-      onError: () => onCamError(),
+      onError: (e) => onCamError(e && e.data),
     },
   });
 }
@@ -414,9 +429,11 @@ function pickCam(fromId, dir = 1) {
 }
 
 /** Start switching to `camId`: cover the screen, then load it on the single player. */
-function beginLoad(camId, dir = 1, fails = 0) {
+function beginLoad(camId, dir = 1, fails = 0, reason) {
   const delay = covered ? 0 : animMs();
-  state.pending = { camId, startedAt: Date.now() + delay, dir, fails };
+  // Telemetry reason for cam_shown; a restart of the same pending cam keeps its reason.
+  const why = reason || (state.pending && state.pending.camId === camId ? state.pending.reason : "rotate");
+  state.pending = { camId, startedAt: Date.now() + delay, dir, fails, reason: why };
   cover(true);
   loadCam(camId, delay);
   render();
@@ -437,10 +454,19 @@ function onCamPlaying(p) {
   setQuality();
   cover(false);
   render();
+  const reason = p.reason || "rotate";
+  const user = !AUTO_REASONS.has(reason);
+  if (user || Math.random() < 0.25) capture("cam_shown", { cam_id: p.camId, reason, mode: "local", sampled: user ? 1 : 4 });
 }
 
-function markFailed(camId) {
-  if (camId) state.failed.add(camId);
+function markFailed(camId, why) {
+  if (!camId) return;
+  if (!state.failed.has(camId)) {
+    // The YouTube code of this load, if the player reported one.
+    if (cp.errSeq && cp.errSeq === cp.seq && cp.camId === camId) capture("player_error", { player: "cam", cam_id: camId, code: cp.errCode, mode: "local" });
+    capture("cam_failed", { cam_id: camId, why: why || "error" });
+  }
+  state.failed.add(camId);
 }
 
 function everythingFailed() {
@@ -448,11 +474,11 @@ function everythingFailed() {
 }
 
 /** Pending load failed (error or timeout): mark it, keep the overlay, try the next candidate. */
-function failPending() {
+function failPending(why) {
   const p = state.pending;
   if (!p) return;
   state.pending = null;
-  markFailed(p.camId);
+  markFailed(p.camId, why);
   const next = pickCam(p.camId, p.dir);
   if (!next) {
     state.currentCamId = null;
@@ -460,12 +486,12 @@ function failPending() {
     render();
     return;
   }
-  beginLoad(next, p.dir, p.fails + 1);
+  beginLoad(next, p.dir, p.fails + 1, "skip");
 }
 
 /** The cam on screen broke (error or stream ended). */
-function failActive() {
-  markFailed(state.currentCamId);
+function failActive(why) {
+  markFailed(state.currentCamId, why);
   activeStall = null;
   const next = pickCam(state.currentCamId, 1);
   if (!next || next === state.currentCamId) {
@@ -475,7 +501,7 @@ function failActive() {
     render();
     return;
   }
-  beginLoad(next, 1, 1);
+  beginLoad(next, 1, 1, "skip");
 }
 
 /** Unplayable-video check for a cam that was told to load but is not progressing. */
@@ -507,7 +533,7 @@ function onCamState(s) {
   const p = state.pending;
   if (p) {
     if (s === YS.PLAYING && shows(p.camId)) onCamPlaying(p);
-    else if (s === YS.ENDED && isCurrentLoad()) failPending();
+    else if (s === YS.ENDED && isCurrentLoad()) failPending("ended");
     return;
   }
   if (!state.currentCamId || state.feedPaused) return;
@@ -516,7 +542,7 @@ function onCamState(s) {
     setQuality();
   } else if (s === YS.BUFFERING || s === YS.PAUSED) {
     if (!activeStall && watchdogOn()) activeStall = { at: Date.now(), tried: false };
-  } else if (s === YS.ENDED && isCurrentLoad()) failActive();
+  } else if (s === YS.ENDED && isCurrentLoad()) failActive("ended");
 }
 
 // YouTube error codes 2, 5, 100, 101, 150 and 153 all mean the video cannot be played here.
@@ -524,11 +550,12 @@ function onCamState(s) {
 // that replaced it. Never fail on the event alone: only remember it, then confirm by polling that the
 // requested video is the one loaded and is still not playing (see errorConfirmed). Errors that cannot
 // be confirmed this way (an invalid id often reports an empty or old video id) fall to the load timeouts.
-function onCamError() {
+function onCamError(code) {
   if (!hasCurrentLoad()) return;
   if (cp.errSeq !== cp.seq) {
     cp.errSeq = cp.seq;
     cp.errAt = Date.now();
+    cp.errCode = code; // telemetry only (player_error)
   }
 }
 
@@ -548,7 +575,9 @@ function tick() {
     if (now < graceUntil || cp.deferred) return; // grace after resume covers pending loads too
     const cold = !state.currentCamId || p.fails > 0;
     const deadline = cold ? COLD_LOAD_TIMEOUT_MS : LOAD_TIMEOUT_MS;
-    if (now - p.startedAt > deadline || errorConfirmed() || looksUnplayable(cold ? COLD_STUCK_MS : STUCK_MS)) failPending();
+    if (now - p.startedAt > deadline) failPending("load_timeout");
+    else if (errorConfirmed()) failPending("error");
+    else if (looksUnplayable(cold ? COLD_STUCK_MS : STUCK_MS)) failPending("unplayable");
     return;
   }
   if (!state.currentCamId || state.allFailed) return;
@@ -561,7 +590,7 @@ function tick() {
       clearStaleError();
     } else if (live != null && !activeStall) activeStall = { at: now, tried: false };
     if (errorConfirmed()) {
-      failActive();
+      failActive("error");
       return;
     }
   }
@@ -570,13 +599,13 @@ function tick() {
       activeStall = { at: now, tried: true };
       camPlay();
     } else {
-      failActive(); // works while pinned too
+      failActive("stalled"); // works while pinned too
     }
     return;
   }
   if (state.pinned || now < state.nextSwapAt) return;
   const next = pickCam(state.currentCamId, 1);
-  if (next && next !== state.currentCamId) beginLoad(next);
+  if (next && next !== state.currentCamId) beginLoad(next, 1, 0, "rotate");
   else state.nextSwapAt = now + rotateSec() * 1000;
 }
 
@@ -611,7 +640,7 @@ function onVisibility() {
     if (document.hidden || cp.seq !== seq || state.pending || !state.currentCamId || state.feedPaused) return;
     if (Date.now() < graceUntil) return;
     const live = quietly(() => cp.player.getPlayerState());
-    if (live !== YS.PLAYING && live !== YS.BUFFERING) beginLoad(state.currentCamId);
+    if (live !== YS.PLAYING && live !== YS.BUFFERING) beginLoad(state.currentCamId, 1, 0, "retry");
   }, GRACE_MS + 250);
 }
 
@@ -620,6 +649,7 @@ function onVisibility() {
 function skip(dir = 1) {
   if (viaTv(() => remoteCmd(dir < 0 ? "prev" : "next"))) return;
   if (state.casting || !state.started || !state.apiReady) return;
+  localCommand(dir < 0 ? "prev" : "next");
   const from = state.pending ? state.pending.camId : state.currentCamId;
   const target = pickCam(from, dir);
   if (!target) return;
@@ -628,7 +658,7 @@ function skip(dir = 1) {
     state.nextSwapAt = Date.now() + rotateSec() * 1000;
     return;
   }
-  beginLoad(target, dir);
+  beginLoad(target, dir, 0, dir < 0 ? "prev" : "next");
 }
 
 function watchNow(camId) {
@@ -637,13 +667,15 @@ function watchNow(camId) {
   setAllFailed(false);
   if (viaTv(() => remoteCam(camId))) return;
   if (state.casting || !state.started) return;
+  localCommand("cam");
   if (state.pending ? state.pending.camId === camId : camId === state.currentCamId) return;
-  beginLoad(camId);
+  beginLoad(camId, 1, 0, "pick");
 }
 
 function togglePin() {
   if (viaTv(() => remoteCmd("pin"))) return;
   state.pinned = !state.pinned;
+  localCommand(state.pinned ? "pin" : "unpin");
   if (!state.pinned) {
     state.nextSwapAt = Date.now() + rotateSec() * 1000;
     state.pausedRemaining = rotateSec() * 1000;
@@ -656,6 +688,7 @@ function toggleInterval() {
   if (viaTv(() => remoteCmd("interval"))) return;
   if (state.lite) return;
   state.intervalSec = state.intervalSec === 60 ? 30 : 60;
+  localCommand("interval");
   store.set("interval", state.intervalSec);
   state.nextSwapAt = Date.now() + rotateSec() * 1000;
   if (state.feedPaused) state.pausedRemaining = rotateSec() * 1000; // resume uses the new period
@@ -676,29 +709,49 @@ function toggleLite() {
 }
 
 function setEnabled(camId, on) {
-  setManyEnabled([camId], on);
+  setManyEnabled([camId], on, "toggle");
 }
 
 /** Check or uncheck a group of cams; the checked set persists, and a casting TV gets the new pool. */
-function setManyEnabled(ids, on) {
+function setManyEnabled(ids, on, via = "toggle", shortcut) {
   for (const id of ids) {
     if (!camById(id)) continue;
     state.enabledOverrides[id] = on;
     if (on === !!camById(id).default) delete state.enabledOverrides[id];
   }
   saveOverrides();
-  poolChanged();
+  poolChanged(via, shortcut);
 }
 
 /** The rotation pool changed (checks or time-of-day rules): redraw and keep a casting TV on the same pool. */
-function poolChanged() {
+function poolChanged(via, shortcut) {
   render();
   if (isCasting()) sendCamsToTv(tvCamIds(), timeRules());
+  if (via) poolTelemetry(via, shortcut);
+}
+
+/* cam_pool_changed once a change settles (2s), flushed on page hide. The last way of changing it wins. */
+let poolTimer = 0;
+let poolPending = null;
+function poolTelemetry(via, shortcut) {
+  poolPending = { via, shortcut };
+  clearTimeout(poolTimer);
+  poolTimer = setTimeout(flushPoolTelemetry, 2000);
+}
+function flushPoolTelemetry(beacon = false) {
+  clearTimeout(poolTimer);
+  if (!poolPending) return;
+  const { via, shortcut } = poolPending;
+  poolPending = null;
+  const props = { enabled_count: checkedCams().length, effective_count: rotationIds().length, total: CAMS.length, via, skip_night: state.skipSleeping };
+  if (shortcut) props.shortcut = shortcut;
+  capture("cam_pool_changed", props, { beacon });
+  capture("command", { type: "cams", mode: cmdMode() }, { beacon });
 }
 
 function toggleTimeRule(key) {
   state[key] = !state[key];
-  poolChanged();
+  poolChanged("time_rule");
 }
 
 /* Quick picks. "all" and "none", or "country:Japan" and "type:street". They change checks, never which rows show. */
@@ -720,10 +773,10 @@ function groupFilled(group) {
 
 function pickGroup(group) {
   const ids = groupCams(group).map((c) => c.id);
-  if (group === "all") return setManyEnabled(ids, true);
-  if (group === "none") return setManyEnabled(ids, false);
+  if (group === "all") return setManyEnabled(ids, true, "shortcut", group);
+  if (group === "none") return setManyEnabled(ids, false, "shortcut", group);
   // A filled country or type chip unchecks its cams; otherwise it checks them all.
-  setManyEnabled(ids, !groupFilled(group));
+  setManyEnabled(ids, !groupFilled(group), "shortcut", String(group).split(":")[0]);
 }
 
 function saveOverrides() {
@@ -734,6 +787,7 @@ function saveOverrides() {
 function setAllFailed(on) {
   if (state.allFailed === on) return;
   state.allFailed = on;
+  if (on) capture("cams_all_failed", { mode: "local" });
   if (on) {
     showNotice(
       "The cams are resting",
@@ -750,13 +804,13 @@ function setAllFailed(on) {
 function retryCams() {
   state.failed.clear();
   setAllFailed(false);
-  beginLoad(pickCam(state.currentCamId, 1) || CAMS[0].id);
+  beginLoad(pickCam(state.currentCamId, 1) || CAMS[0].id, 1, 0, "retry");
 }
 
 function startCams() {
   const checked = checkedCams();
   const list = rotationPool(checked.length ? checked : CAMS, timeRules());
-  beginLoad(list[Math.floor(Math.random() * list.length)].id);
+  beginLoad(list[Math.floor(Math.random() * list.length)].id, 1, 0, "start");
 }
 
 /* ================================================================ music */
@@ -804,7 +858,7 @@ function createMusicPlayer() {
         if (state.started) startMusic();
       },
       onStateChange: (e) => onMusicState(e.data),
-      onError: () => onMusicError(),
+      onError: (e) => onMusicError(e && e.data),
     },
   });
 }
@@ -862,9 +916,14 @@ function startMusic() {
   if (musicStuck) showTapMusic(true);
   if (!musicReady) return; // onReady will call again
   applyVolume();
-  if (state.musicWantsPlay) quietly(() => musicPlayer.playVideo());
+  if (state.musicWantsPlay) {
+    if (!mixStart) mixStart = { mixId: state.mixId, userChoice: false };
+    quietly(() => musicPlayer.playVideo());
+  }
   scheduleMusicCheck();
 }
+
+let mixStart = null; // telemetry: { mixId, userChoice } until that mix first reaches PLAYING
 
 function scheduleMusicCheck() {
   clearTimeout(musicCheckTimer);
@@ -892,6 +951,7 @@ function playMix(mixId, { userChoice = false } = {}) {
     // Paused (an error moved to the next mix): cue it, keep everything paused.
     state.mixId = mixId;
     store.set("mix", mixId);
+    mixStart = { mixId, userChoice: false };
     if (musicReady) quietly(() => musicPlayer.cueVideoById({ videoId: mixId, startSeconds: 0 }));
     return render();
   }
@@ -899,6 +959,8 @@ function playMix(mixId, { userChoice = false } = {}) {
   state.mixId = mixId;
   store.set("mix", mixId);
   state.musicWantsPlay = true;
+  if (userChoice) localCommand("mix");
+  mixStart = { mixId, userChoice };
   if (userChoice) {
     state.musicErrors = 0;
     state.musicUnavailable = false;
@@ -926,6 +988,10 @@ function nextMix() {
 function onMusicState(s) {
   state.musicState = s;
   if (s === YS.PLAYING) {
+    if (mixStart && mixStart.mixId === state.mixId) {
+      capture("mix_started", { mix_id: state.mixId, shuffle: state.shuffle, user_choice: mixStart.userChoice, mode: "local" });
+      mixStart = null;
+    }
     quietly(() => musicPlayer.setPlaybackQuality("tiny"));
     state.musicErrors = 0;
     state.musicUnavailable = false;
@@ -937,9 +1003,11 @@ function onMusicState(s) {
   render();
 }
 
-function onMusicError() {
+function onMusicError(code) {
+  capture("player_error", { player: "music", mix_id: state.mixId, code, mode: "local" });
   state.musicErrors++;
   if (state.musicErrors >= MIXES.length) {
+    if (!state.musicUnavailable) capture("music_unavailable");
     state.musicUnavailable = true;
     showTapMusic(false);
     toast("Music is unavailable right now");
@@ -990,6 +1058,7 @@ function resumeMusic() {
 function setFeedPaused(paused) {
   if (viaTv(() => remoteCmd(paused ? "play-off" : "play-on"))) return;
   if (paused === state.feedPaused) return;
+  localCommand(paused ? "pause" : "play");
   if (paused) {
     pauseCam();
     pauseMusic();
@@ -1020,6 +1089,7 @@ function setVolume(v, announce = true) {
 function toggleMute() {
   if (viaTv(() => remoteCmd("mute"))) return;
   state.muted = !state.muted;
+  localCommand(state.muted ? "mute" : "unmute");
   store.set("muted", state.muted);
   applyVolume();
   toast(state.muted ? "Music muted" : `Music on, volume ${state.volume}`);
@@ -1030,6 +1100,7 @@ function toggleMute() {
    reported setting (another sender may have changed it) and the phone follows. */
 function toggleShuffle() {
   state.shuffle = !(isCasting() ? remoteState().shuffle : state.shuffle);
+  capture("command", { type: "shuffle", mode: cmdMode() });
   if (isCasting()) sendShuffleToTv(state.shuffle);
   toast(state.shuffle ? "Shuffle on. A random mix plays next." : "Shuffle off. Mixes play in list order.");
   render();
@@ -1388,12 +1459,31 @@ function showListStatus(error) {
   });
 }
 
+const LIST_ERRORS = [
+  [/too long|timeout/i, "timeout"],
+  [/HTTP|private/i, "http"],
+  [/not CSV/i, "parse"],
+  [/no usable/i, "unusable"],
+  [/could not read|network|fetch/i, "network"],
+];
+/** A fixed code for list_load (the error text itself is never sent). */
+function listError(text) {
+  for (const [re, code] of LIST_ERRORS) if (re.test(String(text || ""))) return code;
+  return "parse";
+}
+
 function loadSheetConfig() {
   showListStatus();
+  const startedAt = Date.now();
   refreshFromSheet().then((r) => {
     if (r.changed) rebuildLists();
     showListStatus(r.ok ? "" : r.error);
     if (r.ok) sendConfigToTv(); // keep a casting TV on the same list
+    const props = { ok: !!r.ok, source: listInfo.source, ms: Date.now() - startedAt, cams: listInfo.cams, mixes: listInfo.mixes };
+    if (!r.ok) props.error = listError(r.error);
+    capture("list_load", props);
+    // A list that fails to parse with an exception is a bug (Sentry); a sheet that is down or private is not.
+    if (!r.ok && props.error === "parse" && !/not CSV/i.test(String(r.error))) captureError(new Error("List parse failed"), { kind: "list_parse" });
   });
 }
 
@@ -1533,6 +1623,7 @@ function openPanel(name, opener) {
   panelOpener = opener || null;
   state.openPanel = name;
   panel.hidden = false;
+  capture("panel_opened", { panel: name, mode: cmdMode() });
   body.classList.add("panel-open");
   setBackgroundInert(true);
   showChrome(); // a sheet keeps the chrome up
@@ -1658,18 +1749,29 @@ function start() {
   else el.startStatus.textContent = "Connecting to YouTube...";
 }
 
+let localStartedAt = 0; // telemetry: local playback began (begin), until it ends
+
 function begin() {
   if (begun || viaTv()) return;
   begun = true;
+  localStartedAt = Date.now();
+  capture("local_playback_started", { mix_id: state.mixId, cam_count: rotationIds().length });
   startCams();
   startMusic();
   render();
+}
+
+function endLocalPlayback(reason, beacon = false) {
+  if (!localStartedAt) return;
+  capture("local_playback_ended", { seconds: Math.round((Date.now() - localStartedAt) / 1000), reason }, { beacon });
+  localStartedAt = 0;
 }
 
 /* Home from the local player: stop local playback (players destroyed and recreated idle, as after casting)
    and show the Start screen. Nothing plays until Start is pressed again. */
 function goHome() {
   if (!state.started || state.casting) return;
+  endLocalPlayback("home");
   if (state.openPanel) closePanel(false);
   cp.seq++; // drop queued cam loads
   cp.waiters.length = 0;
@@ -1743,6 +1845,7 @@ function destroyLocalPlayers() {
 
 function pauseLocalForCast() {
   if (state.casting) return;
+  endLocalPlayback("cast");
   state.casting = true;
   state.pending = null;
   state.feedPaused = false;
@@ -1795,6 +1898,42 @@ function setupCast() {
 /* ================================================================ debug mode */
 
 // Opt-in diagnostics (About, This copy). Off on every page load; see js/debug.js.
+/* ================================================================ telemetry switch */
+
+// About, This copy: "Share anonymous usage and errors". Do Not Track or Global Privacy Control: off and disabled.
+function setupTelemetrySwitch() {
+  const toggle = document.getElementById("telemetry-toggle");
+  const note = document.getElementById("telemetry-dnt");
+  if (!toggle) return;
+  const forced = telemetryForcedOff();
+  toggle.checked = !forced && isTelemetryOn();
+  toggle.disabled = forced;
+  if (note) note.hidden = !forced;
+  toggle.addEventListener("change", () => {
+    const on = setTelemetryEnabled(toggle.checked);
+    toggle.checked = on;
+  });
+}
+
+/** app_open once per page load, once the Cast SDK has answered (or after 5 seconds). */
+function reportAppOpen() {
+  const props = () => ({ installed: body.classList.contains("pwa") || quietly(() => window.matchMedia("(display-mode: standalone)").matches) === true, tv_mode: isTv });
+  let sent = false;
+  const send = () => {
+    if (sent) return;
+    const avail = castAvailable();
+    sent = true;
+    capture("app_open", { ...props(), cast_available: avail === true });
+  };
+  const started = Date.now();
+  const wait = setInterval(() => {
+    if (castAvailable() !== null || Date.now() - started > 5000) {
+      clearInterval(wait);
+      send();
+    }
+  }, 250);
+}
+
 function setupDebug() {
   initDebug({
     now: () => ({ camId: state.currentCamId || (state.pending && state.pending.camId) || null, mixId: state.mixId }),
@@ -2174,9 +2313,11 @@ function handleAction(action, btn) {
       return togglePause();
     case "vol-down":
       if (viaTv(() => remoteCmd("vol-down"))) return;
+      localCommand("volume");
       return setVolume(state.volume - VOLUME_STEP);
     case "vol-up":
       if (viaTv(() => remoteCmd("vol-up"))) return;
+      localCommand("volume");
       if (state.muted) {
         state.muted = false;
         return setVolume(Math.max(state.volume, VOLUME_STEP));
@@ -2227,6 +2368,8 @@ function bindInput() {
     setVolume(Number(el.mixVolume.value), false);
   });
   el.mixVolume.addEventListener("change", () => isCasting() && setVolume(Number(el.mixVolume.value), false));
+  // Telemetry: one local volume command per slider gesture (the cast path reports from js/cast.js).
+  for (const input of [el.volume, el.mixVolume]) input.addEventListener("change", () => !isCasting() && localCommand("volume"));
 
   window.addEventListener(
     "pointerdown",
@@ -2313,8 +2456,15 @@ function boot() {
   document.addEventListener("visibilitychange", onVisibility);
   loadYouTubeApi();
   setupDebug();
+  setupTelemetrySwitch();
   setupCast();
   loadSheetConfig();
+  reportAppOpen();
+  // Page hide: end local playback and flush a pending cam pool change, both with sendBeacon.
+  window.addEventListener("pagehide", () => {
+    if (!state.casting) endLocalPlayback("page_hide", true);
+    flushPoolTelemetry(true);
+  });
   const buildLine = $("#about-build");
   if (buildLine) buildLine.textContent = `Build ${BUILD}`;
 

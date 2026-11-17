@@ -881,6 +881,9 @@ body.casting #stage, body.casting #tap-music, body.casting #tuning { display: no
 .debug-switch input:checked + .debug-switch-track .debug-switch-thumb { transform: translateX(1rem); }
 .debug-switch input:focus-visible + .debug-switch-track { outline: 3px solid var(--color-focus); outline-offset: 3px; }
 .this-copy-help { font-size: 0.875rem; color: var(--color-ink-tertiary); }
+.debug-switch:has(input:disabled) { cursor: default; }
+.debug-switch input:disabled { cursor: default; }
+.debug-switch input:disabled + .debug-switch-track { opacity: 0.5; }
 
 /* ================================================================ Debug panel (only while Debug mode is on) */
 
