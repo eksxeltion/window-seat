@@ -141,6 +141,35 @@ with sync_playwright() as p:
     send({"type": "mix", "id": rx.evaluate("()=>__receiver.state.mixId")})
     check("tv: a mix pick resumes the feed and cancels the timer", phase() == "off" and rx.evaluate("()=>__receiver.state.paused") is False)
 
+    # Play or Keep paused arriving in the end delay (pauseTimeout sent, stop pending) prevents the stop.
+    for cmd, label in [({"type": "pause", "value": False}, "play"), ({"type": "keepPaused"}, "keepPaused")]:
+        rx.evaluate("()=>{__ctx.sent.length=0; __ctx.stops=0}")
+        send({"type": "pause", "value": True})
+        ended = wait_until(rx, "()=>__receiver.pauseTimer().phase==='ended'", END_MS + 1000)
+        check(f"tv: {label} in the end delay: pauseTimeout sent, stop still pending", ended and rx.evaluate("()=>__ctx.stops") == 0 and any(m.get("type") == "pauseTimeout" for m in tv_msgs()))
+        send(cmd)
+        rx.wait_for_timeout(1200)  # well past the 600 ms end delay
+        check(f"tv: {label} in the end delay prevents the stop", rx.evaluate("()=>__ctx.stops") == 0)
+        check(f"tv: {label} in the end delay leaves the timer {'off' if label == 'play' else 'running'}", phase() == ("off" if label == "play" else "running"))
+        send({"type": "pause", "value": False})
+
+    # An explicit disconnect from the phone cancels the timer; a dropped or sleeping phone does not.
+    rx.evaluate("()=>{__ctx.stops=0}")
+    send({"type": "pause", "value": True})
+    for reason in ["ERROR", "UNKNOWN", None]:
+        r = rx.evaluate("(r)=>__receiver.senderDisconnected(r ? {reason: r} : {})", reason)
+        check(f"tv: {reason or 'no reason'} disconnect keeps the timer ({r})", r == "running" and phase() == "running")
+    r = rx.evaluate("()=>__receiver.senderDisconnected({reason: 'REQUESTED_BY_SENDER'})")
+    check(f"tv: explicit sender disconnect cancels the timer ({r})", r == "off" and rx.evaluate("()=>__receiver.state.pauseEndsInMs") is None)
+    check("tv: still paused after the disconnect", rx.evaluate("()=>__receiver.state.paused") is True)
+    rx.wait_for_timeout(END_MS + 800)
+    check("tv: no stop after an explicit disconnect", rx.evaluate("()=>__ctx.stops") == 0)
+    send({"type": "pause", "value": False})
+    send({"type": "pause", "value": True})
+    rx.evaluate("()=>__receiver.senderDisconnected({reason: 'ERROR'})")
+    check("tv: an error disconnect still ends the session", wait_until(rx, "()=>__ctx.stops===1", END_MS + 1500))
+    send({"type": "pause", "value": False})
+
     # The test hook overrides the durations too.
     r = rx.evaluate("()=>__receiver.setPauseTimeout({warnMs: 700, endMs: 1400})")
     check("tv: __receiver.setPauseTimeout overrides", r == {"warnMs": 700, "endMs": 1400})

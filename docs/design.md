@@ -342,7 +342,7 @@ Required fields:
 
 ## Pause timeout while casting
 
-A Cast session that stays paused for 30 minutes ends so the TV can return to its ambient screen. The receiver owns the timer, so it still works if the phone sleeps. The timer starts when the feed pauses during a live session. Any phone command while paused (next, previous, pin, mix pick, volume) restarts it. Resume, disconnect, or stop casting cancels it. Local play has no timeout.
+A Cast session that stays paused for 30 minutes ends so the TV can return to its ambient screen. The receiver owns the timer, so it still works if the phone sleeps. The timer starts when the feed pauses during a live session. Any phone command while paused (next, previous, pin, mix pick, volume) restarts it. Resume, stop casting, or an explicit disconnect from the phone cancels it. A phone that drops off or sleeps does not. Local play has no timeout.
 
 - Remote hairline while paused: "Paused. The TV rests after 30 minutes paused."
 - At 25 minutes, the TV Paused pill adds "Closing in 5 minutes". Phone toast: "The TV will go back to its home screen in 5 minutes. Tap play to keep watching." A "Keep paused" button on the remote restarts the 30-minute timer without resuming.

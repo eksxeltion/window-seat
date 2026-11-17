@@ -235,9 +235,9 @@ function showPausedPill(on) {
 /* ---------------------------------------------------------------- pause timeout */
 
 // A paused Cast session rests after 30 minutes: warning at 25, then the receiver stops so the TV goes home.
-// The receiver owns the timer, so it runs even while the phone sleeps. Resume or the stop command cancels it;
-// a phone command while paused (and Keep paused) restarts it. A sender leaving does not cancel it, so a TV
-// paused and forgotten still rests.
+// The receiver owns the timer, so it runs even while the phone sleeps. Resume, the stop command or an explicit
+// disconnect from the phone cancels it; a phone command while paused (and Keep paused) restarts it. A phone that
+// drops off or sleeps (ERROR or UNKNOWN disconnect) does not cancel it, so a TV paused and forgotten still rests.
 const pt = {
   warnMs: msParam("pauseWarnMs", PAUSE_WARN_MS_DEFAULT),
   endMs: msParam("pauseEndMs", PAUSE_END_MS_DEFAULT),
@@ -250,6 +250,8 @@ const pt = {
 };
 let ptWarnTimer = 0;
 let ptEndTimer = 0;
+let ptStopTimer = 0; // the delayed stopReceiver after pauseTimeout was sent
+let ptGen = 0; // bumps on every start or cancel, so a superseded timeout never stops the receiver
 
 function mmss(ms) {
   const sec = Math.max(0, Math.ceil(ms / 1000));
@@ -263,12 +265,14 @@ function pauseText() {
 function clearPauseTimers() {
   clearTimeout(ptWarnTimer);
   clearTimeout(ptEndTimer);
+  clearTimeout(ptStopTimer);
 }
 
 /** Start (or restart) the full timer. Only while the feed is paused. */
 function startPauseTimer(why) {
   if (!s.paused) return;
   clearPauseTimers();
+  ptGen++;
   const now = Date.now();
   if (pt.phase !== "off") pt.restarts++;
   pt.phase = "running";
@@ -285,6 +289,7 @@ function startPauseTimer(why) {
 function cancelPauseTimer(why) {
   if (pt.phase === "off") return;
   clearPauseTimers();
+  ptGen++;
   pt.phase = "off";
   note("pauseTimer", { action: "cancel", why });
   showPausedPill(s.paused);
@@ -318,7 +323,20 @@ function pauseEnd() {
   sendJson({ type: "pauseTimeout" });
   if (!STRIP_FORCED) stripOn = false;
   renderStrip();
-  setTimeout(stopReceiver, PAUSE_STOP_DELAY_MS);
+  const gen = ptGen;
+  ptStopTimer = setTimeout(() => {
+    // Play, Keep paused or stop casting in the delay cancelled or restarted the timer: do not stop.
+    if (gen !== ptGen || pt.phase !== "ended") return;
+    stopReceiver();
+  }, PAUSE_STOP_DELAY_MS);
+}
+
+/* An explicit disconnect from the phone (REQUESTED_BY_SENDER) cancels the pause timer. A phone that drops off
+   or sleeps (ERROR, UNKNOWN) does not, so a paused and forgotten TV still rests. Guarded: no CAF on the debug page. */
+function isExplicitDisconnect(event) {
+  const reasons = quietly(() => window.cast.framework.system.DisconnectReason);
+  const explicit = (reasons && reasons.REQUESTED_BY_SENDER) || "REQUESTED_BY_SENDER";
+  return !!event && event.reason === explicit;
 }
 
 /* ---------------------------------------------------------------- cam */
@@ -937,6 +955,7 @@ function startCast() {
       // The Cast session is over for this TV: the debug strip goes back to hidden (unless forced by the URL).
       if (left === 0 && !STRIP_FORCED) stripOn = false;
       setDbg({ senders: left });
+      if (isExplicitDisconnect(event)) cancelPauseTimer("disconnect");
     });
     context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
       castEvent(`senderConnected ${String((event && event.senderId) || "").slice(0, 24)}`.trim());
@@ -1110,6 +1129,11 @@ if (DEBUG) {
       rotationRemaining: () => (s.paused ? pausedRemaining : nextSwapAt - Date.now()),
       // Pause timeout: current timer state, and an override of the durations (applies to the next start).
       pauseTimer: () => ({ ...pt, remainingMs: pt.phase === "running" || pt.phase === "warning" ? Math.max(0, pt.endAt - Date.now()) : null }),
+      // Test hook: the pause timer side of SENDER_DISCONNECTED (the CAF listener is not registered here).
+      senderDisconnected: (event) => {
+        if (isExplicitDisconnect(event)) cancelPauseTimer("disconnect");
+        return pt.phase;
+      },
       setPauseTimeout: ({ warnMs, endMs } = {}) => {
         if (Number.isFinite(warnMs) && warnMs > 0) pt.warnMs = warnMs;
         if (Number.isFinite(endMs) && endMs > 0) pt.endMs = endMs;
