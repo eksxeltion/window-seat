@@ -2,6 +2,8 @@
 The Google Sheet CSV endpoints are intercepted with fixtures (gviz style: every field quoted)."""
 import sys, os, json
 from playwright.sync_api import sync_playwright
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
 base = sys.argv[1].rstrip("/")
 HERE = os.path.dirname(__file__)
 CAMS = open(os.path.join(HERE, "fixture_cams.csv")).read()

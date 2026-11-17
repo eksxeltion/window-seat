@@ -68,6 +68,17 @@ Chrome on Android can cast Window Seat to a Google TV so the TV itself plays the
 - Debug the receiver in any browser with `receiver.html?debug=1`. It skips the Cast context and exposes `window.__receiver` (`state`, `send(cmd)`, `log`).
 - The service worker ignores the receiver files.
 
+## Telemetry
+
+Window Seat sends anonymous usage events to PostHog and JavaScript errors to Sentry, so Cast problems can be found and fixed. The full plan, with every event, is in `docs/telemetry.md`.
+
+- **What is sent:** Cast connect attempts, results and session ends, which cams and mixes play, button and panel use, player and list errors, and uncaught errors. Each event carries the build, the surface (browser tab, installed app or TV), a coarse device class, the Cast state, and the region part of the browser language (`US` from `en-US`). One random ID per browser (PostHog's anonymous ID, in localStorage) ties events together; it is never linked to a person.
+- **Never sent:** names, accounts, free text, Cast device names, URL query strings or fragments, and no IP addresses are stored. No session replay, autocapture or feature flags.
+- **About switch:** "Share anonymous usage and errors" in About, This copy. On by default; turning it off is saved, drops anything not yet sent, removes PostHog's ID, and tells a casting TV to stop too. When off, the SDKs are not even downloaded.
+- **Do Not Track and Global Privacy Control:** if the browser sends either, telemetry is off, the switch is disabled, and no URL parameter can turn it on.
+- **The TV** follows the phone through a `{type: "telemetry"}` message on the Cast channel and sends nothing until it gets one. `receiver.html?debug=1` sends nothing unless `&telemetry=1` is added.
+- **Testing:** add `?telemetry_test=1` to mark events as test data (`test: true`, Sentry environment `verification`). The Playwright tests stub both hosts (`tests/telemetry_guard.py`), so they never reach the real services.
+
 ## Run locally
 
 It is a plain static site with no build step. Serve the folder with any static server:

@@ -4,6 +4,8 @@ commands applied, direct and broadcast replies sent as JSON text, debug strip up
 works even when YouTube is blocked."""
 import sys, os, json
 from playwright.sync_api import sync_playwright
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
 url = sys.argv[1]
 MOCK = open(os.path.join(os.path.dirname(__file__), "mock_caf_receiver.js")).read()
 NS = "urn:x-cast:com.windowseat"

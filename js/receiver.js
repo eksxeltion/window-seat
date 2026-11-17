@@ -8,8 +8,9 @@
 import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
+import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-16.12"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-17.13"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -44,6 +45,60 @@ const quietly = (fn) => {
     return undefined;
   }
 };
+
+/* ---------------------------------------------------------------- telemetry */
+
+// Off until a phone sends {type:"telemetry", on:true}; see js/telemetry.js and docs/telemetry.md section 5.
+let context = null; // CastReceiverContext, only when running on a Cast device
+initTelemetry({
+  surface: "receiver",
+  build: BUILD,
+  castSessionId: () => quietly(() => context.getApplicationData().sessionId),
+});
+const msSinceLoad = () => Math.round(performance.now());
+let firstSenderAt = 0; // first phone connected (seconds_in_session counts from here, else from load)
+const secondsInSession = () => Math.round((Date.now() - (firstSenderAt || performance.timeOrigin || Date.now())) / 1000);
+let firstFrameSent = false;
+let pausedSince = 0;
+let shownReason = "start"; // why the pending cam loads, in the telemetry vocabulary
+let mixStart = null; // { mixId, userChoice } until that mix first reaches PLAYING
+let mixChoice = false; // set by a phone command just before playMix
+const AUTO_REASONS = new Set(["start", "rotate", "skip", "retry", "list"]);
+
+/** cam_shown: user navigation always, automatic reasons 1 in 4 with sampled: 4. */
+function camShown(camId, reason) {
+  const user = !AUTO_REASONS.has(reason);
+  if (!user && Math.random() >= 0.25) return;
+  capture("cam_shown", { cam_id: camId, reason, mode: "cast", sampled: user ? 1 : 4 });
+}
+
+const LIST_ERRORS = [
+  [/too long|timeout/i, "timeout"],
+  [/HTTP|private/i, "http"],
+  [/not CSV/i, "parse"],
+  [/no usable/i, "unusable"],
+  [/could not read|network|fetch/i, "network"],
+];
+function listError(text) {
+  for (const [re, code] of LIST_ERRORS) if (re.test(String(text || ""))) return code;
+  return "parse";
+}
+
+/** Stop the receiver after telling telemetry (sent with sendBeacon, then a flush that also lets a still loading
+ *  PostHog send what it queued). No wait when it is off. One stop at a time: a repeated stop while the flush runs
+ *  neither schedules a second stop nor counts a second receiver_stop. */
+let stopInFlight = false;
+function stopWithTelemetry(reason, stop) {
+  if (stopInFlight) return;
+  capture("receiver_stop", { reason, seconds_in_session: secondsInSession() }, { beacon: true });
+  if (!telemetryActive()) return stop();
+  stopInFlight = true;
+  const done = () => {
+    stopInFlight = false;
+    stop();
+  };
+  flushTelemetry(600, 2000).then(done, done);
+}
 
 /* ---------------------------------------------------------------- state and log */
 
@@ -101,7 +156,6 @@ function snapshot() {
   };
 }
 
-let context = null; // CastReceiverContext, only when running on a Cast device
 /* ---------------------------------------------------------------- on-TV debug strip */
 
 // cafError is its own field: later errors (broadcast, handle, sheet) never overwrite the CAF start failure.
@@ -300,6 +354,7 @@ function pauseWarn() {
   if (!s.paused || pt.phase !== "running") return;
   pt.phase = "warning";
   note("pauseTimer", { action: "warn" });
+  capture("pause_warning_shown", { seconds_paused: pausedSince ? Math.round((Date.now() - pausedSince) / 1000) : undefined });
   castEvent("pause warning");
   showPausedPill(true);
   renderStrip();
@@ -327,7 +382,8 @@ function pauseEnd() {
   ptStopTimer = setTimeout(() => {
     // Play, Keep paused or stop casting in the delay cancelled or restarted the timer: do not stop.
     if (gen !== ptGen || pt.phase !== "ended") return;
-    stopReceiver();
+    capture("pause_timeout_fired", { seconds_paused: pausedSince ? Math.round((Date.now() - pausedSince) / 1000) : undefined }, { beacon: true });
+    stopWithTelemetry("pause_timeout", stopReceiver);
   }, PAUSE_STOP_DELAY_MS);
 }
 
@@ -423,6 +479,7 @@ function beginLoad(camId, reason = "rotate") {
   clearTimeout(retryTimer);
   const my = ++token;
   rotateReason = reason;
+  shownReason = reason === "cam" ? "pick" : reason;
   pending = { camId, startedAt: Date.now(), loading: false };
   stall = null;
   fadeTo(true);
@@ -456,12 +513,19 @@ function commitPending() {
   showLowerThird();
   fadeTo(false);
   note("rotate", { camId: cam.id, reason: rotateReason });
+  camShown(cam.id, shownReason);
+  // Time to first frame: the first cam after load that is not the random start cam (TV clock).
+  if (!firstFrameSent && rotateReason !== "start") {
+    firstFrameSent = true;
+    capture("receiver_first_frame", { ms_since_load: msSinceLoad(), cam_id: cam.id });
+  }
   renderStrip();
   broadcast();
 }
 
 function failCam(camId, why) {
   note("camError", { camId, why });
+  if (!s.failed.has(camId)) capture("cam_failed", { cam_id: camId, why: /^error/.test(why) ? "error" : String(why).replace(/\s+/g, "_") });
   s.failed.add(camId);
   pending = null;
   stall = null;
@@ -471,6 +535,7 @@ function failCam(camId, why) {
   } else {
     // Every default cam failed: black screen, forget the failures and try again in a minute.
     note("allFailed");
+    capture("cams_all_failed", { mode: "cast" });
     s.failed.clear();
     token++;
     awaitingRetry = true;
@@ -497,6 +562,7 @@ function onCamError(e) {
   // Only fail the cam the player actually reports, so a late error from a replaced video is ignored.
   const reported = quietly(() => camPlayer.getVideoData().video_id);
   if (reported && camId && reported !== camId) return;
+  if (camId) capture("player_error", { player: "cam", cam_id: camId, code: e.data, mode: "cast" });
   if (camId) failCam(camId, "error " + e.data);
 }
 
@@ -569,6 +635,8 @@ function playMix(id) {
   clearTimeout(musicRetryTimer); // a newer selection supersedes any pending all-failed retry
   s.mixId = id;
   showMixTitle();
+  mixStart = { mixId: id, userChoice: mixChoice };
+  mixChoice = false;
   if (musicReady) {
     applyAudio();
     // Every mix starts at its beginning, never partway (a pick from the phone, shuffle, or the next in order).
@@ -593,6 +661,10 @@ function onMusicState(e) {
   if (e.data === YS.PLAYING) {
     musicErrors = 0;
     clearTimeout(musicRetryTimer);
+    if (mixStart && mixStart.mixId === s.mixId) {
+      capture("mix_started", { mix_id: s.mixId, shuffle: s.shuffle, user_choice: mixStart.userChoice, mode: "cast" });
+      mixStart = null;
+    }
   }
   if (e.data === YS.ENDED) {
     note("mixEnded", { mixId: s.mixId });
@@ -602,6 +674,7 @@ function onMusicState(e) {
 
 function onMusicError(e) {
   note("mixError", { mixId: s.mixId, code: e.data });
+  capture("player_error", { player: "music", mix_id: s.mixId, code: e.data, mode: "cast" });
   if (s.paused) return; // paused: Play restarts the mix
   musicErrors++;
   if (musicErrors >= MIXES.length) {
@@ -626,6 +699,7 @@ function createMusicPlayer() {
         if (s.paused) {
           // Paused from the phone before the player was ready: load the mix without starting it.
           applyAudio();
+          mixStart = { mixId: s.mixId, userChoice: false };
           quietly(() => musicPlayer.cueVideoById({ videoId: s.mixId, startSeconds: 0 }));
         } else playMix(s.mixId);
       },
@@ -670,6 +744,7 @@ function setPaused(on, { music = true } = {}) {
   }
   const was = s.paused;
   s.paused = !!on;
+  pausedSince = s.paused ? Date.now() : 0;
   if (s.paused) {
     clearTimeout(musicRetryTimer); // a paused player must not be restarted by an error retry
     if (music && musicReady) quietly(() => musicPlayer.pauseVideo());
@@ -706,9 +781,15 @@ export function parseCommand(raw) {
 
 const RESTARTS_PAUSE_TIMER = new Set(["next", "prev", "pin", "mix", "nextMix", "prevMix", "volume", "mute", "cam", "cams", "interval", "shuffle", "keepPaused"]);
 
-function handle(raw) {
+function handle(raw, senderId) {
   const cmd = parseCommand(raw);
   if (!cmd) return;
+  if (cmd.type === "telemetry") {
+    // The phone's telemetry setting (docs/telemetry.md section 5). No state change, so no broadcast.
+    note("command", { type: "telemetry", on: cmd.on === true });
+    receiverTelemetryMessage(cmd, senderId);
+    return;
+  }
   note("command", cmd);
   const quiet = cmd.silent === true; // setup messages sent on connect: no on-TV flash
   // A phone command while paused restarts the pause timeout (setup messages sent on connect do not,
@@ -737,12 +818,14 @@ function handle(raw) {
     case "mix":
       if (!mixById(cmd.id)) break;
       if (s.paused) setPaused(false, { music: false }); // choosing a mix plays the feed again
+      mixChoice = !quiet; // the connect-time sync is not a choice
       playMix(cmd.id);
       if (!quiet) flash(`Music: ${(mixById(cmd.id) || {}).en || ""}`);
       break;
     case "nextMix":
     case "prevMix":
       if (s.paused) setPaused(false, { music: false });
+      mixChoice = !quiet;
       if (cmd.type === "nextMix") nextMix();
       else prevMix();
       if (!quiet) flash(`Music: ${(mixById(s.mixId) || {}).en || ""}`);
@@ -788,6 +871,7 @@ function handle(raw) {
       if (camById(cmd.id)) {
         s.failed.delete(cmd.id);
         if (cmd.id !== s.camId || pending) beginLoad(cmd.id, "cam");
+        if (quiet && pending && pending.camId === cmd.id) shownReason = "start"; // the phone's cam on connect, not a pick
         if (!quiet) flash(camById(cmd.id).title);
       }
       break;
@@ -798,13 +882,16 @@ function handle(raw) {
       // The only way to end the receiver: an explicit command from the remote.
       cancelPauseTimer("stop");
       if (!STRIP_FORCED) stripOn = false;
-      if (context) quietly(() => context.stop());
+      if (context) stopWithTelemetry("sender_stop", () => quietly(() => context.stop()));
       break;
     case "getState":
       break;
     case "config":
       // The phone fetched the sheet and passes the lists along (works even if the TV cannot reach Google).
-      if (applyConfig(cmd, "phone")) afterListChange();
+      if (applyConfig(cmd, "phone")) {
+        capture("list_load", { ok: true, source: listInfo.source, cams: listInfo.cams, mixes: listInfo.mixes });
+        afterListChange();
+      }
       break;
     case "debug":
       // Toggle the on-TV debug strip from the phone: {on:true|false}, or the older {value:true|false}.
@@ -862,8 +949,12 @@ function onCustomMessage(event) {
   const cmd = parseCommand(raw);
   castEvent(`rx ${cmd ? cmd.type : "unreadable"}${event && event.senderId ? ` from ${String(event.senderId).slice(0, 24)}` : ""}`);
   setDbg({ lastIn: `${cmd ? cmd.type : "unreadable " + typeof raw} ${hhmmss()}` });
+  if (!cmd) {
+    capture("receiver_error", { kind: "message_parse", code: typeof raw });
+    captureError(new Error(`Unreadable Cast message (${typeof raw})`), { kind: "message_parse" });
+  }
   try {
-    handle(cmd);
+    handle(cmd, event && event.senderId);
   } catch (e) {
     setDbg({ error: `handle: ${String((e && e.message) || e).slice(0, 80)}` });
   }
@@ -955,10 +1046,12 @@ function startCast() {
       // The Cast session is over for this TV: the debug strip goes back to hidden (unless forced by the URL).
       if (left === 0 && !STRIP_FORCED) stripOn = false;
       setDbg({ senders: left });
+      capture("receiver_sender_left", { reason: String((event && event.reason) || "unknown"), senders_left: left, seconds_in_session: secondsInSession(), paused: s.paused });
       if (isExplicitDisconnect(event)) cancelPauseTimer("disconnect");
     });
     context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
       castEvent(`senderConnected ${String((event && event.senderId) || "").slice(0, 24)}`.trim());
+      if (!firstSenderAt) firstSenderAt = Date.now();
       setDbg({ senders: quietly(() => context.getSenders().length) ?? dbg.senders + 1 });
       refreshAppState();
       broadcast();
@@ -966,6 +1059,7 @@ function startCast() {
     context.addEventListener(cast.framework.system.EventType.READY, () => {
       castEvent("CAF ready");
       setDbg({ caf: "ready", listener: "ready" });
+      capture("receiver_ready", { ms_since_load: msSinceLoad() });
       refreshAppState();
     });
     // Keep-alive media element is optional: a failure here must never prevent start().
@@ -989,12 +1083,15 @@ function startCast() {
       if (dbg.caf !== "ready") {
         castEvent("CAF no READY after 10s");
         setDbg({ caf: "started, no READY after 10s" });
+        capture("receiver_start_failed", { kind: "no_ready" });
       }
     }, 10000);
   } catch (e) {
     const name = (e && e.name) || "Error";
     castEvent(`CAF FAILED ${name}: ${String((e && e.message) || e).slice(0, 60)}`);
     setDbg({ caf: "FAILED", cafError: `${name}: ${String((e && e.message) || e).slice(0, 80)}` });
+    capture("receiver_start_failed", { kind: "start_exception" });
+    captureError(e, { kind: "caf_start" });
   }
 }
 
@@ -1032,6 +1129,7 @@ if (!DEBUG) {
     note("castUnavailable");
     castEvent("CAF load failed");
     setDbg({ caf: "load failed" });
+    capture("receiver_start_failed", { kind: "framework_load" });
   });
 } else {
   setDbg({ caf: "debug (off)" });
@@ -1070,7 +1168,12 @@ function afterListChange() {
 }
 
 // The TV fetches the sheet itself too; a failure just keeps the saved copy or the built-in list.
+const listStartedAt = Date.now();
 refreshFromSheet().then((r) => {
+  const listProps = { ok: !!r.ok, source: listInfo.source, ms: Date.now() - listStartedAt, cams: listInfo.cams, mixes: listInfo.mixes };
+  if (!r.ok) listProps.error = listError(r.error);
+  capture("list_load", listProps);
+  if (!r.ok) capture("receiver_error", { kind: "list_load", code: listProps.error });
   if (r.ok) {
     if (r.changed) afterListChange();
     else renderStrip();
@@ -1107,7 +1210,7 @@ if (DEBUG) {
   Object.defineProperty(window, "__receiver", {
     value: {
       get state() { return snapshot(); },
-      send: handle,
+      send: (raw, senderId) => handle(raw, senderId),
       // Test hooks: the real Cast message path with a mocked context.
       message: (event) => onCustomMessage(event),
       useContext: (ctx) => {

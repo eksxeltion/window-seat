@@ -1,6 +1,8 @@
 """Phone with the REAL gstatic cast_framework.js on top of tests/fake_chrome_cast.js (needs network). Usage: test_sender_realcaf.py PHONE_URL"""
 import sys, os, json
 from playwright.sync_api import sync_playwright
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
 url = sys.argv[1]
 here = os.path.dirname(os.path.abspath(__file__))
 FAKE = open(os.path.join(here, "fake_chrome_cast.js")).read()

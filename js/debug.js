@@ -4,6 +4,7 @@
 import { BUILD } from "./build.js";
 import { CAMS, MIXES } from "./data.js";
 import { listInfo, tzCoverage } from "./config.js";
+import { capture } from "./telemetry.js";
 
 const MAX_EVENTS = 20;
 const events = []; // { t: "HH:MM:SS", text }
@@ -237,7 +238,10 @@ export function initDebug(p) {
   const toggle = document.getElementById("debug-toggle");
   if (toggle) {
     toggle.checked = false; // never restored: some browsers keep form state across a reload
-    toggle.addEventListener("change", () => setDebug(toggle.checked));
+    toggle.addEventListener("change", () => {
+      capture("debug_mode_toggled", { on: toggle.checked });
+      setDebug(toggle.checked);
+    });
   }
   render();
 }

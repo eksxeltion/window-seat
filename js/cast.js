@@ -4,6 +4,7 @@ import { CAMS, MIXES } from "./data.js";
 import { listInfo, currentConfig } from "./config.js";
 import { BUILD } from "./build.js";
 import { logEvent, isDebugOn, refreshDebug } from "./debug.js";
+import { capture, telemetryMessage, onTelemetryChange } from "./telemetry.js";
 
 const SDK_URL = "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
 export const castConfigured = CAST_APP_ID !== "REPLACE_WITH_APP_ID";
@@ -18,6 +19,7 @@ const quietly = (fn) => {
 };
 
 let session = null;
+let attempt = null; // telemetry: the Cast tap in progress { id, at, done }
 let remote = { camId: null, camTitle: "", mixId: null, mixTitle: "", pinned: false, interval: 60, volume: 60, muted: false, paused: false, shuffle: true, pauseWarning: false };
 let lastReplyAt = 0; // last state message from the TV
 let replyTimer = 0;
@@ -94,6 +96,7 @@ function send(cmd, opts = {}) {
   } catch (e) {
     logEvent(`tx ${cmd.type} threw: ${errText((e && e.message) || e)}`);
     say(`Could not send to the TV: ${(e && e.message) || e}`);
+    capture("cast_send_failed", { code: "exception", type: cmd.type });
     return;
   }
   io.tx++;
@@ -111,6 +114,8 @@ function send(cmd, opts = {}) {
     }
     dbg.last = `send ${code}`;
     dbg.lastErr = errText(raw);
+    // Telemetry: the final failure only (a retried send reports once, from the retry).
+    capture("cast_send_failed", { code: telemetryCode(code), type: cmd.type });
     renderDebug();
     const hint = channelCheck();
     say(`Send failed (${code}): ${SEND_ERRORS[code] || code}.${hint ? " " + hint : ""}`);
@@ -127,6 +132,9 @@ function send(cmd, opts = {}) {
   clearTimeout(replyTimer);
   replyTimer = setTimeout(() => {
     if (lastReplyAt >= sentAt) return;
+    capture("cast_no_reply", { type: cmd.type });
+    // The existing 4s wait is over and the session still does not list our channel.
+    checkChannelMissing(target);
     const hint = channelCheck();
     setRemoteStatus(`Sent, but no reply from the TV app after 4s.${hint ? " " + hint : ""}`);
     if (!warnedNoReply) {
@@ -142,6 +150,7 @@ function setRemoteStatus(text) {
 
 /* Update the phone UI right away; the TV's state reply then confirms or corrects it. */
 function act(cmd, patch) {
+  capture("command", { type: commandType(cmd), mode: "cast" });
   // Any command restarts the TV's pause timer (or resumes the feed), so the warning goes until the TV says otherwise.
   if (remote.pauseWarning && cmd.type !== "getState") patch = { ...patch, pauseWarning: false };
   if (patch) {
@@ -189,6 +198,7 @@ function runCmd(name) {
       // Restart the TV's full 30 minute timer without resuming.
       return act({ type: "keepPaused" }, { pauseWarning: false });
     case "stop":
+      capture("command", { type: "stop", mode: "cast" });
       stopRequested = true;
       return quietly(() => cast.framework.CastContext.getInstance().endCurrentSession(true));
     default:
@@ -375,6 +385,10 @@ function onMessage(_ns, raw) {
   if (msg && msg.debug && typeof msg.debug === "object") tvDebug = msg.debug;
   if (msg && msg.type === "pauseTimeout") return onPauseTimeout();
   if (!msg || msg.type !== "state") return;
+  if (session && !session.__wsTelFirstState) {
+    session.__wsTelFirstState = true;
+    capture("cast_first_state", { ms_since_connect: session.__wsTelConnectAt ? Date.now() - session.__wsTelConnectAt : undefined, resumed: !!session.__wsTelResumed });
+  }
   lastReplyAt = Date.now();
   warnedNoReply = false;
   if (msg.build) dbg.tvBuild = msg.build;
@@ -431,6 +445,17 @@ function leaveRemote() {
   // A session that ends while the TV's warning was up (and not by Stop casting) also ended by the timeout,
   // in case the phone slept through the pauseTimeout message.
   const byTimeout = pauseEnded || (remote.paused && remote.pauseWarning && !stopRequested);
+  // Telemetry, read before the flags reset, and only if a session actually started.
+  if (session && session.__wsTelConnectAt && !session.__wsTelEnded) {
+    session.__wsTelEnded = true;
+    capture("cast_session_end", {
+      stop_requested: stopRequested,
+      by_timeout: !!byTimeout,
+      seconds_in_session: Math.round((Date.now() - session.__wsTelConnectAt) / 1000),
+      was_paused: !!remote.paused,
+      pause_warning_up: !!remote.pauseWarning,
+    });
+  }
   pauseEnded = false;
   clearTimeout(pauseEndTimer);
   pauseEndTimer = 0;
@@ -481,6 +506,7 @@ function watchNamespaces(s) {
     if (appeared) setRemoteStatus("Connected. The Window Seat channel is now open.");
     flushInit(s);
     if (appeared) sendDebugToTv(s);
+    if (appeared) sendTelemetryToTv(s);
   };
   const T = (window.cast && cast.framework && cast.framework.SessionEventType) || {};
   for (const type of [T.APPLICATION_METADATA_CHANGED || "applicationmetadatachanged", T.APPLICATION_STATUS_CHANGED || "applicationstatuschanged"]) {
@@ -488,7 +514,7 @@ function watchNamespaces(s) {
   }
 }
 
-function onSessionStarted(s, resumed) {
+function onSessionStarted(s, resumed, via = "event") {
   if (!s) return;
   const same = session === s;
   session = s;
@@ -521,6 +547,125 @@ function onSessionStarted(s, resumed) {
   logEvent(`${resumed ? "session resumed" : "session started"}: windowseat ${ns.ok ? "listed" : "not listed"} [${ns.names.join(",")}]`);
   flushInit(s);
   sendDebugToTv(s); // the TV strip follows this phone's Debug switch on every start or resume
+  telemetrySessionStarted(s, resumed, via);
+  sendTelemetryToTv(s);
+}
+
+/* ---- telemetry (observation only: none of this changes how the session behaves) ---- */
+
+const CAF_CODES = new Set(["cancel", "timeout", "session_error", "receiver_unavailable", "channel_error", "extension_missing", "api_not_initialized", "invalid_parameter"]);
+function telemetryCode(code) {
+  const c = String((code && code.code) || code || "");
+  return CAF_CODES.has(c) ? c : "exception";
+}
+
+/** Wire command to the telemetry vocabulary (pause{value:false} is play, nextMix is next_mix). */
+function commandType(cmd) {
+  switch (cmd.type) {
+    case "pause":
+      return cmd.value === false ? "play" : "pause";
+    case "pin":
+      return cmd.value ? "pin" : "unpin";
+    case "mute":
+      return cmd.value ? "mute" : "unmute";
+    case "nextMix":
+      return "next_mix";
+    case "keepPaused":
+      return "keep_paused";
+    default:
+      return cmd.type;
+  }
+}
+
+/** cast_connect_success and cast_resume, once per session (onSessionStarted runs several times per session). */
+function telemetrySessionStarted(s, resumed, via) {
+  if (s.__wsTelConnectAt) return;
+  s.__wsTelConnectAt = Date.now();
+  s.__wsTelResumed = !!resumed;
+  const tapped = attempt && !attempt.done;
+  let trigger = "adopted"; // started from Chrome's own Cast menu, or a session we missed the event for
+  if (tapped) trigger = "tap";
+  else if (resumed && via === "event") trigger = "auto_join";
+  const props = { trigger };
+  if (tapped) {
+    attempt.done = true;
+    props.attempt_id = attempt.id;
+    props.ms_to_connect = Date.now() - attempt.at;
+  }
+  capture("cast_connect_success", props);
+  if (resumed && !tapped) capture("cast_resume", { trigger });
+  // Initial setup waits for the namespace before it sends anything that expects a reply, so a channel that never
+  // opens would never reach the reply timer in send(). Check from here as well.
+  setTimeout(() => checkChannelMissing(s), CHANNEL_WAIT_MS);
+}
+
+/** cast_channel_missing once per session, if the session is still current and our channel is still not listed. */
+const CHANNEL_WAIT_MS = 8000;
+function checkChannelMissing(s) {
+  if (!s || s !== session || s.__wsTelChannelMissing || quietly(nsInfo)?.ok) return;
+  s.__wsTelChannelMissing = true;
+  capture("cast_channel_missing", { ms_since_connect: s.__wsTelConnectAt ? Date.now() - s.__wsTelConnectAt : undefined });
+}
+
+/** Tell the TV whether to send telemetry: on every new or resumed session once the namespace is listed, and on
+ *  every switch change. An older receiver ignores the unknown type.
+ *  A value counts as delivered only once CAF confirms the send, so a failed "off" is never suppressed later: it is
+ *  retried (a few times, while it is still this session's current value) and sent again on the next resume,
+ *  namespace change or switch change. This is not a user command, so a failure here only goes to the debug log,
+ *  never to the Cast status line, the toast or cast_send_failed. */
+const TEL_RETRY_MS = [1000, 3000, 8000];
+export function sendTelemetryToTv(s = session, retry = 0) {
+  if (!s || s !== session) return false;
+  const msg = telemetryMessage();
+  if (!msg || !quietly(nsInfo)?.ok) return false;
+  const key = JSON.stringify(msg);
+  if (s.__wsTelSent === key || s.__wsTelInFlight === key) return false;
+  s.__wsTelInFlight = key;
+  clearTimeout(s.__wsTelRetry);
+  const failed = (raw) => {
+    if (s.__wsTelInFlight !== key) return; // a newer value went out meanwhile
+    s.__wsTelInFlight = null;
+    logEvent(`tx telemetry FAILED ${errText((raw && raw.message) || raw) || "?"}`);
+    if (retry < TEL_RETRY_MS.length) s.__wsTelRetry = setTimeout(() => sendTelemetryToTv(s, retry + 1), TEL_RETRY_MS[retry]);
+  };
+  let p;
+  try {
+    p = s.sendMessage(RECEIVER_NAMESPACE, JSON.stringify({ ...msg, silent: true }));
+  } catch (e) {
+    failed(e);
+    return false;
+  }
+  io.tx++;
+  Promise.resolve(p).then(
+    (code) => {
+      if (code) return failed(code);
+      if (s.__wsTelInFlight !== key) return;
+      s.__wsTelInFlight = null;
+      s.__wsTelSent = key;
+      logEvent("tx telemetry ok");
+    },
+    failed,
+  );
+  return true;
+}
+
+/** Live Cast state for the telemetry super properties. */
+export function telemetryCastState() {
+  if (session) return "connected";
+  if (remoteOn) return "connecting";
+  return "none";
+}
+
+export function telemetryCastSessionId() {
+  return session ? quietly(() => session.getSessionId()) : undefined;
+}
+
+/** null until the Cast SDK has answered, then true or false. */
+export function castAvailable() {
+  if (!castConfigured) return false;
+  if (castReady) return true;
+  if (castFailed) return false;
+  return null;
 }
 
 /** Send the Debug switch to the TV. Waits for the namespace like the other setup messages (no new gating).
@@ -610,7 +755,7 @@ export function syncRemoteMode() {
   const cur = liveSession(ctx);
   const st = quietly(() => ctx.getCastState());
   if (cur) {
-    if (cur !== session) onSessionStarted(cur, true); // adopt a session we missed the event for
+    if (cur !== session) onSessionStarted(cur, true, "sync"); // adopt a session we missed the event for
     else if (!remoteOn) enterRemote();
   } else if (!session && !remoteOn && (st === "CONNECTING" || st === "CONNECTED")) {
     ui.device.textContent = "TV";
@@ -709,28 +854,45 @@ function markUnavailable() {
   setStatus(UNAVAILABLE);
 }
 
+const ATTEMPT_GRACE_MS = 10000; // a tap's success may reach onSessionStarted this long after requestSession resolves
+
 function onCastTap() {
   if (castFailed) return say(UNAVAILABLE);
   if (!castReady) return say("Cast: still loading, try again in a moment");
   const ctx = cast.framework.CastContext.getInstance();
   if (session) return say(STATE_TEXT.CONNECTED + ". Use Stop casting to end.");
   say("Cast: looking for your TV...");
+  const tap = { id: Math.random().toString(36).slice(2, 10), at: Date.now(), done: false };
+  attempt = tap;
+  capture("cast_connect_attempt", { attempt_id: tap.id });
+  // One outcome per attempt: a failure here (the session's own success is counted in onSessionStarted).
+  const failed = (code) => {
+    if (tap.done) return;
+    tap.done = true;
+    capture("cast_connect_fail", { attempt_id: tap.id, error_code: telemetryCode(code) });
+  };
   let p;
   try {
     p = ctx.requestSession();
   } catch (e) {
     const msg = (e && e.message) || e;
+    failed("exception");
     recordAttempt(`exception: ${msg}`);
     return say(`Cast error: ${msg}`);
   }
   Promise.resolve(p).then(
     (code) => {
+      // Success: the session callback counts it (with this attempt_id), and CAF can run that callback after this
+      // promise resolves. So the attempt stays open a short while for it, then closes without an event.
+      if (code) failed(code);
+      else if (!tap.done) setTimeout(() => (tap.done = true), ATTEMPT_GRACE_MS);
       recordAttempt(code || "");
       if (code) say(ERROR_TEXT[code] || `Cast: ${code}`);
       else say(STATE_TEXT[ctx.getCastState()] || "Cast: connected");
     },
     (code) => {
       const c = (code && code.code) || code;
+      failed(c);
       recordAttempt(String(c));
       say(ERROR_TEXT[c] || `Cast: ${c}`);
     },
@@ -777,6 +939,7 @@ function initFramework() {
 export function initCast(h) {
   if (!castConfigured) return; // placeholder App ID: no SDK, no button, nothing to break
   hooks = h;
+  onTelemetryChange(() => sendTelemetryToTv()); // the About switch, or the install ID becoming known
   // Must exist before the SDK script runs.
   // Show the buttons right away; a tap always explains what happened.
   document.querySelectorAll("[data-cast]").forEach((b) => {

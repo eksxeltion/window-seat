@@ -3,6 +3,8 @@ Checks the whole receiver path: ready lists our namespace, app state refresh, ge
 import sys, os, socket, time
 sys.path.insert(0, os.path.dirname(__file__))
 from playwright.sync_api import sync_playwright
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
 from fake_cast_platform import FakePlatform, NS, SYS, PORT
 url = sys.argv[1]
 fails = []
@@ -41,7 +43,7 @@ with sync_playwright() as p:
     m = re.search(r"rx (\d+)", strip)
     check("(c) getState reached the listener (strip rx >= 1)", bool(m) and int(m.group(1)) >= 1)
     st = states()
-    check("(c) state reply with build 2026-11-16.12", any(d.get("build") == "2026-11-16.12" for d in st))
+    check("(c) state reply with build 2026-11-17.13", any(d.get("build") == "2026-11-17.13" for d in st))
     check("(c) a state reply is addressed to sender-1", any(ns == NS and sid == "sender-1" and isinstance(d, dict) and d.get("type") == "state" for ns, sid, d in fp.parsed()))
     before = [d.get("camId") for d in states()]
     n_before = len(before)

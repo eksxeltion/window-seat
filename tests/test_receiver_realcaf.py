@@ -2,6 +2,8 @@
 On the old code (listener before start) the strip said "CAF FAILED ... Invalid messageType for the namespace"."""
 import sys
 from playwright.sync_api import sync_playwright
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
 url = sys.argv[1]
 fails = []
 def check(name, cond):
@@ -17,7 +19,7 @@ with sync_playwright() as p:
     check("strip has no FAILED", "FAILED" not in strip)
     check("no Invalid messageType", "Invalid messageType" not in strip)
     check("listener registered (or ready)", "listener registered" in strip or "listener ready" in strip)
-    check("strip shows build 2026-11-16.12", "build 2026-11-16.12" in strip)
+    check("strip shows build 2026-11-17.13", "build 2026-11-17.13" in strip)
     b.close()
 print("FAILED:" if fails else "ALL PASS", fails)
 sys.exit(1 if fails else 0)
