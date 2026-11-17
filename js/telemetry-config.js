@@ -11,6 +11,7 @@
 //   exposing window.Sentry with only init, captureException, withScope, flush, getClient, SDK_VERSION and the
 //   integrations js/telemetry.js uses (global handlers, dedupe, linked errors, http context, event filters,
 //   breadcrumbs). No tracing, replay, feedback or session code is included.
+// PostHog: the shared "Eksxel" project (one project for all Eksxel apps); APP in js/telemetry.js tags this app.
 export const POSTHOG_KEY = "phc_wAS6anbDpDdDV38556hJmNKFj5YjXjtytkYiZsJzvkSp";
 export const POSTHOG_HOST = "https://us.i.posthog.com";
 export const SENTRY_DSN = "https://d45b5d881fd906ee2192aacac8cbced7@o4512448506298368.ingest.us.sentry.io/4512448557154304";

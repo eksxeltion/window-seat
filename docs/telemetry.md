@@ -36,7 +36,7 @@ In priority order.
 
 - **No personal data.** No names, emails, accounts, free text, Cast device names, or URLs with query strings or fragments.
 - **One pseudonymous ID.** PostHog's random anonymous ID is the `install_id`. It is a random value in this browser's localStorage, never linked to a person, and we never call `identify`. It identifies a browser storage context, not a human.
-- **No IP storage and no IP geolocation.** PostHog project setting "Discard client IP data" is on, and every event carries `$geoip_disable: true`. Sentry: `sendDefaultPii: false` alone did not stop it (build 2026-11-17.13 showed Sentry storing the client IP and a city-level geo for an error event), so since build 2026-11-17.14 the SDK is initialized with `dataCollection: { userInfo: false }` and `beforeSend` sets `event.sdk.settings.infer_ip = "never"` (also forced in the SDK metadata, which the SDK merges over the event's settings when sending), removes `event.user` (so no `ip_address`, never `{{auto}}`, and no `geo`); `tests/test_telemetry.py` seeds a user with an IP and geo and checks the sent envelopes (phone and receiver). IP address literals in error text (IPv4, IPv6, and IP hosts in URLs) are replaced with `[ip]`. The project's "Prevent storing of IP addresses" setting should also be on (to check in the Sentry UI). The providers still see the connection IP while receiving data; they don't store it.
+- **No IP storage and no IP geolocation.** PostHog project setting "Discard client IP data" is on, and every event carries `$geoip_disable: true`. Sentry: `sendDefaultPii: false` alone did not stop it (build 2026-11-17.13 showed Sentry storing the client IP and a city-level geo for an error event), so since build 2026-11-17.14 the SDK is initialized with `dataCollection: { userInfo: false }` and `beforeSend` sets `event.sdk.settings.infer_ip = "never"` (also forced in the SDK metadata, which the SDK merges over the event's settings when sending), removes `event.user` (so no `ip_address`, never `{{auto}}`, and no `geo`); `tests/test_telemetry.py` seeds a user with an IP and geo and checks the sent envelopes (phone and receiver). IP address literals in error text (IPv4, IPv6, and IP hosts in URLs) are replaced with `[ip]`. The project's "Prevent storing of IP addresses" setting is left off by Stephane's choice (Nov 17, 2026); the client-side measures above still apply. The providers still see the connection IP while receiving data; they don't store it.
 - **What PostHog sends automatically is trimmed.** `before_send` removes `$referrer`, `$referring_domain`, `$initial_*` and `$timezone`, and strips query strings and fragments from `$current_url`. Kept: browser, OS, screen size, and `$browser_language`. Location is limited to `locale_region`, the region part of the browser language (for example `US` from `en-US`). That is a language preference, not a country, and no IP lookup is involved.
 - **No session replay, autocapture, heatmaps, surveys, web vitals, feature flags or remote config.** posthog-js runs with `autocapture: false`, `capture_pageview: false`, `capture_pageleave: false`, `disable_session_recording: true`, `capture_exceptions: false` (Sentry owns errors), `disable_surveys: true`, `enable_heatmaps: false`, `capture_dead_clicks: false`, `capture_performance: false`, `advanced_disable_flags: true`, `disable_external_dependency_loading: true`, `person_profiles: "never"`, `respect_dnt: true`.
 - **Do Not Track and Global Privacy Control win.** If `navigator.doNotTrack`, `window.doNotTrack` or `navigator.msDoNotTrack` is `"1"` or `"yes"`, or `navigator.globalPrivacyControl === true`, telemetry is off, no ID is created, no SDK is loaded, and the About switch is off and disabled with the note "Off because your browser asks sites not to track you". No URL parameter can override it.
@@ -46,11 +46,11 @@ In priority order.
 
 ## 3. Setup
 
-- **PostHog:** project "Window Seat" in the existing Eksxel organization, US cloud (`https://us.i.posthog.com`). The free plan allows only one project, so this project is also where future apps go; every event carries `app: "window-seat"` to keep them apart.
+- **PostHog:** project "Eksxel" (renamed from "Window Seat" on Nov 17, 2026; same project id and API key) in the existing Eksxel organization, US cloud (`https://us.i.posthog.com`). It is the umbrella project for all Eksxel apps (the free plan allows only one project). Every event carries `app` (here `window-seat`), and every dashboard tile and query must filter on it. A new app picks its own kebab-case `app` value and reuses the same project key.
 - **Sentry:** project `window-seat`, platform `javascript` (browser JavaScript; Sentry rejects `javascript-browser`), in the existing `eksxel` organization, team `eksxel`.
 - **Keys:** the PostHog project API key and the Sentry DSN are public client keys and live in `js/telemetry-config.js`. Personal API tokens and auth tokens are never committed.
 - **Code:** a small wrapper `js/telemetry.js`, imported by `js/app.js` and `js/receiver.js`. It owns the gate, the queue, the rate limits and the super properties, and never throws into app code. Pinned, vendored SDK builds live in `js/vendor/` and are loaded with a script tag after first paint, only when telemetry is on. The wrapper and config are added to the service worker shell; the vendored SDKs are not precached.
-- **Vendored versions (build 2026-11-17.14):**
+- **Vendored versions (build 2026-11-17.15):**
   - `js/vendor/posthog-1.450.1.no-external.min.js`: posthog-js 1.450.1, `dist/array.no-external.js` (430 KB). The browser array build without external script loading. The "full" variant (817 KB) only adds replay, surveys and other features that stay off, so the smaller build is used. Two edits with no behavior change: the source map comment is removed (the map is not vendored), and one em dash in a log message is a hyphen.
   - `js/vendor/sentry-11.14.0.min.js`: @sentry/browser 11.14.0 (93 KB). Sentry no longer publishes its CDN bundles to npm, so this is a minified IIFE built locally with bun 1.4.4 from the package's ESM build. It exposes `window.Sentry` with only `init`, `captureException`, `withScope`, `flush`, `getClient`, `SDK_VERSION` and the integrations the wrapper uses (global handlers, dedupe, linked errors, HTTP context, event filters, breadcrumbs). No tracing, replay, feedback or session code is included.
   - To update: install the packages with npm in a temporary folder outside the repo, copy or rebuild the files, bump the file names and `js/telemetry-config.js`, and note the versions here.
@@ -64,8 +64,8 @@ Computed by the wrapper at capture time (not `posthog.register`, which persists 
 
 | Property | Values | Notes |
 | --- | --- | --- |
-| `app` | `window-seat` | Lets other apps share the PostHog project. |
-| `build` | e.g. `2026-11-17.14` | `BUILD` from `js/build.js` or `js/receiver.js`. |
+| `app` | `window-seat` | Identifies the app inside the shared "Eksxel" PostHog project. Required on every event. |
+| `build` | e.g. `2026-11-17.15` | `BUILD` from `js/build.js` or `js/receiver.js`. |
 | `surface` | `web`, `pwa`, `receiver` | `web` is a browser tab, `pwa` is the installed app (display-mode standalone), `receiver` is the TV page. The Android app adds `android`. The spec's single `web` is split into `web` and `pwa`. |
 | `device_class` | `phone`, `tablet`, `desktop`, `tv` | Coarse, from screen size and the existing TV detection. Receiver is always `tv`. |
 | `cast_state` | `none`, `connecting`, `connected` | Phone side, at capture time. Receiver is always `connected`. |
@@ -154,9 +154,9 @@ All names are snake_case. "Where" names the file and function. Each event fires 
 - **Wrapper limits:** max 60 PostHog events per minute per page; max 10 Sentry events per minute and 25 per page load; the same Sentry error fingerprint once per page load.
 - **Server side:** Sentry DSN key rate limit (300 events per hour) and spike protection on. PostHog's free plan has a hard cap and no card on file, so it cannot bill; it stops ingesting at the limit. Check monthly usage in both after the first week.
 
-## 8. PostHog dashboard: "Window Seat health"
+## 8. PostHog dashboard: "Window Seat health" (in the "Eksxel" project)
 
-All tiles filter `app = window-seat`, `test = false`, `environment = production`, last 30 days unless noted. A "session" means a PostHog `$session_id` for phone surfaces and a `cast_session_id` for Cast.
+The dashboard lives in the shared "Eksxel" PostHog project. All tiles filter `app = window-seat`, `test = false`, `environment = production`, last 30 days unless noted. A "session" means a PostHog `$session_id` for phone surfaces and a `cast_session_id` for Cast.
 
 1. **Cast funnel:** `cast_connect_attempt` then `cast_connect_success` then `cast_first_state`, linked by install, within 2 minutes, attempts with `error_code = cancel` excluded.
 2. **Cast connect success rate:** weekly `cast_connect_success` (trigger tap) / non-cancel attempts, plus `cast_connect_fail` by `error_code`.
@@ -191,7 +191,7 @@ Both email Stephane (the default owner). No Slack.
 
 1. **Consent default:** on by default with an off switch (current plan), or off until turned on? Middle option: on by default but with no stored ID (`persistence: "memory"`), which loses install counts. Spec open question 6.
 2. Keep `locale_region` from the browser language, or drop location entirely?
-3. Keep the PostHog project named "Window Seat", or rename it to something shared (for example "Eksxel apps"), since the free plan allows only one project?
+3. **Decided (Nov 17, 2026):** the PostHog project is named "Eksxel", the umbrella project for all Eksxel apps, and the `app` property tags the actual app (section 3).
 
 ## Review notes
 

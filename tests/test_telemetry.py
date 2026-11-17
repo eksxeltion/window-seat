@@ -13,7 +13,7 @@ base = sys.argv[1].rstrip("/")
 HERE = os.path.dirname(os.path.abspath(__file__))
 MOCK_SENDER = open(os.path.join(HERE, "mock_cast_sender.js")).read()
 FAKE_YT = open(os.path.join(HERE, "fake_youtube.js")).read()
-BUILD = "2026-11-17.14"
+BUILD = "2026-11-17.15"
 NS = "urn:x-cast:com.windowseat"
 # PostHog drops events from browsers that look automated (webdriver flag, HeadlessChrome brand). These tests need it
 # to behave as in a normal Chrome, so they present one. Existing tests keep the headless defaults.
@@ -382,6 +382,8 @@ with sync_playwright() as p:
     pr = [e for e in sent if e["event"] == "receiver_error" and e["properties"].get("kind") == "message_parse"][0]["properties"]
     check(f"receiver: phone's ID, test flag and environment, surface receiver ({ {k: pr.get(k) for k in ('distinct_id','test','environment','surface','device_class','cast_state')} })",
           pr.get("distinct_id") == "phone-install-1" and pr.get("test") is True and pr.get("environment") == "verification" and pr.get("surface") == "receiver" and pr.get("device_class") == "tv" and pr.get("cast_state") == "connected" and pr.get("kind") == "message_parse")
+    check(f"receiver: every sent event has app == window-seat ({sorted({e['properties'].get('app') for e in sent}, key=str)})",
+          len(sent) > 0 and all(e["properties"].get("app") == "window-seat" for e in sent))
     check("receiver: requests went to the (stubbed) PostHog host", any("posthog" in u for u in host_hits(rq)))
     check("receiver: nothing stored on the TV", rx.evaluate("()=>Object.keys(localStorage).filter(k=>k.startsWith('ph_')||k.startsWith('__ph_')).length") == 0)
     n = len(host_hits(rq))
