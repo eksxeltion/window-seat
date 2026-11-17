@@ -382,8 +382,6 @@ with sync_playwright() as p:
     pr = [e for e in sent if e["event"] == "receiver_error" and e["properties"].get("kind") == "message_parse"][0]["properties"]
     check(f"receiver: phone's ID, test flag and environment, surface receiver ({ {k: pr.get(k) for k in ('distinct_id','test','environment','surface','device_class','cast_state')} })",
           pr.get("distinct_id") == "phone-install-1" and pr.get("test") is True and pr.get("environment") == "verification" and pr.get("surface") == "receiver" and pr.get("device_class") == "tv" and pr.get("cast_state") == "connected" and pr.get("kind") == "message_parse")
-    check(f"receiver: every sent event has app == window-seat ({sorted({e['properties'].get('app') for e in sent}, key=str)})",
-          len(sent) > 0 and all(e["properties"].get("app") == "window-seat" for e in sent))
     check("receiver: requests went to the (stubbed) PostHog host", any("posthog" in u for u in host_hits(rq)))
     check("receiver: nothing stored on the TV", rx.evaluate("()=>Object.keys(localStorage).filter(k=>k.startsWith('ph_')||k.startsWith('__ph_')).length") == 0)
     n = len(host_hits(rq))
@@ -391,6 +389,10 @@ with sync_playwright() as p:
     check("receiver: later events go out one by one", wait_until(rx, "()=>__telemetry.sent().filter(e=>e.event==='receiver_error' && e.properties.kind==='message_parse').length>=2", 4000))
     rx.wait_for_timeout(500)
     check("receiver: and each one is a request (no batching)", len(host_hits(rq)) > n)
+    # Checked after the later event too: everything PostHog was allowed to send (after before_send) so far.
+    sent = rx.evaluate("()=>__telemetry.sent()")
+    check(f"receiver: every event passed to PostHog so far, buffered and later, has app == window-seat ({len(sent)} events, {sorted({e['properties'].get('app') for e in sent}, key=str)})",
+          len(sent) >= 3 and all(e["properties"].get("app") == "window-seat" for e in sent))
     # A second phone says off: off for the rest of this receiver session.
     msg(rx, {"type": "telemetry", "on": False, "installId": None, "test": False, "environment": "production"}, "s2")
     check("receiver: a phone saying off turns it off", rx.evaluate("()=>__telemetry.state().on") is False)
