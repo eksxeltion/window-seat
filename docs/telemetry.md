@@ -47,7 +47,7 @@ In priority order.
 ## 3. Setup
 
 - **PostHog:** project "Window Seat" in the existing Eksxel organization, US cloud (`https://us.i.posthog.com`). The free plan allows only one project, so this project is also where future apps go; every event carries `app: "window-seat"` to keep them apart.
-- **Sentry:** project `window-seat`, platform `javascript-browser`, in the existing `eksxel` organization, team `eksxel`.
+- **Sentry:** project `window-seat`, platform `javascript` (browser JavaScript; Sentry rejects `javascript-browser`), in the existing `eksxel` organization, team `eksxel`.
 - **Keys:** the PostHog project API key and the Sentry DSN are public client keys and live in `js/telemetry-config.js`. Personal API tokens and auth tokens are never committed.
 - **Code:** a small wrapper `js/telemetry.js`, imported by `js/app.js` and `js/receiver.js`. It owns the gate, the queue, the rate limits and the super properties, and never throws into app code. Pinned, vendored SDK builds live in `js/vendor/` and are loaded with a script tag after first paint, only when telemetry is on. The wrapper and config are added to the service worker shell; the vendored SDKs are not precached.
 - **Vendored versions (build 2026-11-17.13):**
