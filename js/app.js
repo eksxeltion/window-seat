@@ -1147,9 +1147,15 @@ function render() {
   syncChrome();
 }
 
+/** The cam on screen right now: the TV's current cam while casting (local playback is stopped then), else the local one. */
+function showingCamId() {
+  return isCasting() ? castDebugInfo().now.camId || null : state.currentCamId;
+}
+
 /* Cams sheet: count, time of day, quick picks, and the full list in list order. Local times move on, so the
    rows are refreshed on every render and every 30 seconds while the sheet is open. */
 function renderCamsPanel(now = new Date()) {
+  const showing = showingCamId();
   const checked = checkedCams();
   // The real pool, including the fallback to the checked cams when every one of them is asleep.
   const pool = new Set(rotationIds(now));
@@ -1171,7 +1177,7 @@ function renderCamsPanel(now = new Date()) {
     const cam = camById(id);
     const on = isEnabled(id);
     const failed = state.failed.has(id);
-    const current = id === state.currentCamId;
+    const current = id === showing;
     const asleep = isSleeping(cam, now);
     row.classList.toggle("is-current", current);
     row.classList.toggle("is-failed", failed);
@@ -1486,7 +1492,7 @@ function openPanel(name, opener) {
   showChrome(); // a sheet keeps the chrome up
   render();
   let target = null;
-  if (name === "cams") target = $(`.cam-row[data-id="${state.currentCamId}"] [data-action="watch"]`, panel);
+  if (name === "cams") target = $(`.cam-row[data-id="${showingCamId()}"] [data-action="watch"]`, panel);
   if (name === "music") target = $(`.mix-btn[data-id="${state.mixId}"]`, panel);
   if (name === "tv") renderTvQr();
   if (!target) target = $(FOCUSABLE, panel);
@@ -1730,6 +1736,7 @@ function setupCast() {
     getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume, muted: state.muted, camIds: tvCamIds(), ...timeRules() }),
     onStart: pauseLocalForCast,
     onEnd: resumeAfterCast,
+    onRemoteChange: () => state.openPanel === "cams" && renderCamsPanel(),
     toast: (text) => toast(text, 6000),
   });
 }

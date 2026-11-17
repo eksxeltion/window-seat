@@ -279,6 +279,46 @@ with sync_playwright() as p:
     check(f"cast: None sends every cam id, not an empty list ({[len(c['ids']) for c in cams]})", len(cams) == 1 and sorted(cams[0]["ids"]) == sorted(all_ids))
     pg.context.close()
 
+    # ------------------------------------------------------------ casting: "Now showing" follows the TV, not the stopped local player
+    def now_showing(pg):
+        return pg.evaluate("""()=>({cur: [...document.querySelectorAll('#cams-list .cam-row.is-current')].map(r=>r.dataset.id),
+          badges: [...document.querySelectorAll('#cams-list .cam-row')].filter(r=>{const b=r.querySelector('.badge'); return !b.hidden && b.textContent==='Now showing'}).map(r=>r.dataset.id)})""")
+
+    def tv_state(pg, cam_id, title):
+        pg.evaluate(f"()=>__mockCast.reply({{type:'state',camId:'{cam_id}',camTitle:'{title}',mixId:'nCtOCLv6eFY',mixTitle:'X',pinned:false,interval:60,volume:60,muted:false,paused:false}})")
+        pg.wait_for_timeout(100)
+
+    pg = phone(NIGHT_EU)
+    check("cast badge: started", start(pg))
+    local = ws(pg, "currentCamId()")
+    tv_cam = SHIODOME if local != SHIODOME else SHINJUKU
+    pg.evaluate("()=>__mockCast.start()")
+    pg.wait_for_timeout(400)
+    pg.click("#remote [data-action=open-cams]")
+    pg.wait_for_selector("#panel-cams:not([hidden])")
+    tv_state(pg, tv_cam, "TV cam")
+    ns = now_showing(pg)
+    check(f"cast badge: the TV's cam is Now showing, not the stale local one (local {local}, tv {tv_cam}, {ns})", ns == {"cur": [tv_cam], "badges": [tv_cam]})
+    tv_state(pg, EIFFEL, "Eiffel Tower")
+    ns = now_showing(pg)
+    check(f"cast badge: a later TV state moves the badge ({ns})", ns == {"cur": [EIFFEL], "badges": [EIFFEL]})
+    pick = SHINJUKU if tv_cam != SHINJUKU else SHIODOME
+    pg.click(f"{row(pg, pick)} [data-action=watch]")
+    pg.wait_for_timeout(100)
+    if not pg.is_visible("#panel-cams"):
+        pg.click("#remote [data-action=open-cams]")
+        pg.wait_for_selector("#panel-cams:not([hidden])")
+    tv_state(pg, pick, "Picked")
+    ns = now_showing(pg)
+    check(f"cast badge: Play now that the TV confirms moves the badge ({ns})", ns == {"cur": [pick], "badges": [pick]})
+    pg.click("#panel-cams [data-action=close-panel]")
+    pg.wait_for_selector("#panel-cams", state="hidden")
+    pg.click("#remote [data-action=open-cams]")
+    pg.wait_for_selector("#panel-cams:not([hidden])")
+    focus = pg.evaluate("()=>{const r=document.activeElement.closest('.cam-row'); return r && r.dataset.id}")
+    check(f"cast badge: opening the sheet focuses the TV's cam row ({focus})", focus == pick)
+    pg.context.close()
+
     # ------------------------------------------------------------ missing or invalid timezone errs toward showing the cam
     pg = phone(NIGHT_EU, init=f"localStorage.setItem('windowSeat.sheetConfig', {json.dumps(json.dumps(SAVED))})")
     check("saved list: started", start(pg))

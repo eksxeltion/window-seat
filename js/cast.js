@@ -319,6 +319,8 @@ function renderRemote() {
   ui.mute.textContent = remote.muted ? "Unmute" : "Mute";
   ui.pin.textContent = remote.pinned ? "Pinned" : "Pin cam";
   ui.play.textContent = remote.paused ? "Play" : "Pause";
+  // The phone's own views of the TV (the Cams sheet "Now showing") follow every confirmed or optimistic change.
+  if (hooks && hooks.onRemoteChange) quietly(() => hooks.onRemoteChange());
 }
 
 function onMessage(_ns, raw) {
