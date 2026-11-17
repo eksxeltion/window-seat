@@ -730,23 +730,32 @@ function poolChanged(via, shortcut) {
   if (via) poolTelemetry(via, shortcut);
 }
 
-/* cam_pool_changed once a change settles (2s), flushed on page hide. The last way of changing it wins. */
+/* command (type cams) once per user action, with the mode at that moment. cam_pool_changed once a change settles
+   (2s), flushed on page hide; the last way of changing it wins. Only changes made while telemetry is on are kept,
+   and turning it off drops a pending one, so nothing crosses an off/on boundary. */
 let poolTimer = 0;
 let poolPending = null;
 function poolTelemetry(via, shortcut) {
+  if (!isTelemetryOn()) return dropPoolTelemetry();
+  capture("command", { type: "cams", mode: cmdMode() });
   poolPending = { via, shortcut };
   clearTimeout(poolTimer);
   poolTimer = setTimeout(flushPoolTelemetry, 2000);
 }
+function dropPoolTelemetry() {
+  clearTimeout(poolTimer);
+  poolPending = null;
+}
+onTelemetryChange(() => !isTelemetryOn() && dropPoolTelemetry());
 function flushPoolTelemetry(beacon = false) {
   clearTimeout(poolTimer);
   if (!poolPending) return;
   const { via, shortcut } = poolPending;
   poolPending = null;
+  if (!isTelemetryOn()) return;
   const props = { enabled_count: checkedCams().length, effective_count: rotationIds().length, total: CAMS.length, via, skip_night: state.skipSleeping };
   if (shortcut) props.shortcut = shortcut;
   capture("cam_pool_changed", props, { beacon });
-  capture("command", { type: "cams", mode: cmdMode() }, { beacon });
 }
 
 function toggleTimeRule(key) {
