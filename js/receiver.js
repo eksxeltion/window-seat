@@ -8,17 +8,19 @@
 import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 
-export const BUILD = "2026-11-16.6"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.7"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
-const YS = { ENDED: 0, PLAYING: 1, BUFFERING: 3 };
+const YS = { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
 
 const FADE_MS = 400;
 const CAM_LOAD_MS = 12000; // a new cam must reach PLAYING by then or it is skipped
 const STALL_NUDGE_MS = 20000; // visible cam not PLAYING this long: nudge playVideo
 const STALL_SKIP_MS = 15000; // still not PLAYING this long after the nudge: skip it
 const RETRY_ALL_FAILED_MS = 60000;
+const FLASH_MS = 1800; // on-TV confirmation of a phone command
+const PIN_FLASH_MS = 5000; // the pin-on toast stays longer so it can be read from the couch
 
 const PARAMS = new URLSearchParams(location.search);
 const DEBUG = PARAMS.get("debug") === "1";
@@ -41,7 +43,7 @@ const s = {
   mixId: MIXES[0].id,
   volume: 60,
   muted: false,
-  musicPaused: false,
+  paused: false, // the whole feed (cam and music) is paused; independent of pinned
   poolIds: null, // cam ids chosen on the phone (Cams filters); null = the default cams
   failed: new Set(),
 };
@@ -69,7 +71,8 @@ function snapshot() {
     interval: s.interval,
     volume: s.volume,
     muted: s.muted,
-    musicPaused: s.musicPaused,
+    paused: s.paused,
+    musicPaused: s.paused, // older name, kept for senders that still read it
     poolIds: s.poolIds,
     failedCams: Array.from(s.failed),
     list: { source: listInfo.source, cams: listInfo.cams, mixes: listInfo.mixes },
@@ -154,13 +157,19 @@ function broadcast() {
 
 /* Small on-TV confirmation for every phone command, so a tap is visibly received. */
 let cmdTimer = 0;
-function flash(text) {
+function flash(text, ms = FLASH_MS) {
   const el = $("cmd-toast");
   if (!el || !text) return;
   el.textContent = text;
   el.classList.add("show");
   clearTimeout(cmdTimer);
-  cmdTimer = setTimeout(() => el.classList.remove("show"), 1800);
+  cmdTimer = setTimeout(() => el.classList.remove("show"), ms);
+}
+
+/* Persistent "Paused" pill while the feed is paused, so a frozen frame never looks like a crash. */
+function showPausedPill(on) {
+  const el = $("paused-pill");
+  if (el) el.hidden = !on;
 }
 
 /* ---------------------------------------------------------------- cam */
@@ -175,9 +184,28 @@ let retryTimer = 0;
 let rotateReason = "start";
 let wantedCam = null; // camera requested before the YouTube player was ready
 let awaitingRetry = false; // all cams failed: camTick stays idle until the retry timer fires
+let pausedRemaining = 0; // ms left on the rotation clock when the feed was paused (frozen while paused)
 
 const blackout = $("blackout");
 const fadeTo = (on) => blackout.classList.toggle("on", on);
+
+/* Cam audio is always off: every cam play path goes through these. */
+function camMute() {
+  quietly(() => camPlayer.mute());
+  quietly(() => camPlayer.setVolume(0));
+}
+function camPlay() {
+  camMute();
+  quietly(() => camPlayer.playVideo());
+  camMute();
+}
+/* Resume a live cam at the live edge, not where it froze. */
+function camToLiveEdge() {
+  camMute();
+  const d = quietly(() => camPlayer.getDuration());
+  if (typeof d === "number" && d > 0) quietly(() => camPlayer.seekTo(d, true));
+  camPlay();
+}
 
 function pool() {
   const chosen = s.poolIds && s.poolIds.length ? CAMS.filter((c) => s.poolIds.includes(c.id)) : CAMS.filter((c) => c.default);
@@ -211,8 +239,9 @@ function beginLoad(camId, reason = "rotate") {
     if (my !== token) return;
     pending.loading = true;
     pending.startedAt = Date.now();
-    quietly(() => camPlayer.mute());
+    camMute();
     quietly(() => camPlayer.loadVideoById(camId));
+    camMute();
   }, s.camId ? FADE_MS : 0);
 }
 
@@ -226,6 +255,12 @@ function commitPending() {
   pending = null;
   stall = null;
   nextSwapAt = Date.now() + s.interval * 1000;
+  if (s.paused) {
+    // Changed cam while paused: show its first frame, then hold it (no autoplay).
+    pausedRemaining = s.interval * 1000;
+    camMute();
+    quietly(() => camPlayer.pauseVideo());
+  }
   $("cap-title").textContent = cam.title;
   $("cap-meta").textContent = `${cam.place} · ${cam.channel}`;
   fadeTo(false);
@@ -256,6 +291,7 @@ function failCam(camId, why) {
 
 function onCamState(e) {
   const code = e.data;
+  if (code === YS.PLAYING || code === YS.BUFFERING) camMute();
   if (pending && pending.loading && code === YS.PLAYING) {
     const vid = quietly(() => camPlayer.getVideoData().video_id);
     if (!vid || vid === pending.camId) commitPending();
@@ -281,6 +317,7 @@ function camTick() {
     return;
   }
   if (!s.camId) return;
+  if (s.paused) return; // paused: no stall watchdog and no rotation
   const live = quietly(() => camPlayer.getPlayerState());
   if (live === YS.PLAYING) {
     stall = null;
@@ -289,7 +326,7 @@ function camTick() {
     if (!stall.nudged && now - stall.at > STALL_NUDGE_MS) {
       stall = { at: now, nudged: true };
       note("stall", { camId: s.camId, action: "nudge" });
-      quietly(() => camPlayer.playVideo());
+      camPlay();
     } else if (stall.nudged && now - stall.at > STALL_SKIP_MS) {
       note("stall", { camId: s.camId, action: "skip" });
       failCam(s.camId, "stalled");
@@ -312,6 +349,7 @@ function createCamPlayer() {
     events: {
       onReady: () => {
         camReady = true;
+        camMute();
         const list = pool();
         const first = wantedCam && camById(wantedCam) ? wantedCam : (list[Math.floor(Math.random() * list.length)] || CAMS[0]).id;
         beginLoad(first, wantedCam ? "cam" : "start");
@@ -340,7 +378,6 @@ function playMix(id) {
   clearTimeout(musicRetryTimer); // a newer selection supersedes any pending all-failed retry
   s.mixId = id;
   showMixTitle();
-  s.musicPaused = false;
   if (musicReady) {
     applyAudio();
     quietly(() => musicPlayer.loadVideoById(id));
@@ -366,7 +403,7 @@ function onMusicState(e) {
 
 function onMusicError(e) {
   note("mixError", { mixId: s.mixId, code: e.data });
-  if (s.musicPaused) return; // paused: Play restarts the mix
+  if (s.paused) return; // paused: Play restarts the mix
   musicErrors++;
   if (musicErrors >= MIXES.length) {
     // Every mix failed in a row: wait a minute before trying again.
@@ -387,7 +424,7 @@ function createMusicPlayer() {
     events: {
       onReady: () => {
         musicReady = true;
-        if (s.musicPaused) {
+        if (s.paused) {
           // Paused from the phone before the player was ready: load the mix without starting it.
           applyAudio();
           quietly(() => musicPlayer.cueVideoById(s.mixId));
@@ -422,6 +459,33 @@ function prevMix() {
   playMix(MIXES[(i - 1 + MIXES.length) % MIXES.length].id);
 }
 
+/* Pause or resume the whole feed: the cam and the music. Pin is separate and untouched. */
+function setPaused(on, { music = true } = {}) {
+  const was = s.paused;
+  s.paused = !!on;
+  if (s.paused) {
+    clearTimeout(musicRetryTimer); // a paused player must not be restarted by an error retry
+    if (music && musicReady) quietly(() => musicPlayer.pauseVideo());
+    if (!was) pausedRemaining = Math.max(0, nextSwapAt - Date.now());
+    stall = null;
+    if (camReady && s.camId && !pending) {
+      camMute();
+      quietly(() => camPlayer.pauseVideo());
+    }
+  } else {
+    if (music && musicReady) {
+      const st = quietly(() => musicPlayer.getPlayerState());
+      if (st === YS.PAUSED || st === YS.CUED) quietly(() => musicPlayer.playVideo()); // continue where it stopped
+      else playMix(s.mixId); // nothing loaded (or it failed): start the mix again
+    }
+    if (was) nextSwapAt = Date.now() + pausedRemaining;
+    stall = null;
+    if (camReady && s.camId && !pending) camToLiveEdge();
+  }
+  showPausedPill(s.paused);
+  note("pause", { value: s.paused });
+}
+
 /** Accepts a command object, or JSON text of one (from any sender or namespace type). */
 export function parseCommand(raw) {
   let cmd = raw;
@@ -444,17 +508,26 @@ function handle(raw) {
       if (!quiet) flash(cmd.type === "next" ? "Next cam" : "Previous cam");
       break;
     }
-    case "pin":
+    case "pin": {
+      const was = s.pinned;
       s.pinned = !!cmd.value;
-      if (!s.pinned) nextSwapAt = Date.now() + s.interval * 1000;
-      if (!quiet) flash(s.pinned ? "Pinned" : "Rotation on");
+      if (!s.pinned) {
+        nextSwapAt = Date.now() + s.interval * 1000;
+        pausedRemaining = s.interval * 1000;
+      }
+      if (!quiet && s.pinned && !was) flash("Pinned. Staying on this cam.", PIN_FLASH_MS);
+      else if (!quiet) flash(s.pinned ? "Pinned" : "Rotation on");
       break;
+    }
     case "mix":
+      if (!mixById(cmd.id)) break;
+      if (s.paused) setPaused(false, { music: false }); // choosing a mix plays the feed again
       playMix(cmd.id);
       if (!quiet) flash(`Music: ${(mixById(cmd.id) || {}).en || ""}`);
       break;
     case "nextMix":
     case "prevMix":
+      if (s.paused) setPaused(false, { music: false });
       if (cmd.type === "nextMix") nextMix();
       else prevMix();
       if (!quiet) flash(`Music: ${(mixById(s.mixId) || {}).en || ""}`);
@@ -473,18 +546,15 @@ function handle(raw) {
       applyAudio();
       if (!quiet) flash(s.muted ? "Music muted" : `Music on, volume ${s.volume}`);
       break;
-    case "playMusic":
-      s.musicPaused = !cmd.value;
-      if (s.musicPaused) {
-        clearTimeout(musicRetryTimer); // a paused player must not be restarted by an error retry
-        if (musicReady) quietly(() => musicPlayer.pauseVideo());
-      } else if (musicReady) {
-        const st = quietly(() => musicPlayer.getPlayerState());
-        if (st === 2 || st === 5) quietly(() => musicPlayer.playVideo());
-        else playMix(s.mixId); // nothing loaded (or it failed): start the mix again
-      }
-      if (!quiet) flash(s.musicPaused ? "Music paused" : "Music playing");
+    case "pause":
+    case "playMusic": {
+      // {type:"pause", value:true} pauses; the older {type:"playMusic", value:false} means the same.
+      // Both pause or resume the whole feed (cam and music), so phone and TV can never disagree.
+      const paused = cmd.type === "pause" ? !!cmd.value : !cmd.value;
+      setPaused(paused);
+      if (!quiet && !paused) flash("Playing"); // pausing shows the persistent Paused pill instead
       break;
+    }
     case "cams": {
       const ids = Array.isArray(cmd.ids) ? cmd.ids.filter((id) => camById(id)) : [];
       s.poolIds = ids.length ? ids : null;
@@ -745,7 +815,7 @@ function afterListChange() {
   if (!s.poolIds || !s.poolIds.length) s.poolIds = null;
   for (const id of Array.from(s.failed)) if (!camById(id)) s.failed.delete(id);
   if (!mixById(s.mixId)) {
-    if (s.musicPaused) {
+    if (s.paused) {
       // Paused stays paused: just cue the replacement.
       clearTimeout(musicRetryTimer);
       s.mixId = MIXES[0].id;
@@ -816,7 +886,12 @@ if (DEBUG) {
       events,
       // Test probes for the soak run.
       music: () => ({ state: quietly(() => musicPlayer.getPlayerState()), time: quietly(() => musicPlayer.getCurrentTime()), vol: quietly(() => musicPlayer.getVolume()), muted: quietly(() => musicPlayer.isMuted()) }),
-      cam: () => ({ state: quietly(() => camPlayer.getPlayerState()) }),
+      cam: () => ({ state: quietly(() => camPlayer.getPlayerState()), muted: quietly(() => camPlayer.isMuted()), vol: quietly(() => camPlayer.getVolume()) }),
+      // Test hook: make the rotation clock due now (as if the interval passed).
+      expireRotation: () => {
+        nextSwapAt = 0;
+        pausedRemaining = 0;
+      },
     },
   });
 }
