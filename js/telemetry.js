@@ -80,6 +80,22 @@ function bareUrl(v) {
   return v.replace(/[?#].*$/s, "");
 }
 
+/**
+ * Free text that may go to Sentry (exception values, messages, breadcrumb messages): URLs lose their query string
+ * and fragment, email addresses and long token-like runs are masked, and the result is capped. Error text is not
+ * ours to control (a rejection can carry a full URL or a server reply), so none of it leaves unscrubbed.
+ */
+const TEXT_MAX = 300;
+function scrubText(v) {
+  if (typeof v !== "string") return v;
+  let s = v.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`)\]]+/gi, (u) => bareUrl(u));
+  s = s.replace(/\[title="[^"]*"\]/g, "");
+  s = s.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]");
+  // Long runs of letters, digits, - and _ with at least one digit: keys, tokens, IDs. Plain words and paths stay.
+  s = s.replace(/[A-Za-z0-9_-]{24,}/g, (w) => (/\d/.test(w) ? "[redacted]" : w));
+  return s.length > TEXT_MAX ? s.slice(0, TEXT_MAX) + "..." : s;
+}
+
 function hostEnvironment() {
   const h = safe(() => location.hostname, "");
   return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1" || h.endsWith(".localhost") ? "local" : "production";
@@ -268,7 +284,7 @@ const BREADCRUMB_DROP = new Set(["fetch", "xhr", "navigation", "console"]);
 function beforeBreadcrumb(b) {
   try {
     if (!t.on || !b || BREADCRUMB_DROP.has(b.category)) return null;
-    if (typeof b.message === "string") b.message = b.message.replace(/\[title="[^"]*"\]/g, "");
+    if (typeof b.message === "string") b.message = scrubText(b.message);
     if (b.data && typeof b.data === "object") {
       for (const k of Object.keys(b.data)) if (typeof b.data[k] === "string") b.data[k] = bareUrl(b.data[k]);
     }
@@ -289,8 +305,23 @@ function stripEventUrls(event) {
       delete event.request.headers.Cookie;
     }
   }
+  // Free text: every exception value (linked errors too), the message forms Sentry uses, breadcrumb messages.
+  if (typeof event.message === "string") event.message = scrubText(event.message);
+  else if (event.message && typeof event.message === "object") {
+    event.message.formatted = scrubText(event.message.formatted);
+    event.message.message = scrubText(event.message.message);
+    delete event.message.params;
+  }
+  if (event.logentry && typeof event.logentry === "object") {
+    event.logentry.message = scrubText(event.logentry.message);
+    event.logentry.formatted = scrubText(event.logentry.formatted);
+    delete event.logentry.params;
+  }
+  delete event.extra; // e.g. __serialized__ of a non-Error rejection: arbitrary data, never ours to send
+  if (event.transaction) event.transaction = bareUrl(event.transaction);
   const frames = [];
   for (const ex of (event.exception && event.exception.values) || []) {
+    if (ex.value !== undefined) ex.value = scrubText(String(ex.value));
     for (const f of (ex.stacktrace && ex.stacktrace.frames) || []) {
       if (f.filename) f.filename = bareUrl(f.filename);
       if (f.abs_path) f.abs_path = bareUrl(f.abs_path);
@@ -298,6 +329,7 @@ function stripEventUrls(event) {
     }
   }
   for (const b of event.breadcrumbs || []) {
+    if (typeof b.message === "string") b.message = scrubText(b.message);
     if (b.data && typeof b.data === "object") for (const k of Object.keys(b.data)) if (typeof b.data[k] === "string") b.data[k] = bareUrl(b.data[k]);
   }
   delete event.user;
@@ -311,7 +343,8 @@ function sentryBeforeSend(event) {
     const ex = (event.exception && event.exception.values && event.exception.values[0]) || {};
     // Browser extensions and cross-origin "Script error." without a stack are not ours.
     if (frames.some((f) => /^(chrome|moz|safari(-web)?|ms-browser)-extension:\/\//.test(f.filename || ""))) return null;
-    const msg = String(ex.value || event.message || "");
+    const m = event.message;
+    const msg = String(ex.value || (m && typeof m === "object" ? m.formatted || m.message : m) || "");
     if (/^Script error\.?$/.test(msg) && !frames.length) return null;
     const top = frames[frames.length - 1] || {};
     const fp = `${ex.type || ""}|${msg.slice(0, 120)}|${top.filename || ""}:${top.lineno || ""}`;

@@ -24,6 +24,11 @@ TELEMETRY_HOST = re.compile(r"^https?://([a-z0-9-]+\.)*(posthog\.com|sentry\.io)
 fails, page_errors = [], []
 
 
+def expected_error(e):
+    """Errors the tests throw on purpose (a rejected string can come through as its tail only)."""
+    return "telemetry test error" in str(e) or "example.net/r" in str(e)
+
+
 def check(name, cond):
     print(("PASS " if cond else "FAIL ") + name)
     if not cond:
@@ -51,7 +56,7 @@ def open_phone(b, query="", init="", mobile=False):
     reqs = []
     ctx.on("request", lambda r: reqs.append(r.url))
     pg = ctx.new_page()
-    pg.on("pageerror", lambda e: page_errors.append(f"{e}") if "telemetry test error" not in str(e) else None)
+    pg.on("pageerror", lambda e: page_errors.append(f"{e}") if not expected_error(e) else None)
     pg.route("**/cast_sender.js*", lambda r: r.fulfill(status=200, content_type="text/javascript", body=MOCK_SENDER))
     pg.route("**/iframe_api", lambda r: r.fulfill(status=200, content_type="text/javascript", body=FAKE_YT))
     pg.route(re.compile(r"docs\.google\.com"), lambda r: r.abort())  # no sheet: the built-in list
@@ -141,6 +146,11 @@ with sync_playwright() as p:
     check("on: SDKs load after first paint", wait_until(pg, "()=>__telemetry.state().posthog==='ready' && __telemetry.state().sentry==='ready'", 10000))
     check("on: switch on by default", pg.evaluate("()=>document.getElementById('telemetry-toggle').checked") is True)
     do_things(pg)
+    # Error text is scrubbed too: a URL's query and fragment, an email address and a token never reach Sentry.
+    pg.evaluate("""()=>{
+      setTimeout(()=>{throw new Error('telemetry test error scrub https://example.com/p/q?token=SECRETQ1#fragZ9 mail me@example.org key abcdefghijklmnop1234567890')},0);
+      Promise.reject('telemetry test error scrub2 https://example.net/r?sig=SECRETQ2#fragY8');
+    }""")
     check("on: events reached the (stubbed) PostHog host", wait_until(pg, "()=>__telemetry.sent().length>=4", 8000))
     pg.wait_for_timeout(4000)  # PostHog batches every few seconds
     sent = pg.evaluate("()=>__telemetry.sent()")
@@ -175,6 +185,11 @@ with sync_playwright() as p:
     check("on: Sentry requests went to the (stubbed) ingest host", any("sentry.io" in u for u in hits))
     bodies = b"".join(h["body"] or b"" for h in telemetry_guard.hits)
     check("on: no query string or fragment from the page URL in what was sent", b"x=secret" not in bodies and b"#frag" not in bodies and b"telemetry_test=1" not in bodies)
+    scrubbed = [e["value"] for e in errs if "scrub" in e["value"]]
+    check(f"scrub: both errors with URLs in their text went to Sentry, URLs kept bare ({scrubbed})",
+          any("https://example.com/p/q" in v and "[email]" in v and "[redacted]" in v for v in scrubbed) and any("https://example.net/r" in v for v in scrubbed))
+    leaked = [s for s in (b"SECRETQ1", b"fragZ9", b"me@example.org", b"abcdefghijklmnop1234567890", b"SECRETQ2", b"fragY8", b"token=", b"sig=") if s in bodies]
+    check(f"scrub: no query, fragment, email or token from error text in any request body ({leaked})", not leaked and b"example.com/p/q" in bodies)
     tel = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent") if json.loads(m["data"]).get("type") == "telemetry"]
     check(f"on: the TV is told on with the install ID, test flag and environment ({tel})", tel and tel[-1] == {"type": "telemetry", "on": True, "installId": install, "test": True, "environment": "verification", "silent": True})
     check("on: PostHog keeps its ID in localStorage", any(k.startswith("ph_") for k in ph_keys(pg)))
@@ -260,7 +275,7 @@ with sync_playwright() as p:
         rq = []
         ctx.on("request", lambda r: rq.append(r.url))
         rx = ctx.new_page()
-        rx.on("pageerror", lambda e: page_errors.append("receiver: " + str(e)))
+        rx.on("pageerror", lambda e: page_errors.append("receiver: " + str(e)) if not expected_error(e) else None)
         rx.route("**/iframe_api", lambda r: r.abort())  # no YouTube needed for the gate
         rx.route(re.compile(r"docs\.google\.com"), lambda r: r.abort())
         rx.goto(f"{base}/receiver.html{query}")
