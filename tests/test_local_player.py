@@ -4,6 +4,8 @@ Runs against a stubbed YouTube IFrame API (tests/fake_youtube.js) and the mock C
 Usage: test_local_player.py BASE_URL   (the site root, for example http://localhost:8000/)"""
 import sys, os, re, json, base64
 from playwright.sync_api import sync_playwright
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
 
 base = sys.argv[1].rstrip("/")
 if base.endswith(".html"):
@@ -11,7 +13,7 @@ if base.endswith(".html"):
 here = os.path.dirname(os.path.abspath(__file__))
 FAKE_YT = open(os.path.join(here, "fake_youtube.js")).read()
 MOCK = open(os.path.join(here, "mock_cast_sender.js")).read()
-BUILD = "2026-11-16.12"
+BUILD = "2026-11-17.13"
 TAGLINE = "Live windows onto the world, with soft music, made for your TV."
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 # Every page denies the Fullscreen API: the player must stay full bleed and keep playing anyway.

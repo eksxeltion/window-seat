@@ -3,6 +3,8 @@ Runs against a stubbed YouTube IFrame API (tests/fake_youtube.js), so every asse
 Usage: test_transport.py BASE_URL   (BASE_URL serves index.html and receiver.html)"""
 import sys, os, json
 from playwright.sync_api import sync_playwright
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
 
 base = sys.argv[1].rstrip("/")
 if base.endswith(".html"):

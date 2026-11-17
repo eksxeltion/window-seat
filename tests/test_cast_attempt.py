@@ -1,6 +1,8 @@
 """A requestSession rejection stays visible as 'Last cast attempt ...' on the Start screen, player glass and debug line."""
 import sys, os, re
 from playwright.sync_api import sync_playwright
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
 url = sys.argv[1]
 MOCK = open(os.path.join(os.path.dirname(__file__), "mock_cast_sender.js")).read()
 fails = []
