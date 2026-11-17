@@ -1,5 +1,17 @@
-/* Window Seat Cast receiver. Designed for a 1920x1080 TV; sizes scale with the viewport. */
-html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: #fff; font-family: system-ui, "Segoe UI", Roboto, sans-serif; }
+/* Window Seat Cast receiver. Designed for a 1920x1080 TV; sizes scale with the viewport (px minimums).
+   Night overlay tokens from docs/design.md. The video stays untouched: no grade, and no chrome except the lower
+   third (first 10 seconds after a cam loads), the 5 second pin toast, the persistent Paused pill, and the Debug strip. */
+:root {
+  --color-overlay: rgba(10, 18, 24, 0.62);
+  --color-overlay-strong: rgba(10, 18, 24, 0.82);
+  --color-overlay-ink: #f3f5f7;
+  --color-overlay-dim: rgba(243, 245, 247, 0.78);
+  --color-overlay-line: rgba(255, 255, 255, 0.16);
+  --color-overlay-accent: #8ec4d4;
+  --font-display: "Fraunces", "Source Serif 4", Georgia, serif;
+  --font-ui: "Plus Jakarta Sans", system-ui, "Segoe UI", Roboto, sans-serif;
+}
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: var(--color-overlay-ink); font-family: var(--font-ui); }
 
 #cam { position: fixed; inset: 0; background: #000; z-index: 1; }
 #cam iframe, #cam-player { width: 100%; height: 100%; border: 0; display: block; }
@@ -10,15 +22,22 @@ html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color:
 /* TV safe area: 5% overscan margin on every side. */
 #safe { position: fixed; inset: 5%; pointer-events: none; z-index: 3; }
 
+/* Lower third: bottom left of the safe area, about 46% wide at most. Slides in (280ms), fades out over 800ms. */
 #caption {
-  position: absolute; left: 0; bottom: 0; max-width: 52%;
-  padding: 0.6vw 1.2vw; border-radius: 12px;
-  background: linear-gradient(90deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+  position: absolute; left: 0; bottom: 0; max-width: 46%; box-sizing: border-box;
+  padding: max(16px, 1.25vw) max(24px, 1.667vw);
+  border: 1px solid var(--color-overlay-line); border-radius: max(16px, 1.25vw);
+  background: var(--color-overlay);
+  opacity: 1; transform: none;
+  transition: opacity 280ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-#cap-title { font-size: max(32px, 2.4vw); font-weight: 600; line-height: 1.2; }
-#cap-meta { margin-top: 0.3em; font-size: max(24px, 1.6vw); color: rgba(255, 255, 255, 0.88); }
-#cap-brand { margin-top: 0.6em; font-size: max(16px, 1vw); letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255, 255, 255, 0.55); }
+#caption.quiet { opacity: 0; transform: translateY(8px); transition: opacity 800ms ease, transform 800ms ease; }
+#cap-title { font-family: var(--font-display); font-size: max(40px, 3.333vw); line-height: 1.1875; font-weight: 600; letter-spacing: -0.02em; color: var(--color-overlay-ink); }
+#cap-meta { margin-top: 0.3em; font-size: max(22px, 1.667vw); line-height: 1.25; font-weight: 500; color: var(--color-overlay-dim); }
+#cap-meta:empty { display: none; }
+#cap-music { margin-top: 0.5em; font-size: max(18px, 1.25vw); line-height: 1.333; font-weight: 500; color: var(--color-overlay-dim); }
+#cap-music:empty { display: none; }
+#cap-brand { margin-top: 0.8em; font-size: max(14px, 0.9375vw); line-height: 1.333; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-overlay-dim); }
 
 /* Music: kept in the DOM at 356x200 (above YouTube's 200x200 minimum) so it keeps playing, but hidden
    behind the opaque cam layer and fully transparent. No display:none or visibility:hidden on purpose. */
@@ -26,22 +45,22 @@ html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color:
 #music-frame { width: 356px; height: 200px; overflow: hidden; }
 #music-frame iframe, #music-player { width: 356px; height: 200px; border: 0; display: block; }
 #music-title { display: none; }
-#cap-music { margin-top: 0.4em; font-size: max(18px, 1.1vw); color: rgba(255, 255, 255, 0.75); }
-#cap-music:empty { display: none; }
 
-/* On-TV confirmation of phone commands */
+/* On-TV confirmation of phone commands (pin toast: 5 seconds), top center in the safe area. */
 #cmd-toast {
-  position: fixed; top: 6%; left: 50%; z-index: 4; transform: translateX(-50%);
-  padding: 0.5em 1.2em; border-radius: 999px; background: rgba(0, 0, 0, 0.6);
-  font-size: max(22px, 1.4vw); opacity: 0; transition: opacity 0.25s ease; pointer-events: none; white-space: nowrap;
+  position: fixed; top: 5%; left: 50%; z-index: 4; transform: translateX(-50%);
+  padding: 0.45em 1.1em; border: 1px solid var(--color-overlay-line); border-radius: 999px; background: var(--color-overlay-strong);
+  color: var(--color-overlay-ink); font-size: max(20px, 1.458vw); line-height: 1.286; font-weight: 600;
+  opacity: 0; transition: opacity 200ms ease-out; pointer-events: none; white-space: nowrap;
 }
 #cmd-toast.show { opacity: 1; }
 
-/* Persistent while the feed is paused (not the short command toast): a frozen frame is never mistaken for a crash. */
+/* Persistent while the feed is paused (not the short command toast): a frozen frame is never mistaken for a crash.
+   Top right in the safe area, clear of the toast (top center) and the lower third. */
 #paused-pill {
-  position: fixed; top: 5%; left: 5%; z-index: 4;
-  padding: 0.45em 1.1em; border-radius: 999px; background: rgba(0, 0, 0, 0.6);
-  font-size: max(22px, 1.4vw); font-weight: 600; letter-spacing: 0.04em; pointer-events: none;
+  position: fixed; top: 5%; right: 5%; z-index: 4;
+  padding: 0.45em 1.1em; border: 1px solid var(--color-overlay-line); border-radius: 999px; background: var(--color-overlay-strong);
+  color: var(--color-overlay-ink); font-size: max(20px, 1.458vw); line-height: 1.286; font-weight: 600; letter-spacing: 0.04em; pointer-events: none;
 }
 #paused-pill[hidden] { display: none; }
 

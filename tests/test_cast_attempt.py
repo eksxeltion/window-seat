@@ -1,4 +1,4 @@
-"""A requestSession rejection stays visible as 'Last cast attempt ...' on the Start screen, bar and debug line."""
+"""A requestSession rejection stays visible as 'Last cast attempt ...' on the Start screen, player glass and debug line."""
 import sys, os, re
 from playwright.sync_api import sync_playwright
 url = sys.argv[1]
@@ -19,7 +19,8 @@ with sync_playwright() as p:
     check("Start screen shows last attempt with code and reason", re.search(r"Last cast attempt \d\d:\d\d: session_error \(TV found, but the receiver failed to load\)", st or "") is not None)
     check("receiver failed text still shown", "receiver failed to load" in (st or ""))
     bar = pg.evaluate("()=>[...document.querySelectorAll('.bar-status')].map(e=>e.textContent).join('')")
-    check("bar status line shows it too", "Last cast attempt" in bar and "session_error" in bar)
+    check("player glass status line shows it too", "Last cast attempt" in bar and "session_error" in bar)
+    check("Cast control marked failed, still labeled Cast to your TV", pg.get_attribute("button.cast-start", "data-state") == "failed" and pg.text_content("button.cast-start .cast-label") == "Cast to your TV")
     pg.evaluate("()=>__mockCast.start()"); pg.wait_for_timeout(300)
     check("remote debug line includes it", "Last cast attempt" in pg.text_content("#remote-debug"))
     b.close()
