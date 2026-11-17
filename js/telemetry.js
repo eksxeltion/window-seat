@@ -74,15 +74,34 @@ function removePosthogKeys() {
   });
 }
 
-/** Strip the query string and fragment from a URL (any string that looks like one). */
+// IP address literals. No lookbehind (older Safari cannot parse it): the character before a match is captured instead.
+const V4 = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}";
+const H6 = "[0-9a-f]{1,4}";
+// IPv6: eight full groups, a compressed form with "::", or either with a dotted IPv4 tail (::ffff:192.0.2.1). Times (12:30:45) and line:col (app.js:12:34) have neither.
+const V6 = `(?:(?:(?:${H6}:){1,6}|::(?:${H6}:){0,5})${V4}|(?:${H6}:){7}${H6}|(?:${H6}(?::${H6}){0,6})?::(?:${H6}(?::${H6}){0,6})?)(?:%[\\w.-]+)?`;
+const IPV4_RE = new RegExp(`(^|[^\\w.])${V4}(?!\\w|\\.\\d)`, "g");
+const IPV6_RE = new RegExp(`(^|[^\\w:.])(${V6})(?![\\w:]|\\.\\d)`, "gi");
+const IPV6_BRACKET_RE = new RegExp(`\\[${V6}\\]`, "gi");
+// A URL whose host is an IP literal (bracketed IPv6, or IPv4), after an optional userinfo part.
+const URL_IP_HOST_RE = new RegExp(`^([a-z][a-z0-9+.-]*:\\/\\/(?:[^@\\/\\s]*@)?)(?:\\[[0-9a-f:.]+(?:%[\\w.-]+)?\\]|${V4})(?=[:/]|$)`, "i");
+
+/** Strip the query string and fragment from a URL (any string that looks like one), and an IP literal host. */
 function bareUrl(v) {
   if (typeof v !== "string") return v;
-  return v.replace(/[?#].*$/s, "");
+  return v.replace(/[?#].*$/s, "").replace(URL_IP_HOST_RE, "$1[ip]");
+}
+
+/** IP literals in free text become "[ip]". */
+function scrubIps(s) {
+  s = s.replace(IPV6_BRACKET_RE, "[ip]");
+  s = s.replace(IPV6_RE, (m, pre, ip) => (ip === "::" ? m : pre + "[ip]"));
+  return s.replace(IPV4_RE, "$1[ip]");
 }
 
 /**
  * Free text that may go to Sentry (exception values, messages, breadcrumb messages): URLs lose their query string
- * and fragment, email addresses and long token-like runs are masked, and the result is capped. Error text is not
+ * and fragment, IP literals (IPv4, IPv6, URL hosts), email addresses and long token-like runs are masked, and the
+ * result is capped. Error text is not
  * ours to control (a rejection can carry a full URL or a server reply), so none of it leaves unscrubbed.
  * The input is cut to a few times the cap before any regex runs, so a huge string cannot make the patterns slow;
  * a URL cut at that point still matches the URL pattern and loses its query.
@@ -92,8 +111,9 @@ const TEXT_SCAN_MAX = TEXT_MAX * 4;
 function scrubText(v) {
   if (typeof v !== "string") return v;
   let s = v.length > TEXT_SCAN_MAX ? v.slice(0, TEXT_SCAN_MAX) : v;
-  s = s.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`)\]]+/gi, (u) => bareUrl(u));
+  s = s.replace(/\b[a-z][a-z0-9+.-]*:\/\/(?:\[[\w:.%-]*\])?[^\s"'<>`)\]]*/gi, (u) => bareUrl(u));
   s = s.replace(/\[title="[^"]*"\]/g, "");
+  s = scrubIps(s);
   s = s.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]");
   // Long runs of letters, digits, - and _ with at least one digit: keys, tokens, IDs. Plain words and paths stay.
   s = s.replace(/[A-Za-z0-9_-]{24,}/g, (w) => (/\d/.test(w) ? "[redacted]" : w));

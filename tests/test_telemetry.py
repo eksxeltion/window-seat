@@ -76,6 +76,29 @@ def ph_keys(pg):
     return pg.evaluate("()=>Object.keys(localStorage).filter(k=>k.startsWith('ph_')||k.startsWith('__ph_'))")
 
 
+def sentry_events(match=None):
+    """Every Sentry event envelope item the stub received (optionally only those whose text contains `match`)."""
+    out = []
+    for h in telemetry_guard.hits:
+        if "sentry.io" not in h["url"] or not h["body"]:
+            continue
+        lines = h["body"].split(b"\n")
+        for i in range(1, len(lines) - 1):
+            try:
+                hdr = json.loads(lines[i])
+            except Exception:
+                continue
+            if isinstance(hdr, dict) and hdr.get("type") == "event":
+                ev = json.loads(lines[i + 1])
+                if match is None or match in json.dumps(ev):
+                    out.append(ev)
+    return out
+
+
+def infer_never(ev):
+    return ((ev.get("sdk") or {}).get("settings") or {}).get("infer_ip") == "never"
+
+
 def do_things(pg):
     """Start, next, pin, open and close panels, a thrown error and a rejected promise, then cast and stop."""
     pg.evaluate("()=>__windowSeat.start()")
@@ -151,6 +174,23 @@ with sync_playwright() as p:
       setTimeout(()=>{throw new Error('telemetry test error scrub https://example.com/p/q?token=SECRETQ1#fragZ9 mail me@example.org key abcdefghijklmnop1234567890')},0);
       Promise.reject('telemetry test error scrub2 https://example.net/r?sig=SECRETQ2#fragY8');
     }""")
+    # A user with an IP and geo deliberately seeded on the Sentry scope and by an event processor: none of it may leave.
+    # The vendor bundle is trimmed (no setUser): seed the user on a scope, and again in a client event processor.
+    seeded = pg.evaluate("""()=>{
+      const geo={country_code:'NL', city:'Amsterdam', region:'Noord-Holland'};
+      const c=Sentry.getClient();
+      if (!c || typeof c.addEventProcessor!=='function') return false;
+      c.addEventProcessor((e)=>{ e.user={...(e.user||{}), id:'seeded-user', ip_address:'{{auto}}', geo}; return e; });
+      Sentry.withScope((scope)=>{
+        if (scope.setUser) scope.setUser({id:'seeded-user', ip_address:'198.51.100.77', geo});
+        else scope._user={id:'seeded-user', ip_address:'198.51.100.77', geo};
+        Sentry.captureException(new Error('telemetry test error seeded user'));
+      });
+      return true;
+    }""")
+    check("seed: an event processor could be added", seeded)
+    # IP literals in error text and as URL hosts become [ip]; times and line:col stay.
+    pg.evaluate("""()=>{setTimeout(()=>{throw new Error('telemetry test error ip client IP: 203.0.113.42 v6 2001:db8:85a3::8a2e:370:7334 hosts http://198.51.100.23:8080/a?k=1 http://[2001:db8::9]:8443/b at 12:30:45 app.js:12:34')},0)}""")
     check("on: events reached the (stubbed) PostHog host", wait_until(pg, "()=>__telemetry.sent().length>=4", 8000))
     pg.wait_for_timeout(4000)  # PostHog batches every few seconds
     sent = pg.evaluate("()=>__telemetry.sent()")
@@ -190,21 +230,32 @@ with sync_playwright() as p:
           any("https://example.com/p/q" in v and "[email]" in v and "[redacted]" in v for v in scrubbed) and any("https://example.net/r" in v for v in scrubbed))
     leaked = [s for s in (b"SECRETQ1", b"fragZ9", b"me@example.org", b"abcdefghijklmnop1234567890", b"SECRETQ2", b"fragY8", b"token=", b"sig=") if s in bodies]
     check(f"scrub: no query, fragment, email or token from error text in any request body ({leaked})", not leaked and b"example.com/p/q" in bodies)
-    # No IP storage: every Sentry event envelope tells ingestion not to infer the IP, and carries no user IP.
-    sentry_events = []
-    for h in telemetry_guard.hits:
-        if "sentry.io" not in h["url"] or not h["body"]:
-            continue
-        lines = h["body"].split(b"\n")
-        for i in range(1, len(lines) - 1):
-            try:
-                hdr = json.loads(lines[i])
-            except Exception:
-                continue
-            if isinstance(hdr, dict) and hdr.get("type") == "event":
-                sentry_events.append(json.loads(lines[i + 1]))
-    no_ip = [((ev.get("sdk") or {}).get("settings") or {}).get("infer_ip") == "never" and "ip_address" not in (ev.get("user") or {}) and "geo" not in (ev.get("user") or {}) for ev in sentry_events]
-    check(f"no IP: Sentry envelopes say infer_ip never, no user.ip_address ({len(no_ip)} events, {[((ev.get('sdk') or {}).get('settings'), ev.get('user')) for ev in sentry_events][:2]})", no_ip and all(no_ip))
+    # No IP storage: every Sentry event envelope tells ingestion not to infer the IP, and carries no user at all.
+    evs = sentry_events()
+    no_ip = [infer_never(ev) and "user" not in ev for ev in evs]
+    check(f"no IP: Sentry envelopes say infer_ip never and carry no user ({len(no_ip)} events, {[((ev.get('sdk') or {}).get('settings'), ev.get('user')) for ev in evs][:2]})", no_ip and all(no_ip))
+    seeded_evs = sentry_events("seeded user")
+    check(f"no IP: the event with a seeded user (ip_address, geo) went out with no user and infer_ip never ({[(ev.get('user'), (ev.get('sdk') or {}).get('settings')) for ev in seeded_evs]})",
+          len(seeded_evs) == 1 and "user" not in seeded_evs[0] and infer_never(seeded_evs[0]))
+    seed_leaks = [x for x in (b"198.51.100.77", b"{{auto}}", b"Amsterdam", b"Noord-Holland", b"seeded-user") if x in bodies]
+    check(f"no IP: nothing of the seeded user in any request body ({seed_leaks})", not seed_leaks)
+    ip_evs = [e["value"] for e in errs if "error ip" in e["value"]]
+    check(f"scrub: IPv4, IPv6 and IP URL hosts in error text become [ip], times and line:col stay ({ip_evs})",
+          len(ip_evs) == 1 and ip_evs[0].count("[ip]") == 4 and "http://[ip]:8080/a" in ip_evs[0] and "http://[ip]:8443/b" in ip_evs[0] and "12:30:45" in ip_evs[0] and "app.js:12:34" in ip_evs[0])
+    ip_leaks = [x for x in (b"203.0.113.42", b"2001:db8", b"198.51.100.23") if x in bodies]
+    check(f"scrub: no IP literal from error text in any request body ({ip_leaks})", not ip_leaks)
+    cases = {
+        "client IP: 203.0.113.42.": "client IP: [ip].",
+        "via ::1 and fe80::1%eth0 and ::ffff:192.0.2.1": "via [ip] and [ip] and [ip]",
+        "full 2001:0db8:0000:0000:0000:ff00:0042:8329 x": "full [ip] x",
+        "bracketed [2001:db8::1] here": "bracketed [ip] here",
+        "http://u@10.0.0.1:81/x?q=1": "http://u@[ip]:81/x",
+        "at 12:30:45 app.js:12:34 http://localhost:8792/js/app.js:12:34": "at 12:30:45 app.js:12:34 http://localhost:8792/js/app.js:12:34",
+        "std::vector Foo::bar a :: b 1.2.3.4.5 999.1.1.1 v1.2.3": "std::vector Foo::bar a :: b 1.2.3.4.5 999.1.1.1 v1.2.3",
+    }
+    got = pg.evaluate("(xs)=>xs.map(x=>__telemetry.scrub(x))", list(cases))
+    bad_cases = [(k, g) for (k, v), g in zip(cases.items(), got) if g != v]
+    check(f"scrub: IP literal cases ({bad_cases})", not bad_cases)
     # Huge error text is cut before any regex runs: 200,000 characters without "@" scrub fast, and a URL cut at the
     # scan limit still loses its query.
     big = pg.evaluate("""()=>{
@@ -375,6 +426,10 @@ with sync_playwright() as p:
     check("env: the TV error went to Sentry", wait_until(rx, "()=>__telemetry.errorsSent().some(e=>e.value.includes('on the TV'))", 5000))
     e7 = [e for e in rx.evaluate("()=>__telemetry.errorsSent()") if "on the TV" in e["value"]][0]
     check(f"env: test errors are never in production ({e7['environment']}, test {e7['tags']['test']})", e7["environment"] == "verification" and e7["tags"]["test"] == "true")
+    rx.wait_for_timeout(1000)
+    tv_evs = sentry_events("on the TV")
+    check(f"no IP: the receiver's Sentry event says infer_ip never and carries no user ({[(ev.get('user'), (ev.get('sdk') or {}).get('settings')) for ev in tv_evs]})",
+          tv_evs and all(infer_never(ev) and "user" not in ev for ev in tv_evs))
     rx.context.close()
 
     # ---------------------------------------------------------------- 8. Receiver stop waits for PostHog to send what it queued
