@@ -18,6 +18,8 @@ HAIRLINE = "Paused. The TV rests after 30 minutes paused."
 WARNING = "The TV will go back to its home screen in 5 minutes. Tap play to keep watching."
 ENDED = "Paused for 30 minutes, so the TV went back to its home screen. Cast again whenever you like."
 fails, logs = [], []
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
+NOT_A_BOT = "Object.defineProperty(Navigator.prototype,'webdriver',{get:()=>false});Object.defineProperty(Navigator.prototype,'userAgentData',{get:()=>undefined});"
 
 # A stand-in for the CAF receiver context: records what the receiver sends and whether it stops.
 MOCK_CTX = """()=>{
@@ -181,9 +183,12 @@ with sync_playwright() as p:
     rx.close()
 
     # ------------------------------------------------------------ phone: local playback has no timeout
-    def phone(resume=False):
-        ctx = b.new_context(viewport={"width": 412, "height": 915}, has_touch=True, is_mobile=True)
+    def phone(resume=False, not_bot=False):
+        kw = {"user_agent": UA} if not_bot else {}
+        ctx = b.new_context(viewport={"width": 412, "height": 915}, has_touch=True, is_mobile=True, **kw)
         pg = ctx.new_page()
+        if not_bot:  # PostHog drops events from headless browsers, so before_send (__telemetry.sent) would never run
+            pg.add_init_script(NOT_A_BOT)
         if resume:
             pg.add_init_script("window.__mockResume = true")
         route(pg)
@@ -209,7 +214,7 @@ with sync_playwright() as p:
     check("remote: shown", pg.is_visible("#remote"))
     sent = lambda: [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     clear = lambda: pg.evaluate("()=>__mockCast.sent.length=0")
-    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.15', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
+    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.16', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
     state()
     check("remote: no hairline or warning while playing", not pg.is_visible("#remote-hairline") and not pg.is_visible("#remote-pause-warn"))
     pg.locator('#remote [data-cmd="play"]').tap()
@@ -253,7 +258,7 @@ with sync_playwright() as p:
     pg = phone()
     pg.evaluate("()=>__mockCast.start()")
     pg.wait_for_timeout(400)
-    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.15', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
+    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.16', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
     state(paused=True, pauseWarning=True)
     pg.evaluate("()=>__mockCast.reply({type:'pauseTimeout'})")
     pg.wait_for_timeout(4000)
@@ -261,6 +266,46 @@ with sync_playwright() as p:
     check("safety net: the phone ends its side after 5 s", wait_until(pg, "()=>!__windowSeat.isCasting() && document.querySelector('#remote').hidden", 2500))
     check(f"safety net: end toast ({pg.text_content('#toast')!r})", pg.text_content("#toast") == ENDED)
     pg.context.close()
+
+    # How an unasked end is classified: only pauseTimeout, or the TV's timer really past its end, is a timeout.
+    END_REASONS = ("()=>[...__telemetry.queue().filter(e=>e.name==='cast_session_end').map(e=>e.props.end_reason),"
+                   " ...__telemetry.sent().filter(e=>e.event==='cast_session_end').map(e=>e.properties.end_reason)]")
+
+    def end_case(label, setup, reason, toast, tv_ends=True):
+        pg = phone(not_bot=True)
+        pg.evaluate("()=>__mockCast.start()")
+        pg.wait_for_timeout(400)
+        st = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.16', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
+        setup(pg, st)
+        if tv_ends:
+            pg.evaluate("()=>cast.framework.CastContext.getInstance().endCurrentSession()")  # the session ends, not asked by this phone
+        pg.wait_for_timeout(400)
+        check(f"{label}: idle (remote hidden, Cast pill idle, Start screen)", not pg.is_visible("#remote") and pg.evaluate("()=>__windowSeat.isCasting()") is False
+              and pg.is_visible("#start-btn") and pg.evaluate("()=>[...document.querySelectorAll('[data-cast]')].every(b=>b.dataset.state==='idle')"))
+        shown = pg.text_content("#toast") or ""
+        check(f"{label}: {'end toast' if toast else 'no timeout toast'} ({shown!r})", (shown == ENDED) == toast)
+        got = wait_until(pg, f"()=>({END_REASONS})().length>0", 10000)  # PostHog batches every few seconds
+        reasons = pg.evaluate(END_REASONS)
+        check(f"{label}: cast_session_end end_reason {reason} ({reasons})", got and reasons == [reason])
+        pg.wait_for_timeout(800)
+        check(f"{label}: no local playback after the end", pg.evaluate("()=>!__windowSeat.state.started && __yt.players.filter(p=>!p.destroyed).every(p=>p.state!==1 && p.state!==3)"))
+        pg.context.close()
+
+    # (a) The session drops during the warning, well before the TV's end time, with no pauseTimeout: a disconnect.
+    end_case("drop in warning", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=300000), pg.wait_for_timeout(100)), "disconnect", False)
+    # (a2) Same, but 1.5 s before the TV's end time (more than the 500 ms tolerance): still a disconnect.
+    end_case("drop just before end", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=3000), pg.wait_for_timeout(1500)), "disconnect", False)
+    # (b) The TV's end time passes, then the session ends without pauseTimeout reaching the phone (it slept): a timeout.
+    end_case("slept through", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=1500), pg.wait_for_timeout(1700)), "pause_timeout", True)
+    # (b2) The phone slept before the warning went out: it only knows the running timer's end time. Past it: a timeout.
+    end_case("slept before warning", lambda pg, st: (st(paused=True, pauseWarning=False, pauseEndsInMs=1500), pg.wait_for_timeout(1700)), "pause_timeout", True)
+    # (c) pauseTimeout arrives, then the TV ends the session: a timeout.
+    end_case("pauseTimeout then end", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=60000),
+                                                      pg.evaluate("()=>__mockCast.reply({type:'pauseTimeout'})"), pg.wait_for_timeout(200)), "pause_timeout", True)
+    # (d) pauseTimeout arrives, then Stop casting is tapped before the TV stops: the timeout wins (reason and toast agree).
+    end_case("pauseTimeout then Stop", lambda pg, st: (st(paused=True, pauseWarning=True, pauseEndsInMs=60000),
+                                                       pg.evaluate("()=>__mockCast.reply({type:'pauseTimeout'})"), pg.wait_for_timeout(200),
+                                                       pg.locator('#remote [data-cmd="stop"]').tap()), "pause_timeout", True, tv_ends=False)
 
     # ------------------------------------------------------------ phone and TV together (mock sender, mocked receiver context)
     # Messages are relayed both ways; the receiver's stop() ends the phone's mock session, like the real TV.

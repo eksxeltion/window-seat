@@ -65,7 +65,7 @@ Computed by the wrapper at capture time (not `posthog.register`, which persists 
 | Property | Values | Notes |
 | --- | --- | --- |
 | `app` | `window-seat` | Identifies the app inside the shared "Eksxel" PostHog project. Required on every event. |
-| `build` | e.g. `2026-11-17.15` | `BUILD` from `js/build.js` or `js/receiver.js`. |
+| `build` | e.g. `2026-11-17.16` | `BUILD` from `js/build.js` or `js/receiver.js`. |
 | `surface` | `web`, `pwa`, `receiver` | `web` is a browser tab, `pwa` is the installed app (display-mode standalone), `receiver` is the TV page. The Android app adds `android`. The spec's single `web` is split into `web` and `pwa`. |
 | `device_class` | `phone`, `tablet`, `desktop`, `tv` | Coarse, from screen size and the existing TV detection. Receiver is always `tv`. |
 | `cast_state` | `none`, `connecting`, `connected` | Phone side, at capture time. Receiver is always `connected`. |
@@ -107,7 +107,7 @@ All names are snake_case. "Where" names the file and function. Each event fires 
 | `cast_channel_missing` | `ms_since_connect` | `js/cast.js`, once per session, when the namespace is still not listed 8 s after the session started (initial setup waits for the namespace, so this cannot rely on a command), or 4 s after a command with no reply. |
 | `cast_send_failed` | `code`, `type` | `js/cast.js` `send` failure path (not for each retry, only the final failure). |
 | `cast_no_reply` | `type` | `js/cast.js` `send`, when a command never gets a state reply. |
-| `cast_session_end` | `stop_requested`, `by_timeout`, `seconds_in_session`, `was_paused`, `pause_warning_up` | `js/cast.js` `leaveRemote`, read before the flags reset, and only if a session actually started. Unasked ends show as `stop_requested = false` and `by_timeout = false`. |
+| `cast_session_end` | `stop_requested`, `by_timeout`, `seconds_in_session`, `was_paused`, `pause_warning_up`, `end_reason` | `js/cast.js` `leaveRemote`, read before the flags reset, and only if a session actually started. Unasked ends show as `stop_requested = false` and `by_timeout = false`. `end_reason` is `pause_timeout` (the TV's `pauseTimeout` message arrived, or the TV was paused, Stop casting was not tapped and the TV's timer had passed its end time, whether or not the warning reached the phone), `stop` (Stop casting on the phone) or `disconnect` (any other end, including a drop during the pause warning before the end time). `pause_timeout` wins over a Stop casting tap after `pauseTimeout` arrived, so `end_reason` always agrees with `by_timeout` and the timeout toast. |
 
 ### Cast reliability (receiver)
 
