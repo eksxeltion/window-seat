@@ -190,6 +190,15 @@ with sync_playwright() as p:
           any("https://example.com/p/q" in v and "[email]" in v and "[redacted]" in v for v in scrubbed) and any("https://example.net/r" in v for v in scrubbed))
     leaked = [s for s in (b"SECRETQ1", b"fragZ9", b"me@example.org", b"abcdefghijklmnop1234567890", b"SECRETQ2", b"fragY8", b"token=", b"sig=") if s in bodies]
     check(f"scrub: no query, fragment, email or token from error text in any request body ({leaked})", not leaked and b"example.com/p/q" in bodies)
+    # Huge error text is cut before any regex runs: 200,000 characters without "@" scrub fast, and a URL cut at the
+    # scan limit still loses its query.
+    big = pg.evaluate("""()=>{
+      const s='a.'.repeat(100000), t0=performance.now(), out=__telemetry.scrub(s), ms=performance.now()-t0;
+      const u=__telemetry.scrub('[title="'+'z'.repeat(1160)+'"] https://example.com/p?token=SECRETQ3'+'y'.repeat(500));
+      return {ms, len: out.length, u};
+    }""")
+    check(f"scrub: 200,000 characters scrub in under 200 ms and are capped ({big['ms']:.1f} ms, {big['len']} chars)", big["ms"] < 200 and big["len"] <= 303)
+    check(f"scrub: a URL across the scan limit loses its query ({big['u']})", "example.com/p" in big["u"] and "SECRETQ3" not in big["u"] and "token" not in big["u"])
     tel = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent") if json.loads(m["data"]).get("type") == "telemetry"]
     check(f"on: the TV is told on with the install ID, test flag and environment ({tel})", tel and tel[-1] == {"type": "telemetry", "on": True, "installId": install, "test": True, "environment": "verification", "silent": True})
     check("on: PostHog keeps its ID in localStorage", any(k.startswith("ph_") for k in ph_keys(pg)))

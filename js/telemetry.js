@@ -84,16 +84,20 @@ function bareUrl(v) {
  * Free text that may go to Sentry (exception values, messages, breadcrumb messages): URLs lose their query string
  * and fragment, email addresses and long token-like runs are masked, and the result is capped. Error text is not
  * ours to control (a rejection can carry a full URL or a server reply), so none of it leaves unscrubbed.
+ * The input is cut to a few times the cap before any regex runs, so a huge string cannot make the patterns slow;
+ * a URL cut at that point still matches the URL pattern and loses its query.
  */
 const TEXT_MAX = 300;
+const TEXT_SCAN_MAX = TEXT_MAX * 4;
 function scrubText(v) {
   if (typeof v !== "string") return v;
-  let s = v.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`)\]]+/gi, (u) => bareUrl(u));
+  let s = v.length > TEXT_SCAN_MAX ? v.slice(0, TEXT_SCAN_MAX) : v;
+  s = s.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`)\]]+/gi, (u) => bareUrl(u));
   s = s.replace(/\[title="[^"]*"\]/g, "");
   s = s.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]");
   // Long runs of letters, digits, - and _ with at least one digit: keys, tokens, IDs. Plain words and paths stay.
   s = s.replace(/[A-Za-z0-9_-]{24,}/g, (w) => (/\d/.test(w) ? "[redacted]" : w));
-  return s.length > TEXT_MAX ? s.slice(0, TEXT_MAX) + "..." : s;
+  return s.length > TEXT_MAX ? s.slice(0, TEXT_MAX) + "..." : v.length > TEXT_SCAN_MAX ? s + "..." : s;
 }
 
 function hostEnvironment() {
@@ -789,6 +793,7 @@ safe(() =>
       errorsSent: () => t.errorsSent.slice(),
       loads: () => t.loads.slice(),
       message: () => telemetryMessage(),
+      scrub: (v) => scrubText(v),
     },
   }),
 );
