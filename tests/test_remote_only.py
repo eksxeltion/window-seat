@@ -7,6 +7,8 @@ url = sys.argv[1]
 here = os.path.dirname(os.path.abspath(__file__))
 root = os.path.dirname(here)
 MOCK = open(os.path.join(here, "mock_cast_sender.js")).read()
+# The phone build the app should show, read from js/build.js so this does not go stale on every build bump.
+PHONE_BUILD = re.search(r'BUILD = "([^"]+)"', open(os.path.join(root, "js", "build.js")).read()).group(1)
 fails, logs = [], []
 def check(name, cond):
     print(("PASS " if cond else "FAIL ") + name)
@@ -38,7 +40,7 @@ with sync_playwright() as p:
         clear(pg); pg.locator("#remote " + sel).tap(); pg.wait_for_timeout(150)
         check(f"ii: remote {t} goes to the TV", types(pg) == [t])
     check("ii: no local iframe after controls", pg.evaluate(YT) == 0)
-    check("debug line shows builds and states", re.search(r"Phone build 2026-11-17\.16 \| TV build \S+ \| cast CONNECTED \| session SESSION_STARTED", pg.text_content("#remote-debug")) is not None)
+    check("debug line shows builds and states", re.search(r"Phone build " + re.escape(PHONE_BUILD) + r" \| TV build \S+ \| cast CONNECTED \| session SESSION_STARTED", pg.text_content("#remote-debug")) is not None)
     # (vi) keyboard and media keys go to the TV
     for key, t in [("n", "next"), ("p", "pin"), ("u", "mute"), ("MediaTrackNext", "next"), ("MediaTrackPrevious", "prev"), ("MediaPlayPause", "pause")]:
         clear(pg); pg.keyboard.press(key); pg.wait_for_timeout(150)

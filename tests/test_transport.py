@@ -96,9 +96,12 @@ with sync_playwright() as p:
     check("phone: rotation status says Paused", pg.text_content("#lp-status-text") == "Paused")
 
     # Auto-rotation is frozen while paused.
+    frozen = pg.evaluate("()=>__windowSeat.state.pausedRemaining")
     pg.evaluate("()=>{__windowSeat.state.nextSwapAt=0; __windowSeat.state.pausedRemaining=0}")
     pg.wait_for_timeout(2200)
     check("phone: auto-rotation does not advance while paused", ws("currentCamId") == cam0 and not pg.evaluate("()=>__windowSeat.state.pending"))
+    # Put the frozen clock back. Left at 0, resume would make a rotation due at once and it would race the checks below.
+    pg.evaluate("(ms)=>{__windowSeat.state.pausedRemaining=ms}", frozen)
 
     # Resume: cam to the live edge, music continues (no reload).
     before = len(calls(pg, "cam"))
@@ -157,6 +160,7 @@ with sync_playwright() as p:
     pg.keyboard.press("u")
 
     # Pin: separate pill, toast, music keeps playing, rotation frozen, next/prev keep the pin.
+    check("phone: no cam load in flight before pinning", not pg.evaluate("()=>__windowSeat.state.pending"))
     tap(pg, "#pin-pill")
     pg.wait_for_timeout(200)
     check("phone: pin pill reads Pinned with aria-pressed true", pg.text_content("#pin-pill") == "Pinned" and pg.get_attribute("#pin-pill", "aria-pressed") == "true")

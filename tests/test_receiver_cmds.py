@@ -1,8 +1,14 @@
+"""Receiver commands in debug mode (receiver.html?debug=1, driven through window.__receiver.send) against the REAL
+YouTube IFrame API, so it needs network.
+Usage: test_receiver_cmds.py BASE_URL   (BASE_URL serves receiver.html; a receiver.html URL also works)"""
 import sys
 from playwright.sync_api import sync_playwright
 import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
-url=sys.argv[1]; logs=[]; fails=[]
+base = sys.argv[1].split("?")[0].rstrip("/")
+if base.endswith(".html"):
+    base = base.rsplit("/", 1)[0]
+url=base+"/receiver.html?debug=1"; logs=[]; fails=[]  # __receiver only exists in debug mode
 def check(name, cond):
     print(("PASS " if cond else "FAIL ")+name); (None if cond else fails.append(name))
 with sync_playwright() as p:
