@@ -134,10 +134,7 @@ function send(cmd, opts = {}) {
     if (lastReplyAt >= sentAt) return;
     capture("cast_no_reply", { type: cmd.type });
     // The existing 4s wait is over and the session still does not list our channel.
-    if (target && target === session && !target.__wsTelChannelMissing && !quietly(nsInfo)?.ok) {
-      target.__wsTelChannelMissing = true;
-      capture("cast_channel_missing", { ms_since_connect: target.__wsTelConnectAt ? Date.now() - target.__wsTelConnectAt : undefined });
-    }
+    checkChannelMissing(target);
     const hint = channelCheck();
     setRemoteStatus(`Sent, but no reply from the TV app after 4s.${hint ? " " + hint : ""}`);
     if (!warnedNoReply) {
@@ -597,6 +594,17 @@ function telemetrySessionStarted(s, resumed, via) {
   }
   capture("cast_connect_success", props);
   if (resumed && !tapped) capture("cast_resume", { trigger });
+  // Initial setup waits for the namespace before it sends anything that expects a reply, so a channel that never
+  // opens would never reach the reply timer in send(). Check from here as well.
+  setTimeout(() => checkChannelMissing(s), CHANNEL_WAIT_MS);
+}
+
+/** cast_channel_missing once per session, if the session is still current and our channel is still not listed. */
+const CHANNEL_WAIT_MS = 8000;
+function checkChannelMissing(s) {
+  if (!s || s !== session || s.__wsTelChannelMissing || quietly(nsInfo)?.ok) return;
+  s.__wsTelChannelMissing = true;
+  capture("cast_channel_missing", { ms_since_connect: s.__wsTelConnectAt ? Date.now() - s.__wsTelConnectAt : undefined });
 }
 
 /** Tell the TV whether to send telemetry: on every new or resumed session once the namespace is listed, and on
@@ -846,6 +854,8 @@ function markUnavailable() {
   setStatus(UNAVAILABLE);
 }
 
+const ATTEMPT_GRACE_MS = 10000; // a tap's success may reach onSessionStarted this long after requestSession resolves
+
 function onCastTap() {
   if (castFailed) return say(UNAVAILABLE);
   if (!castReady) return say("Cast: still loading, try again in a moment");
@@ -872,8 +882,10 @@ function onCastTap() {
   }
   Promise.resolve(p).then(
     (code) => {
+      // Success: the session callback counts it (with this attempt_id), and CAF can run that callback after this
+      // promise resolves. So the attempt stays open a short while for it, then closes without an event.
       if (code) failed(code);
-      else tap.done = true;
+      else if (!tap.done) setTimeout(() => (tap.done = true), ATTEMPT_GRACE_MS);
       recordAttempt(code || "");
       if (code) say(ERROR_TEXT[code] || `Cast: ${code}`);
       else say(STATE_TEXT[ctx.getCastState()] || "Cast: connected");
