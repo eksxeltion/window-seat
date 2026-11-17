@@ -5,7 +5,7 @@ import { CAMS, MIXES } from "./data.js";
 
 export const SHEET_ID = "1tw0g6C7S2HftYwe0hgKdAVgFFBeXga6uNIJNdD_JN94";
 export const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`;
-export const csvUrl = (tab) => `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`;
+export const csvUrl = (tab) => `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}&headers=1`;
 
 const STORE_KEY = "windowSeat.sheetConfig";
 const FETCH_MS = 8000;
@@ -61,6 +61,9 @@ const truthy = (v, dflt) => {
   return ["true", "yes", "y", "1", "x", "on"].includes(t);
 };
 
+/** Split a tags cell on commas or pipes: trimmed, lowercase, no empties. */
+const parseTags = (v) => (Array.isArray(v) ? v : String(v || "").split(/[,|]/)).map((t) => String(t).trim().toLowerCase().slice(0, 40)).filter(Boolean).slice(0, 12);
+
 /** Build validated lists from the two CSV texts. Bad rows (missing or malformed IDs, duplicates) are skipped. */
 export function buildConfig(camsCsv, mixesCsv) {
   const known = new Map(BUILTIN.cams.map((c) => [c.id, c]));
@@ -80,8 +83,12 @@ export function buildConfig(camsCsv, mixesCsv) {
     cams.push({
       id,
       title,
+      country: r.country || base.country || "",
+      city: r.city || base.city || base.place || "",
       place: r.city || base.place || "Japan",
       region: r.region || "",
+      type: (r.type || base.type || "").toLowerCase(),
+      tags: r.tags ? parseTags(r.tags) : parseTags(base.tags),
       channel: r.channel || base.channel || "YouTube",
       channelUrl: r.channel_url || base.channelUrl || `https://www.youtube.com/watch?v=${id}`,
       default: truthy(r.in_rotation, true),
@@ -120,8 +127,12 @@ export function sanitize(cfg) {
     cams.push({
       id: c.id,
       title: String(c.title || c.id).slice(0, 120),
+      country: String(c.country || "").slice(0, 60),
+      city: String(c.city || c.place || "").slice(0, 60),
       place: String(c.place || "Japan").slice(0, 60),
       region: String(c.region || "").slice(0, 60),
+      type: String(c.type || "").trim().toLowerCase().slice(0, 40),
+      tags: parseTags(c.tags),
       channel: String(c.channel || "YouTube").slice(0, 120),
       channelUrl: /^https:\/\//.test(c.channelUrl || "") ? c.channelUrl : `https://www.youtube.com/watch?v=${c.id}`,
       default: c.default !== false,

@@ -6,7 +6,9 @@ base = sys.argv[1].rstrip("/")
 HERE = os.path.dirname(__file__)
 CAMS = open(os.path.join(HERE, "fixture_cams.csv")).read()
 MIXES = open(os.path.join(HERE, "fixture_mixes.csv")).read()
-EXTRA = CAMS + '"TESTROW0001","Test Row, with comma","Testcity","Kanto","TRUE","Tester","https://www.youtube.com/channel/x"\n' + '"bad-id","Bad","X","","TRUE","",""\n'
+LIVE_CAMS = open(os.path.join(HERE, "snapshot_cams.csv")).read()  # copy of the live sheet, 2026-11-16
+LIVE_MIXES = open(os.path.join(HERE, "snapshot_mixes.csv")).read()
+EXTRA = CAMS + '"TESTROW0001","Test Row, with comma","Japan","Testcity","Kanto","Street","a|b","TRUE","Tester","https://www.youtube.com/channel/x",""\n' + '"bad-id","Bad","Japan","X","","","","TRUE","","",""\n'
 CAF = open(os.path.join(HERE, "mock_caf_receiver.js")).read()
 SENDER = open(os.path.join(HERE, "mock_cast_sender.js")).read()
 fails, logs = [], []
@@ -30,17 +32,27 @@ with sync_playwright() as p:
     pg.goto(base + "/"); pg.wait_for_timeout(2500)
 
     # Unit level, in the page: parser and validation.
-    u = pg.evaluate(r'''async () => {
+    u = pg.evaluate(r'''async (arg) => {
       const c = await import('/js/config.js');
       const rows = c.parseCsv('a,"b, with comma","say ""hi""","multi\nline"\r\n1,2,3,4\n\n');
       const cfg = c.buildConfig('youtube_id,name,city,in_rotation\n5B4LmH4JbnY,One,Tokyo,FALSE\nshort,Bad,X,TRUE\n5B4LmH4JbnY,Dup,Tokyo,TRUE\n"u7kCTaCX_J4","Two, quoted","Tokyo",""\n',
                                 'youtube_id,title,enabled\nnCtOCLv6eFY,M1,TRUE\nEYAWYK4Eqxc,M2,FALSE\n');
-      return { rows, cams: cfg.cams.map(x => [x.id, x.title, x.default]), mixes: cfg.mixes.map(m => m.id), skipped: cfg.skipped,
+      const nc = c.buildConfig('youtube_id,name,country,city,region,type,tags,in_rotation,channel,channel_url,notes\n"5B4LmH4JbnY","Shib","Japan","Tokyo","Kanto","Street","Street, Train","TRUE","Ch","https://example.com/c","n"\n"u7kCTaCX_J4","Port","Japan","Yokohama","Kanto","SKYLINE","skyline|Harbor| |","","","",""\n', 'youtube_id,title,enabled\nnCtOCLv6eFY,M1,TRUE\n');
+      const san = c.sanitize({cams:[{id:'5B4LmH4JbnY',title:'T',country:'Japan',city:'Tokyo',type:'Street',tags:['A',' b ','']}], mixes:[{id:'nCtOCLv6eFY',title:'m'}]}).cams[0];
+      const live = c.buildConfig(arg.cams, arg.mixes);
+      const bi = (await import('/js/data.js?fresh=1')).CAMS;
+      return { nc: nc.cams.map(x => [x.country, x.city, x.place, x.type, x.tags, x.channel]), san: [san.country, san.city, san.type, san.tags],
+               live: [live.cams.length, live.cams.filter(x => x.default).length, live.mixes.length, live.cams.every(x => x.country && x.type && x.city), live.skipped],
+               bi: [bi.length, bi.filter(x => x.default).length, bi.every(x => x.country && x.type && Array.isArray(x.tags))], rows, cams: cfg.cams.map(x => [x.id, x.title, x.default]), mixes: cfg.mixes.map(m => m.id), skipped: cfg.skipped,
                usable: c.isUsable(cfg), bad: c.sanitize({cams:[{id:'<script>xx'}], mixes:[]}) };
-    }''')
+    }''', {"cams": LIVE_CAMS, "mixes": LIVE_MIXES})
     check("parseCsv: quotes, commas, doubled quotes, newlines, CRLF, blank lines", u["rows"] == [["a", "b, with comma", 'say "hi"', "multi\nline"], ["1", "2", "3", "4"]])
     check("buildConfig: bad and duplicate ids skipped, quoted fields, in_rotation default TRUE", u["cams"] == [["5B4LmH4JbnY", "One", False], ["u7kCTaCX_J4", "Two, quoted", True]] and u["skipped"] == 2)
     check("buildConfig: disabled mixes dropped", u["mixes"] == ["nCtOCLv6eFY"])
+    check("buildConfig: country, city, type, tags (comma and pipe, lowercased)", u["nc"] == [["Japan", "Tokyo", "Tokyo", "street", ["street", "train"], "Ch"], ["Japan", "Yokohama", "Yokohama", "skyline", ["skyline", "harbor"], "TBS NEWS DIG Powered by JNN"]])
+    check("sanitize keeps country, city, type, clean tags", u["san"] == ["Japan", "Tokyo", "street", ["a", "b"]])
+    check("live sheet CSVs parse to 44 cams, 43 default, 16 mixes, country/type/city filled, none skipped", u["live"] == [44, 43, 16, True, 0])
+    check("built-in list: 44 cams, 43 default, country/type/tags present", u["bi"] == [44, 43, True])
     check("sanitize rejects junk", u["bad"] is None)
     r = pg.evaluate("""async () => {
       const c = await import('/js/config.js');
@@ -66,7 +78,7 @@ with sync_playwright() as p:
     hover = pg.get_attribute("#bar .list-status", "title") or ""
     check(f"error explained on hover, with a sharing hint: {hover!r}", "Sheet not loaded" in hover and "Anyone with the link" in hover)
     pg.evaluate("()=>localStorage.clear()"); pg.reload(); pg.wait_for_timeout(2500)
-    check(f"no sheet and no copy: built-in: {label()!r}", label() == "List: built-in" and pg.locator("#cams-list .cam-row").count() == 22)
+    check(f"no sheet and no copy: built-in: {label()!r}", label() == "List: built-in" and pg.locator("#cams-list .cam-row").count() == 44)
 
     # Phone to TV: the list goes over the Cast channel first on connect.
     pg.unroute("**/gviz/tq*"); sheet(pg.route, EXTRA)
