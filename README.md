@@ -51,7 +51,7 @@ The Cams panel lets you choose which cams are in the rotation, watch any cam now
 
 ## Install as an app
 
-Window Seat is an installable web app. In Chrome or Edge, use the install icon in the address bar (or menu, Install Window Seat). On Android, use Add to Home screen. It opens fullscreen in landscape. A small service worker (`sw.js`) caches only the app shell (page, styles, scripts, icons); YouTube video and music are never cached or intercepted. After changing a shell file, bump `CACHE_VERSION` at the top of `sw.js` so installed copies update.
+Window Seat is an installable web app. In Chrome or Edge, use the install icon in the address bar (or menu, Install Window Seat). On Android, use Add to Home screen. It opens fullscreen and follows how you hold the phone, upright or sideways. A small service worker (`sw.js`) caches only the app shell (page, styles, scripts, icons); YouTube video and music are never cached or intercepted. After changing a shell file, bump `CACHE_VERSION` at the top of `sw.js` so installed copies update.
 
 ## TV mode
 
