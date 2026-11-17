@@ -46,10 +46,12 @@
   <!-- Shown only while no cam is on screen -->
   <div id="tuning" class="tuning" role="status" aria-live="polite" hidden>Tuning in...</div>
 
-  <!-- Caption -->
+  <!-- Caption, with the Pin pill -->
   <div id="caption" class="caption" hidden>
     <div class="cap-title"></div>
     <div class="cap-meta"></div>
+    <!-- Pin is its own text pill, separate from the transport cluster (previous, pause / play, next). -->
+    <button id="pin-pill" class="pin-pill" type="button" data-action="pin" aria-pressed="false">Pin cam</button>
     <div class="cap-music"></div>
   </div>
 
@@ -68,13 +70,12 @@
   <button id="menu-btn" class="menu-btn" type="button" data-action="toggle-menu" aria-controls="bar" aria-expanded="true">Menu</button>
   <nav id="bar" class="bar glass" aria-label="Controls">
     <button class="bar-btn" type="button" data-action="prev"><svg class="icon" aria-hidden="true"><use href="#i-prev"></use></svg><span class="label">Previous</span></button>
-    <button class="bar-btn" type="button" data-action="pin" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg><span class="label">Pin</span></button>
+    <button class="bar-btn" type="button" data-action="play-pause"><svg class="icon" aria-hidden="true"><use href="#i-pause"></use></svg><span class="label">Pause</span></button>
     <button class="bar-btn" type="button" data-action="next" id="btn-next"><svg class="icon" aria-hidden="true"><use href="#i-next"></use></svg><span class="label">Next</span></button>
     <button class="bar-btn" type="button" data-action="interval"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg><span class="label">Every 60s</span></button>
     <button class="bar-btn" type="button" data-action="lite" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-lite"></use></svg><span class="label">Lite</span></button>
     <button class="bar-btn" type="button" data-action="open-cams" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-cams"></use></svg><span class="label">Cams</span></button>
     <button class="bar-btn" type="button" data-action="open-music" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-music"></use></svg><span class="label">Music</span></button>
-    <button class="bar-btn" type="button" data-action="play-pause"><svg class="icon" aria-hidden="true"><use href="#i-pause"></use></svg><span class="label">Pause</span></button>
     <button class="bar-btn" type="button" data-action="vol-down"><svg class="icon" aria-hidden="true"><use href="#i-vol-down"></use></svg><span class="label">Vol down</span></button>
     <button class="bar-btn" type="button" data-action="vol-up"><svg class="icon" aria-hidden="true"><use href="#i-vol-up"></use></svg><span class="label">Vol up</span></button>
     <button class="bar-btn" type="button" data-action="fullscreen"><svg class="icon" aria-hidden="true"><use href="#i-fullscreen"></use></svg><span class="label">Fullscreen</span></button>
@@ -108,10 +109,10 @@
       <button class="btn" type="button" data-action="close-panel">Close</button>
     </header>
     <div class="panel-tools">
-      <button class="btn" type="button" data-action="play-pause" id="music-play">Pause</button>
+      <button class="btn" type="button" data-action="play-pause" id="music-play" title="Pauses or plays the cam and the music">Pause</button>
       <button class="switch" type="button" data-action="mute" id="music-mute" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Mute</span></button>
       <label class="volume">
-        <span>Volume</span>
+        <span>Music</span>
         <input id="music-volume" type="range" min="0" max="100" step="5" value="60" aria-label="Music volume">
         <output id="music-volume-out">60</output>
       </label>
@@ -164,7 +165,7 @@
         <li><strong>Cast:</strong> open the page in Chrome on a computer, choose Cast, then Cast tab. Go fullscreen for the best view.</li>
         <li><strong>Remote:</strong> arrows to move, OK to choose, Back to close a panel.</li>
         <li><strong>Menu:</strong> tap Menu in the corner, or press OK, Enter or M. It stays open until you close it (Menu, Close, or Back).</li>
-        <li><strong>Keyboard:</strong> N next cam, P pin, U mute music, Space play or pause music, F fullscreen.</li>
+        <li><strong>Keyboard:</strong> N next cam, P pin cam, U mute music, Space play or pause (the cam and the music), F fullscreen.</li>
       </ul>
 
       <h3>Cast to TV</h3>

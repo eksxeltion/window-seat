@@ -26,7 +26,7 @@ with sync_playwright() as p:
     expect=[('[data-cmd="next"]',{'type':'next'}),('[data-cmd="prev"]',{'type':'prev'}),('[data-cmd="pin"]',{'type':'pin','value':True}),
             ('[data-cmd="i30"]',{'type':'interval','value':30}),('[data-cmd="vol-up"]',{'type':'volume','value':70}),('[data-cmd="vol-up"]',{'type':'volume','value':80}),
             ('[data-cmd="vol-down"]',{'type':'volume','value':70}),('[data-cmd="mute"]',{'type':'mute','value':True}),('[data-cmd="mute"]',{'type':'mute','value':False}),
-            ('[data-cmd="play"]',{'type':'playMusic','value':False}),('[data-cmd="play"]',{'type':'playMusic','value':True}),('[data-cmd="next-mix"]',{'type':'nextMix'}),
+            ('[data-cmd="play"]',{'type':'pause','value':True}),('[data-cmd="play"]',{'type':'pause','value':False}),('[data-cmd="next-mix"]',{'type':'nextMix'}),
             ('[data-mix]:nth-of-type(1)',None),('#remote-cams [data-cam]',None)]
     for sel,exp in expect:
         pg.evaluate("()=>__mockCast.sent.length=0")

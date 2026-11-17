@@ -18,7 +18,7 @@ const quietly = (fn) => {
 };
 
 let session = null;
-let remote = { camId: null, camTitle: "", mixId: null, mixTitle: "", pinned: false, interval: 60, volume: 60, muted: false, musicPaused: false };
+let remote = { camId: null, camTitle: "", mixId: null, mixTitle: "", pinned: false, interval: 60, volume: 60, muted: false, paused: false };
 let lastReplyAt = 0; // last state message from the TV
 let replyTimer = 0;
 let warnedNoReply = false;
@@ -91,7 +91,7 @@ function send(cmd, opts = {}) {
   const fail = (raw) => {
     const code = (raw && raw.code) || raw;
     // Only state-setting commands are safe to resend (a resent "next" or "mix" would act twice).
-    const repeatable = ["pin", "interval", "volume", "mute", "playMusic", "cams", "getState"].includes(cmd.type);
+    const repeatable = ["pin", "interval", "volume", "mute", "pause", "playMusic", "cams", "getState"].includes(cmd.type);
     if (code === "timeout" && repeatable && !opts.retried) {
       // The channel can lag right after connecting: try once more before reporting,
       // but only on the same session and only if no newer command of this type went out.
@@ -165,12 +165,13 @@ function runCmd(name) {
     }
     case "mute":
       return act({ type: "mute", value: !remote.muted }, { muted: !remote.muted });
+    // Pause is the whole feed on the TV: the cam and the music. The receiver still accepts the older playMusic.
     case "play-on":
-      return act({ type: "playMusic", value: true }, { musicPaused: false });
+      return act({ type: "pause", value: false }, { paused: false });
     case "play-off":
-      return act({ type: "playMusic", value: false }, { musicPaused: true });
+      return act({ type: "pause", value: true }, { paused: true });
     case "play":
-      return act({ type: "playMusic", value: remote.musicPaused }, { musicPaused: !remote.musicPaused });
+      return act({ type: "pause", value: !remote.paused }, { paused: !remote.paused });
     case "next-mix":
       return act({ type: "nextMix" });
     case "stop":
@@ -190,7 +191,7 @@ function buildRemote() {
     <div class="remote-row">
       <button class="btn" type="button" data-cmd="prev">Prev cam</button>
       <button class="btn" type="button" data-cmd="next">Next cam</button>
-      <button class="btn" type="button" data-cmd="pin" id="remote-pin" aria-pressed="false">Pin</button>
+      <button class="btn" type="button" data-cmd="pin" id="remote-pin" aria-pressed="false">Pin cam</button>
     </div>
     <div class="remote-row">
       <button class="btn" type="button" data-cmd="i30" aria-pressed="false">Every 30s</button>
@@ -203,7 +204,7 @@ function buildRemote() {
     </div>
     <div class="remote-row">
       <button class="btn" type="button" data-cmd="mute" id="remote-mute" aria-pressed="false">Mute</button>
-      <button class="btn" type="button" data-cmd="play" id="remote-play">Pause music</button>
+      <button class="btn" type="button" data-cmd="play" id="remote-play">Pause</button>
       <button class="btn" type="button" data-cmd="next-mix">Next mix</button>
     </div>
     <p class="remote-status" id="remote-status" role="status">Waiting for the TV...</p>
@@ -230,7 +231,7 @@ function buildRemote() {
     if (!b) return;
     if (b.dataset.mix) {
       const m = MIXES.find((x) => x.id === b.dataset.mix);
-      return act({ type: "mix", id: b.dataset.mix }, { mixId: b.dataset.mix, mixTitle: m ? m.en : "", musicPaused: false });
+      return act({ type: "mix", id: b.dataset.mix }, { mixId: b.dataset.mix, mixTitle: m ? m.en : "", paused: false });
     }
     if (b.dataset.cam) {
       const c = CAMS.find((x) => x.id === b.dataset.cam);
@@ -267,7 +268,7 @@ export function remoteCmd(name) {
 
 export function remoteMix(id) {
   const m = MIXES.find((x) => x.id === id);
-  act({ type: "mix", id }, { mixId: id, mixTitle: m ? m.en : "", musicPaused: false });
+  act({ type: "mix", id }, { mixId: id, mixTitle: m ? m.en : "", paused: false });
 }
 
 export function remoteCam(id) {
@@ -306,7 +307,8 @@ function renderRemote() {
   ui.root.querySelectorAll("[data-cam]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.cam === remote.camId)));
   ui.mute.setAttribute("aria-pressed", String(!!remote.muted));
   ui.mute.textContent = remote.muted ? "Unmute" : "Mute";
-  ui.play.textContent = remote.musicPaused ? "Play music" : "Pause music";
+  ui.pin.textContent = remote.pinned ? "Pinned" : "Pin cam";
+  ui.play.textContent = remote.paused ? "Play" : "Pause";
 }
 
 function onMessage(_ns, raw) {
@@ -463,7 +465,7 @@ export function castDebugInfo() {
 function pushChoices() {
   const local = hooks.getLocal();
   const mix = MIXES.find((m) => m.id === local.mixId);
-  remote = { ...remote, interval: local.interval, volume: local.volume, muted: !!local.muted, mixId: local.mixId, mixTitle: mix ? mix.en : "", pinned: false, musicPaused: false };
+  remote = { ...remote, interval: local.interval, volume: local.volume, muted: !!local.muted, mixId: local.mixId, mixTitle: mix ? mix.en : "", pinned: false, paused: false };
   renderRemote();
   const quiet = { silent: true };
   sendConfigToTv(); // first, so the cam filter and picks below refer to the same list on the TV

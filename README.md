@@ -26,7 +26,7 @@ Remote:
 - OK: choose
 - Back: close a panel
 
-Bar buttons: Previous cam, Pin, Next cam, rotation every 30s or 60s, Lite, Cams, Music, Play or Pause music, Vol down, Vol up, Fullscreen, Open in TV browser, About.
+Bar buttons: Previous cam, Pause or Play (the cam and the music), Next cam, rotation every 30s or 60s, Lite, Cams, Music, Vol down, Vol up (music only), Fullscreen, Open in TV browser, About. Pin cam is a separate pill under the caption; the cam is always muted.
 
 Open in TV browser: opens a panel with a QR code and the address `https://window-seat-lemon.vercel.app/?tv=1` in large text. Scan it with your phone, then cast, or type the address in your TV browser. The QR code is drawn in your browser by `js/qr.js` (no external service). The same button is on the Start screen.
 
@@ -41,13 +41,13 @@ Keyboard:
 | P | Pin or unpin the current cam |
 | M, or Enter/OK with nothing focused | Open or close the menu |
 | U | Mute or unmute music |
-| Space | Play or pause music (when no button is focused) |
+| Space or Play/Pause | Play or pause the cam and the music (Space only when no button is focused) |
 | F | Fullscreen |
 | Esc, Backspace or Back | Close a panel, then the menu |
 
 The controls never hide on their own. Tap the quiet **Menu** button in the top right corner to open or close them; your choice is remembered.
 
-The Cams panel lets you choose which cams are in the rotation, watch any cam now, and turn the caption on or off. The Music panel lets you pick a mix, set the volume, and shuffle. Your choices are saved in the browser.
+The Cams panel lets you choose which cams are in the rotation, watch any cam now, and turn the caption on or off. The Music panel lets you pick a mix, set the music volume, and shuffle. Your choices are saved in the browser.
 
 ## Install as an app
 

@@ -159,6 +159,26 @@ button { font: inherit; color: inherit; }
 .cap-music { font-size: 0.95rem; color: var(--fg-faint); margin-top: 0.5rem; transition: opacity var(--ui) ease; }
 .cap-pin { color: var(--accent); }
 
+/* Pin cam: its own text pill in the caption, outline when off, filled accent when on. */
+.pin-pill {
+  pointer-events: auto;
+  margin-top: 0.6rem;
+  padding: 0.4rem 1rem;
+  border: 1.5px solid currentColor;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-shadow: none;
+  cursor: pointer;
+}
+.pin-pill:hover, .pin-pill:focus { background: rgba(255, 255, 255, 0.14); }
+.pin-pill[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ui-hidden .pin-pill { visibility: hidden; }
+.tv .pin-pill { font-size: 1.2rem; padding: 0.55rem 1.3rem; }
+
 .ui-hidden .caption { bottom: 3.5vh; opacity: 0.55; transform: scale(0.62); }
 .ui-hidden .cap-music { opacity: 0; }
 .ui-hidden.no-caption .caption { opacity: 0; }

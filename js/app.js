@@ -88,6 +88,8 @@ const state = {
   enabledOverrides: loadOverrides(),
   failed: new Set(),
   pinned: false,
+  feedPaused: false, // Pause stops the whole feed (cam and music); independent of pinned
+  pausedRemaining: 0, // ms left on the rotation clock when the feed was paused (frozen while paused)
   currentCamId: null,
   pending: null, // { camId, startedAt, dir, fails }
   nextSwapAt: 0,
@@ -132,6 +134,7 @@ const el = {
   startStatus: $("#start-status"),
   bar: $("#bar"),
   nextBtn: $("#btn-next"),
+  pinPill: $("#pin-pill"),
   menuBtn: $("#menu-btn"),
   caption: $("#caption"),
   capTitle: $(".cap-title"),
@@ -227,11 +230,37 @@ function setQuality() {
   quietly(() => cp.player.setPlaybackQuality(camQuality()));
 }
 
+// Cam audio is always off: there is no cam volume and no cam mute toggle. Every cam play path mutes first.
 function hardMute() {
-  quietly(() => {
-    cp.player.mute();
-    cp.player.setVolume(0);
-  });
+  quietly(() => cp.player.mute());
+  quietly(() => cp.player.setVolume(0));
+}
+
+function camPlay() {
+  hardMute();
+  quietly(() => cp.player.playVideo());
+  hardMute();
+}
+
+/**
+ * Resume the cam. A live stream jumps to the live edge (its duration), not where it froze.
+ * A recording (archive, VOD) resumes from the pause point: seeking it to its duration would land
+ * on the end, fire ENDED and get the cam skipped as failed, even when pinned.
+ * Live check: getVideoData().isLive (exposed by the IFrame player, not documented). Only an explicit
+ * true counts as live; a missing or non-boolean flag is treated as a recording, so a finite video is
+ * never sent to its end. The worst case for a live cam is resuming slightly behind the edge.
+ */
+function camIsLive() {
+  const data = quietly(() => cp.player.getVideoData());
+  return !!data && data.isLive === true;
+}
+function camToLiveEdge() {
+  hardMute();
+  if (camIsLive()) {
+    const d = quietly(() => cp.player.getDuration());
+    if (typeof d === "number" && d > 0) quietly(() => cp.player.seekTo(d, true));
+  }
+  camPlay();
 }
 
 function createCamPlayer() {
@@ -351,6 +380,12 @@ function onCamPlaying(p) {
   activeStall = null;
   state.currentCamId = p.camId;
   state.nextSwapAt = Date.now() + rotateSec() * 1000;
+  if (state.feedPaused) {
+    // Changed cam while paused: show its first frame, then hold it (no autoplay).
+    state.pausedRemaining = rotateSec() * 1000;
+    hardMute();
+    quietly(() => cp.player.pauseVideo());
+  }
   setAllFailed(false);
   setQuality();
   cover(false);
@@ -407,7 +442,7 @@ function looksUnplayable(limitMs) {
     // Give a CUED video one nudge in case autoplay just needs a kick.
     if (live === YS.CUED && !cp.nudged) {
       cp.nudged = true;
-      quietly(() => cp.player.playVideo());
+      camPlay();
     }
     return false;
   }
@@ -428,7 +463,7 @@ function onCamState(s) {
     else if (s === YS.ENDED && isCurrentLoad()) failPending();
     return;
   }
-  if (!state.currentCamId) return;
+  if (!state.currentCamId || state.feedPaused) return;
   if (s === YS.PLAYING) {
     activeStall = null;
     setQuality();
@@ -470,6 +505,7 @@ function tick() {
     return;
   }
   if (!state.currentCamId || state.allFailed) return;
+  if (state.feedPaused) return; // paused: no stall watchdog and no rotation (next and previous still work)
   if (hasCurrentLoad() && now >= graceUntil) {
     // Poll the visible cam: any non-PLAYING state (UNSTARTED, CUED, BUFFERING, PAUSED, ENDED) counts as a stall.
     const live = quietly(() => cp.player.getPlayerState());
@@ -485,7 +521,7 @@ function tick() {
   if (activeStall && now - activeStall.at > LOAD_TIMEOUT_MS) {
     if (!activeStall.tried) {
       activeStall = { at: now, tried: true };
-      quietly(() => cp.player.playVideo());
+      camPlay();
     } else {
       failActive(); // works while pinned too
     }
@@ -508,7 +544,7 @@ function onVisibility() {
   const now = Date.now();
   graceUntil = now + GRACE_MS;
   activeStall = null;
-  state.nextSwapAt = now + rotateSec() * 1000;
+  if (!state.feedPaused) state.nextSwapAt = now + rotateSec() * 1000;
   const p = state.pending;
   if (p) {
     if (cp.deferred) {
@@ -519,12 +555,13 @@ function onVisibility() {
     return;
   }
   if (!state.currentCamId || state.allFailed) return;
-  quietly(() => cp.player.playVideo());
+  if (state.feedPaused) return; // stays paused; Play resumes at the live edge
+  camPlay();
   const seq = cp.seq;
   // Destructive recovery waits for the grace period to end; a cam that is just buffering is left alone
   // (the stall watchdog handles it after grace).
   setTimeout(() => {
-    if (document.hidden || cp.seq !== seq || state.pending || !state.currentCamId) return;
+    if (document.hidden || cp.seq !== seq || state.pending || !state.currentCamId || state.feedPaused) return;
     if (Date.now() < graceUntil) return;
     const live = quietly(() => cp.player.getPlayerState());
     if (live !== YS.PLAYING && live !== YS.BUFFERING) beginLoad(state.currentCamId);
@@ -560,8 +597,11 @@ function watchNow(camId) {
 function togglePin() {
   if (viaTv(() => remoteCmd("pin"))) return;
   state.pinned = !state.pinned;
-  if (!state.pinned) state.nextSwapAt = Date.now() + rotateSec() * 1000;
-  toast(state.pinned ? "Pinned. This cam stays on." : "Unpinned. Rotation is back on.");
+  if (!state.pinned) {
+    state.nextSwapAt = Date.now() + rotateSec() * 1000;
+    state.pausedRemaining = rotateSec() * 1000;
+  }
+  toast(state.pinned ? "Pinned. Staying on this cam." : "Unpinned. Rotation is back on.");
   render();
 }
 
@@ -571,6 +611,7 @@ function toggleInterval() {
   state.intervalSec = state.intervalSec === 60 ? 30 : 60;
   store.set("interval", state.intervalSec);
   state.nextSwapAt = Date.now() + rotateSec() * 1000;
+  if (state.feedPaused) state.pausedRemaining = rotateSec() * 1000; // resume uses the new period
   toast(`New cam every ${state.intervalSec} seconds`);
   render();
 }
@@ -582,6 +623,7 @@ function toggleLite() {
   sizeCam();
   setQuality();
   state.nextSwapAt = Date.now() + rotateSec() * 1000;
+  if (state.feedPaused) state.pausedRemaining = rotateSec() * 1000; // resume uses the new period
   toast(state.lite ? "Lite mode on" : "Lite mode off");
   render();
 }
@@ -770,6 +812,14 @@ function showTapMusic(on) {
 function playMix(mixId, { userChoice = false } = {}) {
   if (!mixById(mixId)) return;
   if (viaTv(() => remoteMix(mixId))) return;
+  if (state.feedPaused && !userChoice) {
+    // Paused (an error moved to the next mix): cue it, keep everything paused.
+    state.mixId = mixId;
+    store.set("mix", mixId);
+    if (musicReady) quietly(() => musicPlayer.cueVideoById(mixId));
+    return render();
+  }
+  if (state.feedPaused) resumeCam(); // choosing a mix plays the whole feed again
   state.mixId = mixId;
   store.set("mix", mixId);
   state.musicWantsPlay = true;
@@ -827,30 +877,60 @@ function onMusicError() {
   nextMix();
 }
 
-function musicIsPlaying() {
-  return state.musicState === YS.PLAYING || state.musicState === YS.BUFFERING;
+/* Pause pauses the whole feed: the cam and the music, here and on the TV. Mute stays music only. */
+function pauseCam() {
+  state.feedPaused = true;
+  state.pausedRemaining = Math.max(0, state.nextSwapAt - Date.now());
+  activeStall = null;
+  if (cp.player && state.currentCamId && !state.pending) {
+    hardMute();
+    quietly(() => cp.player.pauseVideo());
+  }
 }
 
-function togglePlayMusic() {
-  if (viaTv(() => remoteCmd("play"))) return;
+/* The cam part of resume: back to the live edge, rotation clock picks up where it froze. */
+function resumeCam() {
+  state.feedPaused = false;
+  const now = Date.now();
+  state.nextSwapAt = now + state.pausedRemaining;
+  activeStall = null;
+  graceUntil = now + GRACE_MS; // give the live edge a moment before the stall watchdog looks
+  if (cp.player && state.currentCamId && !state.pending && !state.allFailed) camToLiveEdge();
+}
+
+function pauseMusic() {
+  state.musicWantsPlay = false;
+  clearTimeout(musicCheckTimer);
+  if (musicReady) quietly(() => musicPlayer.pauseVideo());
+  showTapMusic(false);
+}
+
+function resumeMusic() {
+  state.musicWantsPlay = true;
   if (musicStuck) return retryMusicPlayer();
-  if (!musicReady) return;
-  if (state.musicUnavailable) {
-    state.musicWantsPlay = true;
-    retryUnavailableMusic();
-    return;
-  }
-  if (musicIsPlaying() && state.musicWantsPlay) {
-    state.musicWantsPlay = false;
-    quietly(() => musicPlayer.pauseVideo());
-    showTapMusic(false);
+  if (!musicReady) return; // onReady starts it
+  if (state.musicUnavailable) return retryUnavailableMusic();
+  applyVolume();
+  quietly(() => musicPlayer.playVideo()); // a paused mix continues where it stopped
+  scheduleMusicCheck();
+}
+
+function setFeedPaused(paused) {
+  if (viaTv(() => remoteCmd(paused ? "play-off" : "play-on"))) return;
+  if (paused === state.feedPaused) return;
+  if (paused) {
+    pauseCam();
+    pauseMusic();
   } else {
-    state.musicWantsPlay = true;
-    applyVolume();
-    quietly(() => musicPlayer.playVideo());
-    scheduleMusicCheck();
+    resumeCam();
+    resumeMusic();
   }
   render();
+}
+
+function togglePause() {
+  if (viaTv(() => remoteCmd("play"))) return;
+  setFeedPaused(!state.feedPaused);
 }
 
 function setVolume(v, announce = true) {
@@ -881,6 +961,7 @@ function toggleShuffle() {
 
 function tapToPlay() {
   if (viaTv()) return;
+  if (state.feedPaused) return setFeedPaused(false);
   if (musicStuck) return retryMusicPlayer();
   state.musicWantsPlay = true;
   if (!musicReady) return;
@@ -909,18 +990,19 @@ function measureBar() {
 
 function render() {
   // Bar
-  const pinBtn = setBarLabel("pin", state.pinned ? "Unpin" : "Pin");
-  pinBtn.setAttribute("aria-pressed", String(state.pinned));
+  setText(el.pinPill, state.pinned ? "Pinned" : "Pin cam");
+  el.pinPill.setAttribute("aria-pressed", String(state.pinned));
   const secs = rotateSec();
   for (const b of $$('[data-action="interval"]')) b.disabled = state.lite;
   setBarLabel("interval", `Every ${secs}s`);
   setText($("#cams-interval"), `New cam every ${secs}s`);
   $('.bar-btn[data-action="lite"]', el.bar).setAttribute("aria-pressed", String(state.lite));
 
-  const playing = musicIsPlaying() && state.musicWantsPlay;
+  // Pause / Play is the whole feed (cam and music).
+  const playing = !state.feedPaused;
   const ppBtn = setBarLabel("play-pause", playing ? "Pause" : "Play");
   $("use", ppBtn).setAttribute("href", playing ? "#i-pause" : "#i-play");
-  setText($("#music-play"), playing ? "Pause music" : "Play music");
+  setText($("#music-play"), playing ? "Pause" : "Play");
 
   setBarLabel("fullscreen", isFullscreen() ? "Exit fullscreen" : "Fullscreen");
 
@@ -929,7 +1011,7 @@ function render() {
   if (cam && state.started) {
     el.caption.hidden = false;
     setText(el.capTitle, cam.title);
-    setText(el.capMeta, `${cam.place} · ${cam.channel}${state.pinned ? " · Pinned" : ""}`);
+    setText(el.capMeta, `${cam.place} · ${cam.channel}${state.pinned ? " · Pinned" : ""}${state.feedPaused ? " · Paused" : ""}`);
   } else {
     el.caption.hidden = true;
   }
@@ -1153,7 +1235,7 @@ let panelOpener = null;
 
 /** Background controls cannot take focus while a dialog is open. */
 function setBackgroundInert(on) {
-  [el.bar, el.notice, el.tapMusic, el.start].forEach((n) => n && (n.inert = on));
+  [el.bar, el.pinPill, el.notice, el.tapMusic, el.start].forEach((n) => n && (n.inert = on));
 }
 
 function openPanel(name, opener) {
@@ -1314,6 +1396,7 @@ function pauseLocalForCast() {
   if (state.casting) return;
   state.casting = true;
   state.pending = null;
+  state.feedPaused = false;
   cp.seq++; // invalidate queued camera loads (delayed go() and waiters)
   cp.waiters.length = 0;
   cp.deferred = null;
@@ -1327,6 +1410,7 @@ function pauseLocalForCast() {
 function resumeAfterCast() {
   state.casting = false;
   state.started = false;
+  state.feedPaused = false;
   begun = false;
   state.currentCamId = null;
   state.pending = null;
@@ -1462,7 +1546,10 @@ function currentScope() {
   if (!el.notice.hidden) scopes.push(el.notice);
   if (!el.tapMusic.hidden) scopes.push(el.tapMusic);
   scopes.push(el.menuBtn);
-  if (!state.uiHidden) scopes.push(el.bar);
+  if (!state.uiHidden) {
+    if (!el.caption.hidden) scopes.push(el.pinPill);
+    scopes.push(el.bar);
+  }
   return scopes;
 }
 
@@ -1559,13 +1646,9 @@ function onKeyDown(e) {
     e.preventDefault();
     if (key === "MediaTrackNext") skip(1);
     else if (key === "MediaTrackPrevious") skip(-1);
-    else if (key === "MediaPlay") {
-      if (tv) remoteCmd("play-on");
-      else if (!musicIsPlaying()) togglePlayMusic();
-    } else if (key === "MediaPause") {
-      if (tv) remoteCmd("play-off");
-      else if (musicIsPlaying()) togglePlayMusic();
-    } else togglePlayMusic();
+    else if (key === "MediaPlay") setFeedPaused(false);
+    else if (key === "MediaPause") setFeedPaused(true);
+    else togglePause();
     return;
   }
 
@@ -1636,7 +1719,7 @@ function onKeyDown(e) {
     case " ":
       if (isInteractive(document.activeElement)) return; // let Space press the focused button
       e.preventDefault();
-      togglePlayMusic();
+      togglePause();
       break;
     default:
   }
@@ -1670,7 +1753,7 @@ function handleAction(action, btn) {
     case "close-panel":
       return closePanel();
     case "play-pause":
-      return togglePlayMusic();
+      return togglePause();
     case "vol-down":
       if (viaTv(() => remoteCmd("vol-down"))) return;
       return setVolume(state.volume - VOLUME_STEP);
@@ -1798,6 +1881,8 @@ function boot() {
     isTv,
     isCasting,
     isDebugOn,
+    feedPaused: () => state.feedPaused,
+    pinned: () => state.pinned,
   };
 }
 

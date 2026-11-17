@@ -37,6 +37,14 @@ html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color:
 }
 #cmd-toast.show { opacity: 1; }
 
+/* Persistent while the feed is paused (not the short command toast): a frozen frame is never mistaken for a crash. */
+#paused-pill {
+  position: fixed; top: 5%; left: 5%; z-index: 4;
+  padding: 0.45em 1.1em; border-radius: 999px; background: rgba(0, 0, 0, 0.6);
+  font-size: max(22px, 1.4vw); font-weight: 600; letter-spacing: 0.04em; pointer-events: none;
+}
+#paused-pill[hidden] { display: none; }
+
 /* Debug strip (Debug mode only): bottom right in the 5% safe area, clear of the caption at the bottom left.
    Build, list, Cast channel state, message counts, current ids and the latest Cast event. */
 #debug-strip {
