@@ -557,6 +557,7 @@ function handle(raw) {
     case "interval":
       s.interval = Number(cmd.value) === 30 ? 30 : 60;
       nextSwapAt = Date.now() + s.interval * 1000;
+      if (s.paused) pausedRemaining = s.interval * 1000; // resume uses the new period
       if (!quiet) flash(`New cam every ${s.interval}s`);
       break;
     case "volume":
@@ -914,6 +915,8 @@ if (DEBUG) {
         nextSwapAt = 0;
         pausedRemaining = 0;
       },
+      // Test probe: ms left on the rotation clock (the frozen value while paused).
+      rotationRemaining: () => (s.paused ? pausedRemaining : nextSwapAt - Date.now()),
     },
   });
 }

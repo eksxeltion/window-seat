@@ -224,6 +224,35 @@ with sync_playwright() as p:
     pg.wait_for_timeout(200)
     pg.evaluate("()=>{window.__ytArchive=[]}")
 
+    # Interval changed while paused: resume uses the new period, not the clock frozen at pause time.
+    remaining = lambda: pg.evaluate("()=>__windowSeat.state.nextSwapAt - Date.now()")
+    check("phone interval: starts at 60s, Lite off", pg.evaluate("()=>__windowSeat.state.intervalSec===60 && !__windowSeat.state.lite"))
+    pg.click("#bar [data-action=play-pause]")
+    pg.wait_for_timeout(200)
+    pg.evaluate("()=>{__windowSeat.state.pausedRemaining=58000}")  # paused just after a rotation at 60s
+    pg.evaluate("()=>document.querySelector('[data-action=interval]').click()")
+    pg.wait_for_timeout(150)
+    check("phone interval: toggled to 30s while paused", pg.evaluate("()=>__windowSeat.state.intervalSec") == 30 and ws("feedPaused") is True)
+    pg.click("#bar [data-action=play-pause]")
+    pg.wait_for_timeout(200)
+    r = remaining()
+    check(f"phone interval: after resume the next swap is about 30s away, not 58s ({r}ms)", ws("feedPaused") is False and 28000 <= r <= 30000)
+    # Lite while paused: the effective period becomes 60s (Lite rotates every 60s).
+    pg.click("#bar [data-action=play-pause]")
+    pg.wait_for_timeout(200)
+    pg.evaluate("()=>{__windowSeat.state.pausedRemaining=5000}")
+    pg.evaluate("()=>document.querySelector('.bar-btn[data-action=lite]').click()")
+    pg.wait_for_timeout(150)
+    check("phone lite: Lite on while paused", pg.evaluate("()=>__windowSeat.state.lite") is True and ws("feedPaused") is True)
+    pg.click("#bar [data-action=play-pause]")
+    pg.wait_for_timeout(200)
+    r = remaining()
+    check(f"phone lite: after resume the next swap is about 60s away, not 5s ({r}ms)", ws("feedPaused") is False and 58000 <= r <= 60000)
+    pg.evaluate("()=>document.querySelector('.bar-btn[data-action=lite]').click()")
+    pg.evaluate("()=>document.querySelector('[data-action=interval]').click()")
+    pg.wait_for_timeout(150)
+    check("phone interval: restored to 60s, Lite off", pg.evaluate("()=>__windowSeat.state.intervalSec===60 && !__windowSeat.state.lite"))
+
     # About keyboard help.
     help_text = pg.evaluate("()=>[...document.querySelectorAll('#panel-about li')].map(l=>l.textContent).join(' ')")
     check("phone: About says Space plays or pauses the cam and the music", "Space play or pause (the cam and the music)" in help_text and "pause music" not in help_text)
@@ -369,6 +398,22 @@ with sync_playwright() as p:
     cam4 = st()["camId"]
     rx.evaluate("()=>__receiver.expireRotation()")
     check("tv: rotation advances when playing and unpinned", wait_until(rx, f"()=>__receiver.state.camId!=={json.dumps(cam4)}", 4000))
+
+    # Interval changed while paused: resume uses the new period, not the clock frozen at pause time.
+    rx.wait_for_timeout(300)
+    send({"type": "pause", "value": True})
+    rx.wait_for_timeout(150)
+    r0 = rx.evaluate("()=>__receiver.rotationRemaining()")
+    check(f"tv interval: paused just after a rotation, frozen clock near 60s ({r0}ms)", st()["paused"] is True and r0 > 50000)
+    send({"type": "interval", "value": 30})
+    rx.wait_for_timeout(150)
+    check("tv interval: 30s while paused", st()["interval"] == 30 and st()["paused"] is True)
+    send({"type": "pause", "value": False})
+    rx.wait_for_timeout(200)
+    r = rx.evaluate("()=>__receiver.rotationRemaining()")
+    check(f"tv interval: after resume the next swap is about 30s away, not ~60s ({r}ms)", st()["paused"] is False and 28000 <= r <= 30000)
+    send({"type": "interval", "value": 60, "silent": True})
+    rx.wait_for_timeout(150)
 
     # Archived cam on the TV: resume from the pause point, no seek to the end, no skip (also when pinned).
     rx.evaluate(f"()=>{{window.__ytArchive=[{json.dumps(ARCHIVE)}]}}")

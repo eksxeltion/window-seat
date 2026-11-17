@@ -611,6 +611,7 @@ function toggleInterval() {
   state.intervalSec = state.intervalSec === 60 ? 30 : 60;
   store.set("interval", state.intervalSec);
   state.nextSwapAt = Date.now() + rotateSec() * 1000;
+  if (state.feedPaused) state.pausedRemaining = rotateSec() * 1000; // resume uses the new period
   toast(`New cam every ${state.intervalSec} seconds`);
   render();
 }
@@ -622,6 +623,7 @@ function toggleLite() {
   sizeCam();
   setQuality();
   state.nextSwapAt = Date.now() + rotateSec() * 1000;
+  if (state.feedPaused) state.pausedRemaining = rotateSec() * 1000; // resume uses the new period
   toast(state.lite ? "Lite mode on" : "Lite mode off");
   render();
 }
