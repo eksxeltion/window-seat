@@ -174,21 +174,23 @@ with sync_playwright() as p:
       setTimeout(()=>{throw new Error('telemetry test error scrub https://example.com/p/q?token=SECRETQ1#fragZ9 mail me@example.org key abcdefghijklmnop1234567890')},0);
       Promise.reject('telemetry test error scrub2 https://example.net/r?sig=SECRETQ2#fragY8');
     }""")
-    # A user with an IP and geo deliberately seeded on the Sentry scope and by an event processor: none of it may leave.
-    # The vendor bundle is trimmed (no setUser): seed the user on a scope, and again in a client event processor.
+    # A user with an IP and geo deliberately seeded on one event each: none of it may leave. The vendor bundle is
+    # trimmed (no setUser), so each case adds an event processor to its own scope. One event carries a literal
+    # ip_address plus geo, the other "{{auto}}", so each raw value reaches our scrubber unaltered.
     seeded = pg.evaluate("""()=>{
       const geo={country_code:'NL', city:'Amsterdam', region:'Noord-Holland'};
-      const c=Sentry.getClient();
-      if (!c || typeof c.addEventProcessor!=='function') return false;
-      c.addEventProcessor((e)=>{ e.user={...(e.user||{}), id:'seeded-user', ip_address:'{{auto}}', geo}; return e; });
-      Sentry.withScope((scope)=>{
-        if (scope.setUser) scope.setUser({id:'seeded-user', ip_address:'198.51.100.77', geo});
-        else scope._user={id:'seeded-user', ip_address:'198.51.100.77', geo};
-        Sentry.captureException(new Error('telemetry test error seeded user'));
+      let ok=0;
+      const seed=(user, msg)=>Sentry.withScope((scope)=>{
+        if (typeof scope.addEventProcessor!=='function') return;
+        scope.addEventProcessor((e)=>{ e.user={...(e.user||{}), ...user}; return e; });
+        ok++;
+        Sentry.captureException(new Error(msg));
       });
-      return true;
+      seed({id:'seeded-user', ip_address:'198.51.100.77', geo}, 'telemetry test error seeded user literal');
+      seed({id:'seeded-user', ip_address:'{{auto}}'}, 'telemetry test error seeded user auto');
+      return ok===2;
     }""")
-    check("seed: an event processor could be added", seeded)
+    check("seed: an event-scoped processor could be added for both cases", seeded)
     # IP literals in error text and as URL hosts become [ip]; times and line:col stay.
     pg.evaluate("""()=>{setTimeout(()=>{throw new Error('telemetry test error ip client IP: 203.0.113.42 v6 2001:db8:85a3::8a2e:370:7334 hosts http://198.51.100.23:8080/a?k=1 http://[2001:db8::9]:8443/b at 12:30:45 app.js:12:34')},0)}""")
     check("on: events reached the (stubbed) PostHog host", wait_until(pg, "()=>__telemetry.sent().length>=4", 8000))
@@ -235,8 +237,8 @@ with sync_playwright() as p:
     no_ip = [infer_never(ev) and "user" not in ev for ev in evs]
     check(f"no IP: Sentry envelopes say infer_ip never and carry no user ({len(no_ip)} events, {[((ev.get('sdk') or {}).get('settings'), ev.get('user')) for ev in evs][:2]})", no_ip and all(no_ip))
     seeded_evs = sentry_events("seeded user")
-    check(f"no IP: the event with a seeded user (ip_address, geo) went out with no user and infer_ip never ({[(ev.get('user'), (ev.get('sdk') or {}).get('settings')) for ev in seeded_evs]})",
-          len(seeded_evs) == 1 and "user" not in seeded_evs[0] and infer_never(seeded_evs[0]))
+    check(f"no IP: both events with a seeded user (literal ip_address and geo, {{{{auto}}}}) went out with no user and infer_ip never ({[(ev.get('user'), (ev.get('sdk') or {}).get('settings')) for ev in seeded_evs]})",
+          len(seeded_evs) == 2 and all("user" not in ev and infer_never(ev) for ev in seeded_evs))
     seed_leaks = [x for x in (b"198.51.100.77", b"{{auto}}", b"Amsterdam", b"Noord-Holland", b"seeded-user") if x in bodies]
     check(f"no IP: nothing of the seeded user in any request body ({seed_leaks})", not seed_leaks)
     ip_evs = [e["value"] for e in errs if "error ip" in e["value"]]
@@ -251,6 +253,10 @@ with sync_playwright() as p:
         "bracketed [2001:db8::1] here": "bracketed [ip] here",
         "http://u@10.0.0.1:81/x?q=1": "http://u@[ip]:81/x",
         "at 12:30:45 app.js:12:34 http://localhost:8792/js/app.js:12:34": "at 12:30:45 app.js:12:34 http://localhost:8792/js/app.js:12:34",
+        "mapped 2001:db8::192.0.2.1 x": "mapped [ip] x",
+        "http://192.0.2.1./a http://127.1/ http://0x7f.1/ http://2130706433/b http://0X7F000001:80/": "http://[ip]/a http://[ip]/ http://[ip]/ http://[ip]/b http://[ip]:80/",
+        "http://example.com/ http://1.example.com/ http://v1.2/": "http://example.com/ http://1.example.com/ http://v1.2/",
+        "version 1.2.3.4": "version [ip]",
         "std::vector Foo::bar a :: b 1.2.3.4.5 999.1.1.1 v1.2.3": "std::vector Foo::bar a :: b 1.2.3.4.5 999.1.1.1 v1.2.3",
     }
     got = pg.evaluate("(xs)=>xs.map(x=>__telemetry.scrub(x))", list(cases))

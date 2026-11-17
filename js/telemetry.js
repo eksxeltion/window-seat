@@ -78,12 +78,14 @@ function removePosthogKeys() {
 const V4 = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}";
 const H6 = "[0-9a-f]{1,4}";
 // IPv6: eight full groups, a compressed form with "::", or either with a dotted IPv4 tail (::ffff:192.0.2.1). Times (12:30:45) and line:col (app.js:12:34) have neither.
-const V6 = `(?:(?:(?:${H6}:){1,6}|::(?:${H6}:){0,5})${V4}|(?:${H6}:){7}${H6}|(?:${H6}(?::${H6}){0,6})?::(?:${H6}(?::${H6}){0,6})?)(?:%[\\w.-]+)?`;
+const V6 = `(?:(?:(?:${H6}:){1,6}|(?:${H6}(?::${H6}){0,5})?::(?:${H6}:){0,5})${V4}|(?:${H6}:){7}${H6}|(?:${H6}(?::${H6}){0,6})?::(?:${H6}(?::${H6}){0,6})?)(?:%[\\w.-]+)?`;
 const IPV4_RE = new RegExp(`(^|[^\\w.])${V4}(?!\\w|\\.\\d)`, "g");
 const IPV6_RE = new RegExp(`(^|[^\\w:.])(${V6})(?![\\w:]|\\.\\d)`, "gi");
 const IPV6_BRACKET_RE = new RegExp(`\\[${V6}\\]`, "gi");
-// A URL whose host is an IP literal (bracketed IPv6, or IPv4), after an optional userinfo part.
-const URL_IP_HOST_RE = new RegExp(`^([a-z][a-z0-9+.-]*:\\/\\/(?:[^@\\/\\s]*@)?)(?:\\[[0-9a-f:.]+(?:%[\\w.-]+)?\\]|${V4})(?=[:/]|$)`, "i");
+// A URL whose host is an IP literal, after an optional userinfo part: bracketed IPv6, or any host made only of digits,
+// dots and 0x hex parts. Browsers read those as IPv4 too (127.1, 0x7f.1, 2130706433, a trailing dot as in 192.0.2.1.).
+const V4_HOST = "(?:0x[0-9a-f]*|\\d+)(?:\\.(?:0x[0-9a-f]*|\\d+))*\\.?";
+const URL_IP_HOST_RE = new RegExp(`^([a-z][a-z0-9+.-]*:\\/\\/(?:[^@\\/\\s]*@)?)(?:\\[[0-9a-f:.]+(?:%[\\w.-]+)?\\]|${V4_HOST})(?=[:/\\\\]|$)`, "i");
 
 /** Strip the query string and fragment from a URL (any string that looks like one), and an IP literal host. */
 function bareUrl(v) {
