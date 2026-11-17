@@ -7,8 +7,9 @@
 // loading receiver.html?debug=1 (or ?strip=1) instead. The registered receiver URL stays unchanged.
 import { CAMS, MIXES } from "./data.js";
 import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
+import { camLocalTime, placeLine } from "./localtime.js";
 
-export const BUILD = "2026-11-16.7"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-16.8"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -21,6 +22,8 @@ const STALL_SKIP_MS = 15000; // still not PLAYING this long after the nudge: ski
 const RETRY_ALL_FAILED_MS = 60000;
 const FLASH_MS = 1800; // on-TV confirmation of a phone command
 const PIN_FLASH_MS = 5000; // the pin-on toast stays longer so it can be read from the couch
+const LOWER_THIRD_MS = 10000; // the lower third shows this long after a cam loads, then fades (800ms) to a quiet TV
+const FONTS_URL = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Plus+Jakarta+Sans:wght@500;600&display=swap";
 
 const PARAMS = new URLSearchParams(location.search);
 const DEBUG = PARAMS.get("debug") === "1";
@@ -166,6 +169,30 @@ function flash(text, ms = FLASH_MS) {
   cmdTimer = setTimeout(() => el.classList.remove("show"), ms);
 }
 
+/* Lower third: cam name, then "{city}, {country} · local time" (time only with a valid IANA timezone). No type tag,
+   no channel. It shows for 10 seconds after a cam is committed, then fades; the quiet TV is video only. */
+let lowerThirdTimer = 0;
+function captionMeta(cam) {
+  const time = camLocalTime(cam);
+  const place = placeLine(cam);
+  return time ? `${place} · ${time}` : place;
+}
+function setCaption(cam) {
+  $("cap-title").textContent = cam.title;
+  $("cap-meta").textContent = captionMeta(cam);
+}
+function showLowerThird() {
+  const el = $("caption");
+  if (!el) return;
+  clearTimeout(lowerThirdTimer);
+  el.classList.remove("quiet");
+  el.removeAttribute("aria-hidden");
+  lowerThirdTimer = setTimeout(() => {
+    el.classList.add("quiet");
+    el.setAttribute("aria-hidden", "true");
+  }, LOWER_THIRD_MS);
+}
+
 /* Persistent "Paused" pill while the feed is paused, so a frozen frame never looks like a crash. */
 function showPausedPill(on) {
   const el = $("paused-pill");
@@ -274,8 +301,8 @@ function commitPending() {
     camMute();
     quietly(() => camPlayer.pauseVideo());
   }
-  $("cap-title").textContent = cam.title;
-  $("cap-meta").textContent = `${cam.place} · ${cam.channel}`;
+  setCaption(cam);
+  showLowerThird();
   fadeTo(false);
   note("rotate", { camId: cam.id, reason: rotateReason });
   renderStrip();
@@ -858,9 +885,7 @@ function afterListChange() {
     }
     beginLoad(next, "list");
   } else if (s.camId && !pending) {
-    const cam = camById(s.camId); // same cam, maybe renamed in the sheet
-    $("cap-title").textContent = cam.title;
-    $("cap-meta").textContent = `${cam.place} · ${cam.channel}`;
+    setCaption(camById(s.camId)); // same cam, maybe renamed in the sheet (the lower third is not shown again)
   }
   renderStrip();
   broadcast();
@@ -876,6 +901,13 @@ refreshFromSheet().then((r) => {
 
 showMixTitle();
 setInterval(camTick, 1000);
+// Web fonts after load, so a failed or slow request never holds up the TV (the CSS stacks fall back).
+window.addEventListener("load", () => {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = FONTS_URL;
+  document.head.append(link);
+});
 try {
   startYouTube();
 } catch (e) {

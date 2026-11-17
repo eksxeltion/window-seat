@@ -185,9 +185,11 @@ function buildRemote() {
   root.id = "remote";
   root.hidden = true;
   root.innerHTML = `
-    <h2>Casting to <span id="remote-device"></span></h2>
-    <p class="remote-now"><span class="remote-label">Cam</span> <strong id="remote-cam">...</strong></p>
-    <p class="remote-now"><span class="remote-label">Music</span> <strong id="remote-mix">...</strong></p>
+    <h2 class="remote-pill"><svg class="icon" aria-hidden="true"><use href="#i-cast-connected"></use></svg><span>Casting to <span id="remote-device"></span></span></h2>
+    <div class="remote-card">
+      <p class="remote-now"><span class="remote-label">Cam</span> <strong id="remote-cam">...</strong></p>
+      <p class="remote-now"><span class="remote-label">Music</span> <strong id="remote-mix">...</strong></p>
+    </div>
     <div class="remote-row">
       <button class="btn" type="button" data-cmd="prev">Prev cam</button>
       <button class="btn" type="button" data-cmd="next">Next cam</button>
@@ -208,12 +210,12 @@ function buildRemote() {
       <button class="btn" type="button" data-cmd="next-mix">Next mix</button>
     </div>
     <p class="remote-status" id="remote-status" role="status">Waiting for the TV...</p>
-    <p class="remote-debug" id="remote-debug" style="font-size:11px;opacity:.6;margin:4px 0"></p>
+    <p class="remote-debug" id="remote-debug"></p>
     <h3 class="remote-head">Music</h3>
     <ol class="remote-mixes" id="remote-mixes"></ol>
     <h3 class="remote-head">Show a cam now</h3>
     <ol class="remote-mixes" id="remote-cams"></ol>
-    <button class="btn btn-primary" type="button" data-cmd="stop">Stop casting</button>`;
+    <button class="btn btn-primary remote-stop" type="button" data-cmd="stop">Stop casting</button>`;
   document.body.append(root);
   ui.root = root;
   ui.cam = $("#remote-cam");
@@ -339,6 +341,7 @@ function enterRemote(status) {
   if (status) setRemoteStatus(status);
   renderRemote();
   refreshDebug();
+  renderCastButtons();
 }
 
 function leaveRemote() {
@@ -352,6 +355,7 @@ function leaveRemote() {
   hooks.onEnd();
   logEvent("remote off");
   refreshDebug();
+  renderCastButtons();
 }
 
 /* Initial setup is held back until the session lists our channel, then sent exactly once (never replayed). */
@@ -408,6 +412,7 @@ function onSessionStarted(s, resumed) {
     const hint = quietly(channelCheck) || "";
     setRemoteStatus(hint || "Waiting for the TV app to reply...");
     renderRemote();
+    renderCastButtons();
   }
   if (resumed) {
     if (!s.__wsInit) {
@@ -565,6 +570,30 @@ function recordAttempt(code) {
   renderDebug();
 }
 
+/* Cast control labels and glyph (official Material cast / cast_connected). Presentation only. */
+function renderCastButtons() {
+  const st = castReady ? liveCastState() : "";
+  let mode = "idle";
+  let text = "Cast to your TV";
+  if (session || st === "CONNECTED") {
+    mode = "connected";
+    text = `Casting to ${(ui.device && ui.device.textContent) || "TV"}`;
+  } else if (remoteOn || st === "CONNECTING") {
+    mode = "connecting";
+    text = "Connecting to TV...";
+  } else if (castFailed || (lastAttemptCode && lastAttemptCode !== "cancel")) {
+    mode = "failed";
+  }
+  document.querySelectorAll("[data-cast]").forEach((b) => {
+    b.dataset.state = mode;
+    const label = b.querySelector(".cast-label");
+    if (label && label.textContent !== text) label.textContent = text;
+    if (b.hasAttribute("aria-label")) b.setAttribute("aria-label", text);
+    const use = b.querySelector(".cast-glyph use");
+    if (use) use.setAttribute("href", mode === "connected" ? "#i-cast-connected" : "#i-cast");
+  });
+}
+
 function setStatus(text) {
   statusText = text;
   const line = text && lastAttempt ? `${text} | ${lastAttempt}` : text || lastAttempt;
@@ -573,6 +602,7 @@ function setStatus(text) {
     el.hidden = !line;
   });
   document.querySelectorAll("[data-cast]").forEach((b) => (b.title = text));
+  renderCastButtons();
 }
 
 function say(text) {

@@ -5,10 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Window Seat Receiver</title>
   <meta name="color-scheme" content="dark">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <meta http-equiv="Cache-Control" content="no-cache">
-  <link rel="stylesheet" href="css/receiver.css?v=2026-11-16.7">
+  <link rel="stylesheet" href="css/receiver.css?v=2026-11-16.8">
   <!-- The Cast receiver framework is injected by js/receiver.js (skipped with ?debug=1) so it can never block the page. -->
-  <script type="module" src="js/receiver.js?v=2026-11-16.7"></script>
+  <script type="module" src="js/receiver.js?v=2026-11-16.8"></script>
 </head>
 <body>
   <video id="keepalive" loop muted autoplay playsinline style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none"></video>
@@ -23,7 +25,7 @@
   <div id="cmd-toast" role="status"></div>
   <div id="paused-pill" role="status" hidden>Paused</div>
   <div id="safe">
-    <div id="caption">
+    <div id="caption" class="quiet" aria-hidden="true">
       <div id="cap-title"></div>
       <div id="cap-meta"></div>
       <div id="cap-music"></div>

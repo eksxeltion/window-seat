@@ -36,12 +36,12 @@ with sync_playwright() as p:
         pg.keyboard.press("n"); pg.wait_for_timeout(200)
         check(f"{label}: controls go through session.sendMessage", sent(pg) == ["next", "next"])
 
-    # Flow A: playing, then the bar Cast button
+    # Flow A: playing, then the Cast control in the player's top scrim
     pg = page()
     check("A: real CAF loaded", pg.evaluate("()=>!!(window.cast && cast.framework && cast.framework.CastContext)"))
     pg.click("#start-btn"); pg.wait_for_timeout(4000)
     check("A: playing locally first", pg.evaluate(YT) == 2)
-    tap_cast(pg, "#bar [data-cast]")
+    tap_cast(pg, "#player-top [data-cast]")
     pg.evaluate("()=>__fake.pick()"); pg.wait_for_timeout(1000)
     check("A: remote mode, zero local iframes", pg.is_visible("#remote") and pg.evaluate(YT) == 0)
     controls(pg, "A")

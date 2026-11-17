@@ -1,10 +1,11 @@
-// Window Seat: rotating Japan live cams with Tokyo Chill Lab mixes underneath.
+// Window Seat: rotating live cams with Tokyo Chill Lab mixes underneath.
 import { CAMS, MUSIC_CHANNEL, MIXES } from "./data.js";
 import qrcode from "./qr.js";
 import { initCast, castConfigured, sendConfigToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam, castDebugInfo, sendDebugToTv } from "./cast.js";
 import { initDebug, isDebugOn } from "./debug.js";
 import { BUILD } from "./build.js";
 import { refreshFromSheet, listLabel } from "./config.js";
+import { localTime, camLocalTime, awakeCams, placeLine, partOfDay } from "./localtime.js";
 
 /* ---------------------------------------------------------------- config */
 
@@ -22,6 +23,11 @@ const API_TIMEOUT_MS = 20000;
 const VOLUME_STEP = 10;
 const ERROR_CONFIRM_MS = 2500; // a player error only fails a cam if the requested video is still not playing this long after
 const TV_URL = "https://window-seat-lemon.vercel.app/?tv=1";
+const CHROME_HOLD_MS = 6000; // local player: chrome stays up this long after a tap, then fades (not while paused or a sheet is open)
+const THEME_CANVAS = "#F3F5F7"; // --color-canvas: Home, sheets, remote
+const THEME_NIGHT = "#0A1A26"; // --color-night-field: the full-screen local player
+const FONTS_URL =
+  "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Plus+Jakarta+Sans:wght@500;600;700&family=Noto+Sans+JP:wght@400;500&display=swap";
 
 const YS = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
 
@@ -95,7 +101,6 @@ const state = {
   nextSwapAt: 0,
   allFailed: false,
   lite: storedLite === null ? isTv : storedLite === true,
-  showCaption: store.get("caption", true) !== false,
   // music
   mixId: MIXES.some((m) => m.id === savedMix) ? savedMix : MIXES[0].id,
   volume: Number.isFinite(savedVolume) ? Math.min(100, Math.max(0, Math.round(savedVolume))) : 60,
@@ -106,7 +111,7 @@ const state = {
   musicErrors: 0,
   musicUnavailable: false,
   // ui
-  uiHidden: !store.get("menuOpen", true), // "menu closed"; the control bar never auto-hides
+  chromeHidden: false, // local player chrome (top scrim and bottom glass) faded out; the floating toggle stays
   openPanel: null,
   casting: false,
 };
@@ -133,13 +138,18 @@ const el = {
   startBtn: $("#start-btn"),
   startStatus: $("#start-status"),
   bar: $("#bar"),
+  top: $("#player-top"),
+  chromeToggle: $("#chrome-toggle"),
+  fullscreenBtn: $("#lp-fullscreen"),
+  statusText: $("#lp-status-text"),
+  hairline: $("#lp-hairline-fill"),
   nextBtn: $("#btn-next"),
   pinPill: $("#pin-pill"),
-  menuBtn: $("#menu-btn"),
   caption: $("#caption"),
   capTitle: $(".cap-title"),
   capMeta: $(".cap-meta"),
-  capMusic: $(".cap-music"),
+  hero: { img: $("#hero-img"), time: $("#hero-time"), line: $("#hero-line"), cam: $("#hero-cam") },
+  themeColor: document.querySelector('meta[name="theme-color"]'),
   tapMusic: $("#tap-music"),
   tuning: $("#tuning"),
   blackout: $("#blackout"),
@@ -926,6 +936,7 @@ function setFeedPaused(paused) {
     resumeMusic();
   }
   render();
+  if (localPlayerOn()) showChrome(); // paused: chrome stays up; resumed: the 6 second hold starts again
 }
 
 function togglePause() {
@@ -979,24 +990,66 @@ function setText(node, text) {
 
 function setBarLabel(action, text) {
   const btn = $(`.bar-btn[data-action="${action}"]`, el.bar);
-  if (btn) setText($(".label", btn), text);
+  if (btn) {
+    setText($(".label", btn), text);
+    if (btn.getAttribute("aria-label") !== text) btn.setAttribute("aria-label", text);
+  }
   return btn;
 }
 
+/** Height of the bottom glass, so the debug panel can stop above it. */
 function measureBar() {
   const h = el.bar.offsetHeight;
-  if (h) document.documentElement.style.setProperty("--bar-h", h + "px");
+  if (h) document.documentElement.style.setProperty("--glass-h", h + "px");
+}
+
+const mmss = (ms) => {
+  const t = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+};
+
+/** "{city}, {country} · 9:51 AM", or without the time when the cam has no valid timezone. */
+function camMeta(cam) {
+  const time = camLocalTime(cam);
+  const place = placeLine(cam);
+  return time ? `${place} · ${time}` : place;
+}
+
+/* Rotation line under the cam name: "Next cam in M:SS" with a hairline, "Pinned. Rotation off.", or "Paused" (frozen hairline). */
+function renderStatus() {
+  if (!state.started || state.casting) return;
+  const period = rotateSec() * 1000;
+  let text;
+  let left = period;
+  if (state.pinned) {
+    text = state.feedPaused ? "Paused. Pinned, rotation off." : "Pinned. Rotation off.";
+  } else if (state.feedPaused) {
+    text = "Paused";
+    left = state.pausedRemaining;
+  } else if (state.pending || !state.currentCamId) {
+    text = state.allFailed ? "The cams are resting" : "Tuning in...";
+  } else {
+    left = Math.max(0, state.nextSwapAt - Date.now());
+    text = `Next cam in ${mmss(left)}`;
+  }
+  setText(el.statusText, text);
+  const frac = state.pinned ? 0 : Math.min(1, Math.max(0, 1 - left / period));
+  el.hairline.style.transform = `scaleX(${frac.toFixed(3)})`;
+  el.bar.classList.toggle("is-pinned", state.pinned);
+  el.bar.classList.toggle("is-paused", state.feedPaused);
+  // The cam's local time moves on while it plays.
+  const cam = camById(state.currentCamId);
+  if (cam && !el.caption.hidden) setText(el.capMeta, camMeta(cam));
 }
 
 function render() {
-  // Bar
+  // Pin pill and rotation
   setText(el.pinPill, state.pinned ? "Pinned" : "Pin cam");
   el.pinPill.setAttribute("aria-pressed", String(state.pinned));
   const secs = rotateSec();
   for (const b of $$('[data-action="interval"]')) b.disabled = state.lite;
-  setBarLabel("interval", `Every ${secs}s`);
   setText($("#cams-interval"), `New cam every ${secs}s`);
-  $('.bar-btn[data-action="lite"]', el.bar).setAttribute("aria-pressed", String(state.lite));
+  for (const b of $$('[data-action="lite"]')) b.setAttribute("aria-pressed", String(state.lite));
 
   // Pause / Play is the whole feed (cam and music).
   const playing = !state.feedPaused;
@@ -1004,26 +1057,25 @@ function render() {
   $("use", ppBtn).setAttribute("href", playing ? "#i-pause" : "#i-play");
   setText($("#music-play"), playing ? "Pause" : "Play");
 
-  setBarLabel("fullscreen", isFullscreen() ? "Exit fullscreen" : "Fullscreen");
+  const fs = isFullscreen();
+  el.fullscreenBtn.setAttribute("aria-label", fs ? "Exit full screen" : "Full screen");
+  $("use", el.fullscreenBtn).setAttribute("href", fs ? "#i-fullscreen-exit" : "#i-fullscreen");
 
-  // Caption
+  // Now playing, in the bottom glass
   const cam = camById(state.currentCamId);
   if (cam && state.started) {
     el.caption.hidden = false;
     setText(el.capTitle, cam.title);
-    setText(el.capMeta, `${cam.place} · ${cam.channel}${state.pinned ? " · Pinned" : ""}${state.feedPaused ? " · Paused" : ""}`);
+    setText(el.capMeta, camMeta(cam));
   } else {
     el.caption.hidden = true;
   }
-  const mix = mixById(state.mixId);
-  setText(el.capMusic, state.musicUnavailable ? "Music unavailable" : mix ? `♪ ${mix.en}` : "");
-  body.classList.toggle("no-caption", !state.showCaption);
+  renderStatus();
 
   // "Tuning in" indicator while no cam is on screen
   el.tuning.hidden = !(state.started && !state.allFailed && covered && (!state.currentCamId || (state.pending && state.pending.fails > 0)));
 
   // Cams panel
-  $$('[data-action="toggle-caption"]').forEach((b) => b.setAttribute("aria-pressed", String(state.showCaption)));
   for (const row of $$(".cam-row", el.camsList)) {
     const id = row.dataset.id;
     const on = isEnabled(id);
@@ -1045,12 +1097,14 @@ function render() {
   $("#music-shuffle").setAttribute("aria-pressed", String(state.shuffle));
   if (document.activeElement !== el.volume) el.volume.value = String(state.volume);
   setText(el.volumeOut, String(state.volume));
+  el.volume.style.setProperty("--vol", `${el.volume.value}%`);
   for (const btn of $$(".mix-btn", el.mixList)) {
     const current = btn.dataset.id === state.mixId;
     btn.classList.toggle("is-current", current);
     if (current) btn.setAttribute("aria-current", "true");
     else btn.removeAttribute("aria-current");
   }
+  syncChrome();
 }
 
 function buildCamsPanel() {
@@ -1158,6 +1212,7 @@ function rebuildLists() {
     if (t) beginLoad(t, 1);
   }
   render();
+  renderHero(); // the sheet can bring timezones and a different list after first paint
 }
 
 function showListStatus(error) {
@@ -1174,6 +1229,69 @@ function loadSheetConfig() {
     showListStatus(r.ok ? "" : r.error);
     if (r.ok) sendConfigToTv(); // keep a casting TV on the same list
   });
+}
+
+/* ================================================================ home: Right now */
+
+// Where the window looks, by cam type, for the hero line ("Morning on the harbor.").
+const SETTING = {
+  harbor: "on the harbor",
+  river: "on the river",
+  street: "on the street",
+  crossing: "at the crossing",
+  skyline: "over the skyline",
+  mountain: "on the mountain",
+  airport: "at the airport",
+  train: "by the tracks",
+  temple: "at the temple",
+  nature: "in the trees",
+  landscape: "over the hills",
+  beach: "on the beach",
+};
+
+let heroCamId = null;
+
+/** A current in-rotation cam for the hero: awake and with a local time when possible. Stays put while it qualifies. */
+function pickHeroCam(now) {
+  const awake = awakeCams(CAMS, now);
+  const timed = awake.filter((c) => localTime(c.timezone, now));
+  const pool = timed.length ? timed : awake.length ? awake : CAMS.filter((c) => c.default);
+  if (!pool.length) return null;
+  const keep = pool.find((c) => c.id === heroCamId);
+  if (keep) return keep;
+  return pool[Math.floor(now.getTime() / 3600000) % pool.length];
+}
+
+function renderHero() {
+  const now = new Date();
+  const cam = pickHeroCam(now);
+  const h = el.hero;
+  if (!cam) {
+    setText(h.time, "");
+    setText(h.line, "");
+    setText(h.cam, "");
+    h.img.hidden = true;
+    return;
+  }
+  const awake = awakeCams(CAMS, now).length;
+  const count = awake === 1 ? "1 window is awake." : awake ? `${awake} windows are awake.` : "All the windows are asleep.";
+  const city = cam.city || cam.place || cam.country || "";
+  const t = localTime(cam.timezone, now);
+  if (t) {
+    setText(h.time, `It's ${t.text} in ${city}.`);
+    setText(h.line, `${partOfDay(t.hour)} ${SETTING[cam.type] || `in ${city}`}. ${count}`);
+  } else {
+    setText(h.time, `Live from ${city}.`);
+    setText(h.line, count);
+  }
+  setText(h.cam, `${cam.title} · ${placeLine(cam)}`);
+  h.img.alt = `Live cam: ${cam.title}`;
+  if (heroCamId !== cam.id) {
+    heroCamId = cam.id;
+    h.img.dataset.id = cam.id;
+    h.img.hidden = true; // shown once it loads; a failed still leaves the navy panel
+    h.img.src = `https://i.ytimg.com/vi/${encodeURIComponent(cam.id)}/hqdefault.jpg`;
+  }
 }
 
 function buildCredits() {
@@ -1235,7 +1353,7 @@ let panelOpener = null;
 
 /** Background controls cannot take focus while a dialog is open. */
 function setBackgroundInert(on) {
-  [el.bar, el.pinPill, el.notice, el.tapMusic, el.start].forEach((n) => n && (n.inert = on));
+  [el.bar, el.top, el.chromeToggle, el.notice, el.tapMusic, el.start].forEach((n) => n && (n.inert = on));
 }
 
 function openPanel(name, opener) {
@@ -1251,6 +1369,7 @@ function openPanel(name, opener) {
   panel.hidden = false;
   body.classList.add("panel-open");
   setBackgroundInert(true);
+  showChrome(); // a sheet keeps the chrome up
   render();
   let target = null;
   if (name === "cams") target = $(`.cam-row[data-id="${state.currentCamId}"] [data-action="watch"]`, panel);
@@ -1294,12 +1413,13 @@ function closePanel(restoreFocus = true) {
   state.openPanel = null;
   body.classList.remove("panel-open");
   setBackgroundInert(false);
+  holdChrome(); // the 6 second hold starts again once the sheet is gone
   if (restoreFocus) {
     const target =
       panelOpener && isVisible(panelOpener)
         ? panelOpener
         : state.started
-          ? $(`.bar-btn[data-action="open-${name}"]`, el.bar)
+          ? $(`[data-action="open-${name}"]`, el.bar)
           : el.startBtn;
     target?.focus();
   }
@@ -1312,16 +1432,33 @@ function isFullscreen() {
   return !!(document.fullscreenElement || document.webkitFullscreenElement);
 }
 
-function toggleFullscreen() {
+/* Best effort: the player is already full bleed in the layout, so a denied request changes nothing else. */
+function requestFullscreen(onFail) {
   const docEl = document.documentElement;
-  if (isFullscreen()) {
-    const exit = document.exitFullscreen || document.webkitExitFullscreen;
-    if (exit) Promise.resolve(quietly(() => exit.call(document))).catch(() => {});
-  } else {
-    const req = docEl.requestFullscreen || docEl.webkitRequestFullscreen;
-    if (req) Promise.resolve(quietly(() => req.call(docEl))).catch(() => toast("Fullscreen is not available here"));
-    else toast("Fullscreen is not available here");
+  const req = docEl.requestFullscreen || docEl.webkitRequestFullscreen;
+  if (!req) {
+    if (onFail) onFail();
+    return;
   }
+  let p;
+  try {
+    p = req.call(docEl);
+  } catch {
+    if (onFail) onFail();
+    return;
+  }
+  Promise.resolve(p).catch(() => onFail && onFail());
+}
+
+function exitFullscreen() {
+  if (!isFullscreen()) return;
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  if (exit) Promise.resolve(quietly(() => exit.call(document))).catch(() => {});
+}
+
+function toggleFullscreen() {
+  if (isFullscreen()) exitFullscreen();
+  else requestFullscreen(() => toast("Full screen is not available here"));
 }
 
 /* ================================================================ start */
@@ -1335,19 +1472,18 @@ function start() {
     return;
   }
   state.started = true;
-  if (isTv) {
-    const docEl = document.documentElement;
-    const req = docEl.requestFullscreen || docEl.webkitRequestFullscreen;
-    if (req && !isFullscreen()) Promise.resolve(quietly(() => req.call(docEl))).catch(() => {});
-  }
+  // The local player hides system bars where the browser allows it (TV browsers and touch phones). Denied is fine.
+  if ((isTv || prefersFullscreen()) && !isFullscreen()) requestFullscreen();
   body.classList.remove("is-starting");
   el.start.classList.add("leaving");
   setTimeout(() => {
     el.start.hidden = true;
   }, reducedMotion.matches ? 0 : 650);
   if (state.openPanel) closePanel(false);
-  syncMenu();
-  (state.uiHidden ? el.menuBtn : el.nextBtn).focus();
+  state.chromeHidden = false;
+  syncChrome();
+  holdChrome();
+  el.nextBtn.focus();
   measureBar();
   if (state.apiReady) begin();
   else el.startStatus.textContent = "Connecting to YouTube...";
@@ -1359,6 +1495,47 @@ function begin() {
   startCams();
   startMusic();
   render();
+}
+
+/* Home from the local player: stop local playback (players destroyed and recreated idle, as after casting)
+   and show the Start screen. Nothing plays until Start is pressed again. */
+function goHome() {
+  if (!state.started || state.casting) return;
+  if (state.openPanel) closePanel(false);
+  cp.seq++; // drop queued cam loads
+  cp.waiters.length = 0;
+  cp.deferred = null;
+  destroyLocalPlayers();
+  state.started = false;
+  begun = false;
+  state.pending = null;
+  state.currentCamId = null;
+  state.feedPaused = false;
+  state.pinned = false;
+  state.musicWantsPlay = true;
+  activeStall = null;
+  setAllFailed(false);
+  hideNotice();
+  showTapMusic(false);
+  cover(true);
+  exitFullscreen();
+  if (state.apiReady) {
+    createCamPlayer();
+    createMusicPlayer();
+  }
+  showStartScreen();
+}
+
+function showStartScreen() {
+  clearTimeout(chromeTimer);
+  state.chromeHidden = false;
+  body.classList.add("is-starting");
+  el.start.hidden = false;
+  el.start.classList.remove("leaving");
+  el.startStatus.textContent = "";
+  renderHero();
+  render();
+  el.startBtn.focus();
 }
 
 /* ================================================================ cast */
@@ -1404,6 +1581,8 @@ function pauseLocalForCast() {
   destroyLocalPlayers();
   showTapMusic(false);
   if (state.openPanel) closePanel(false);
+  clearTimeout(chromeTimer);
+  syncChrome();
 }
 
 // Back to the normal page at the Start screen; nothing plays until the user presses Start.
@@ -1418,12 +1597,7 @@ function resumeAfterCast() {
   // Fresh players; nothing plays until the user presses Start.
   if (state.apiReady && !cp.player) createCamPlayer();
   if (state.apiReady && !musicPlayer) createMusicPlayer();
-  body.classList.add("is-starting");
-  el.start.hidden = false;
-  el.start.classList.remove("leaving");
-  el.startStatus.textContent = "";
-  el.startBtn.focus();
-  render();
+  showStartScreen();
 }
 
 function setupCast() {
@@ -1469,7 +1643,7 @@ function onApiReady() {
     state.apiFailed = false;
     hideNotice();
     el.startStatus.textContent = "";
-    el.startBtn.querySelector("span").textContent = "Start";
+    el.startBtn.querySelector("span").textContent = "Start watching";
   }
   if (viaTv() || state.casting) return; // casting: no local players until the session ends
   createCamPlayer();
@@ -1509,24 +1683,88 @@ function loadYouTubeApi() {
 
 /* ================================================================ ui visibility */
 
-// The control bar is opened and closed explicitly (Menu button, Enter/OK, M, Close, Escape/Back).
-// It never hides on a timer. The open/closed choice is remembered.
-function syncMenu() {
-  body.classList.toggle("ui-hidden", state.uiHidden);
-  el.menuBtn.setAttribute("aria-expanded", String(!state.uiHidden));
+// The full-screen local player: a top scrim (Home, Cast, full screen) and a bottom glass (now playing, transport,
+// Music volume, Cams and Mix) over the picture. The chrome fades 6 seconds after the last tap, except while the
+// feed is paused, a sheet is open, or a notice is up. A tap on the picture shows it again; the floating button
+// at the bottom right (always on screen) shows or hides it. Casting never shows this player (the phone is a remote).
+let chromeTimer = 0;
+
+function localPlayerOn() {
+  return state.started && !state.casting;
 }
 
-function setMenu(open) {
-  state.uiHidden = !open;
-  store.set("menuOpen", open);
-  if (!open && state.openPanel) closePanel(false);
-  syncMenu();
-  if (open) el.nextBtn.focus();
-  else el.menuBtn.focus();
+function prefersFullscreen() {
+  return !!(window.matchMedia && (window.matchMedia("(pointer: coarse)").matches || window.matchMedia("(hover: none)").matches));
 }
 
-function toggleMenu() {
-  setMenu(state.uiHidden);
+function chromeLocked() {
+  return state.feedPaused || !!state.openPanel || !el.notice.hidden;
+}
+
+function syncChrome() {
+  const on = localPlayerOn();
+  body.classList.toggle("lp-on", on);
+  body.classList.toggle("chrome-hidden", on && state.chromeHidden);
+  el.chromeToggle.setAttribute("aria-expanded", String(!state.chromeHidden));
+  const label = state.chromeHidden ? "Show controls" : "Hide controls";
+  if (el.chromeToggle.getAttribute("aria-label") !== label) el.chromeToggle.setAttribute("aria-label", label);
+  const theme = on ? THEME_NIGHT : THEME_CANVAS;
+  if (el.themeColor && el.themeColor.content !== theme) el.themeColor.content = theme;
+}
+
+/** (Re)start the 6 second hold. The timer re-checks the locks, so a pause or an open sheet keeps the chrome up. */
+function holdChrome() {
+  clearTimeout(chromeTimer);
+  if (!localPlayerOn() || state.chromeHidden) return;
+  chromeTimer = setTimeout(autoHideChrome, CHROME_HOLD_MS);
+}
+
+function autoHideChrome() {
+  if (!localPlayerOn() || state.chromeHidden) return;
+  if (chromeLocked()) {
+    holdChrome();
+    return;
+  }
+  setChrome(false);
+}
+
+function chromeHasFocus() {
+  const a = document.activeElement;
+  return !!a && (el.top.contains(a) || el.bar.contains(a));
+}
+
+function setChrome(visible, { focus = false } = {}) {
+  const hide = !visible;
+  if (hide && chromeHasFocus()) el.chromeToggle.focus(); // never leave focus on a faded control
+  state.chromeHidden = hide;
+  syncChrome();
+  if (hide) {
+    clearTimeout(chromeTimer);
+    if (focus) el.chromeToggle.focus();
+    return;
+  }
+  measureBar();
+  holdChrome();
+  if (focus) el.nextBtn.focus();
+}
+
+function showChrome() {
+  if (state.chromeHidden) setChrome(true);
+  else holdChrome();
+}
+
+/* A tap on the picture brings the chrome back; any tap while it is up restarts the hold. The floating button
+   handles its own click (show or hide), so it is ignored here. */
+function onPlayerPointer(e) {
+  if (!localPlayerOn()) return;
+  const t = e.target;
+  if (t && el.chromeToggle.contains(t)) return;
+  if (!state.chromeHidden) {
+    holdChrome();
+    return;
+  }
+  if (t && t.closest && t.closest("#debug-panel, .panel, #notice, #tap-music")) return;
+  setChrome(true);
 }
 
 /* ================================================================ focus / d-pad */
@@ -1545,11 +1783,10 @@ function currentScope() {
   const scopes = [];
   if (!el.notice.hidden) scopes.push(el.notice);
   if (!el.tapMusic.hidden) scopes.push(el.tapMusic);
-  scopes.push(el.menuBtn);
-  if (!state.uiHidden) {
-    if (!el.caption.hidden) scopes.push(el.pinPill);
-    scopes.push(el.bar);
-  }
+  if (!state.chromeHidden) scopes.push(el.top, el.bar);
+  scopes.push(el.chromeToggle);
+  const dbg = document.getElementById("debug-panel");
+  if (dbg && !dbg.hidden) scopes.push(dbg);
   return scopes;
 }
 
@@ -1566,7 +1803,7 @@ function ensureFocus() {
   const scopes = currentScope();
   const active = document.activeElement;
   if (active && active !== body && scopes.some((s) => s.contains(active)) && isVisible(active)) return;
-  const fallback = state.started && !state.openPanel ? (state.uiHidden ? el.menuBtn : el.nextBtn) : focusablesIn(scopes)[0];
+  const fallback = state.started && !state.openPanel ? (state.chromeHidden ? el.chromeToggle : el.nextBtn) : focusablesIn(scopes)[0];
   fallback?.focus();
 }
 
@@ -1652,10 +1889,14 @@ function onKeyDown(e) {
     return;
   }
 
-  // Enter/OK with nothing focused opens the menu (TV remotes).
-  if (state.started && state.uiHidden && !state.openPanel && key === "Enter" && !isInteractive(document.activeElement)) {
+  // Any key while playing locally keeps the chrome up (and restarts the 6 second hold).
+  const local = localPlayerOn();
+  if (local && !state.chromeHidden) holdChrome();
+
+  // Enter/OK or an arrow with the chrome hidden brings it back (TV remotes).
+  if (local && state.chromeHidden && !state.openPanel && (ARROWS[key] || (key === "Enter" && !isInteractive(document.activeElement)))) {
     e.preventDefault();
-    setMenu(true);
+    setChrome(true, { focus: true });
     return;
   }
 
@@ -1663,9 +1904,9 @@ function onKeyDown(e) {
     if (state.openPanel) {
       e.preventDefault();
       closePanel();
-    } else if (state.started && !state.uiHidden) {
+    } else if (local && !state.chromeHidden) {
       e.preventDefault();
-      setMenu(false);
+      setChrome(false, { focus: true });
     }
     return;
   }
@@ -1706,7 +1947,7 @@ function onKeyDown(e) {
       break;
     case "m":
       e.preventDefault();
-      toggleMenu();
+      if (local) setChrome(state.chromeHidden, { focus: true });
       break;
     case "u":
       e.preventDefault();
@@ -1746,10 +1987,10 @@ function handleAction(action, btn) {
       return openPanel("tv", btn);
     case "open-about":
       return openPanel("about", btn);
-    case "toggle-menu":
-      return toggleMenu();
-    case "close-menu":
-      return setMenu(false);
+    case "toggle-chrome":
+      return setChrome(state.chromeHidden, { focus: false });
+    case "home":
+      return goHome();
     case "close-panel":
       return closePanel();
     case "play-pause":
@@ -1770,10 +2011,6 @@ function handleAction(action, btn) {
       return toggleMute();
     case "shuffle":
       return toggleShuffle();
-    case "toggle-caption":
-      state.showCaption = !state.showCaption;
-      store.set("caption", state.showCaption);
-      return render();
     case "toggle-cam":
       return setEnabled(id, !isEnabled(id));
     case "watch":
@@ -1810,6 +2047,7 @@ function bindInput() {
     "pointerdown",
     (e) => {
       if (e.pointerType === "mouse") body.classList.remove("kbd");
+      onPlayerPointer(e);
     },
     true,
   );
@@ -1824,15 +2062,33 @@ function bindInput() {
     { passive: true },
   );
 
+  // The glass grows with a long cam name: keep --glass-h current so the debug panel stops above it.
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => measureBar()).observe(el.bar);
   window.addEventListener("resize", () => {
     measureBar();
     sizeCam();
   });
   document.addEventListener("fullscreenchange", render);
   document.addEventListener("webkitfullscreenchange", render);
+  el.hero.img.addEventListener("load", () => (el.hero.img.hidden = false));
+  el.hero.img.addEventListener("error", () => (el.hero.img.hidden = true));
 }
 
 /* ================================================================ boot */
+
+/* Web fonts, added after load so a failed or slow request never blocks the page (CSS stacks fall back). */
+function loadFonts() {
+  const add = () => {
+    if (document.querySelector("link[data-fonts]")) return;
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = FONTS_URL;
+    link.dataset.fonts = "";
+    document.head.append(link);
+  };
+  if (document.readyState === "complete") setTimeout(add, 0);
+  else window.addEventListener("load", () => setTimeout(add, 0), { once: true });
+}
 
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) return;
@@ -1861,7 +2117,13 @@ function boot() {
   el.startBtn.focus();
   registerServiceWorker();
   sizeCam();
-  setInterval(tick, 1000);
+  renderHero();
+  setInterval(() => {
+    tick();
+    renderStatus();
+  }, 1000);
+  setInterval(() => !state.started && renderHero(), 30000); // keep the Home clock and awake count current
+  loadFonts();
   document.addEventListener("visibilitychange", onVisibility);
   loadYouTubeApi();
   setupDebug();
@@ -1883,6 +2145,9 @@ function boot() {
     isDebugOn,
     feedPaused: () => state.feedPaused,
     pinned: () => state.pinned,
+    chromeHidden: () => state.chromeHidden,
+    heroCamId: () => heroCamId,
+    renderHero,
   };
 }
 

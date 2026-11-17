@@ -42,6 +42,15 @@ def wait_until(pg, js, ms=4000):
         return False
 
 
+def tap(pg, sel):
+    """Click a local player control. The chrome fades 6s after the last tap, so bring it back first if needed
+    (the floating show / hide button, as a person would)."""
+    if pg.evaluate("()=>!!(window.__windowSeat && __windowSeat.chromeHidden && __windowSeat.chromeHidden())"):
+        pg.click("#chrome-toggle")
+        pg.wait_for_timeout(250)
+    pg.click(sel)
+
+
 def route(pg):
     pg.route("**/iframe_api", lambda r: r.fulfill(status=200, content_type="text/javascript", body=FAKE_YT))
     pg.route("**/cast_sender.js*", lambda r: r.fulfill(status=200, content_type="text/javascript", body=MOCK))
@@ -64,11 +73,11 @@ with sync_playwright() as p:
     pg.wait_for_timeout(500)
     ws = lambda k: pg.evaluate(f"()=>__windowSeat.{k}()")
 
-    # Layout: transport cluster is previous, pause/play, next; pin is its own pill outside the bar.
-    order = pg.evaluate("()=>[...document.querySelectorAll('#bar .bar-btn')].slice(0,3).map(b=>b.dataset.action)")
+    # Layout: transport cluster is previous, pause/play, next; pin is its own pill in the info row, outside the transport.
+    order = pg.evaluate("()=>[...document.querySelectorAll('#bar .lp-transport .bar-btn')].map(b=>b.dataset.action)")
     check(f"phone: transport cluster reads prev, play-pause, next ({order})", order == ["prev", "play-pause", "next"])
-    check("phone: no pin button inside the bar", pg.locator("#bar [data-action=pin]").count() == 0)
-    check("phone: pin pill exists outside the bar", pg.locator("[data-action=pin]").count() == 1 and pg.evaluate("()=>!document.querySelector('#bar').contains(document.querySelector('[data-action=pin]'))"))
+    check("phone: no pin button inside the transport cluster", pg.locator("#bar .lp-transport [data-action=pin]").count() == 0)
+    check("phone: pin pill exists outside the transport cluster", pg.locator("[data-action=pin]").count() == 1 and pg.evaluate("()=>!document.querySelector('#bar .lp-transport').contains(document.querySelector('[data-action=pin]')) && !!document.querySelector('#bar .lp-info [data-action=pin]')"))
     check("phone: pin pill starts as 'Pin cam', aria-pressed false", pg.text_content("#pin-pill") == "Pin cam" and pg.get_attribute("#pin-pill", "aria-pressed") == "false")
     check("phone: pin control never says pause", "pause" not in pg.text_content("#pin-pill").lower())
     check("phone: bar play-pause label is 'Pause' (whole feed)", pg.text_content("#bar [data-action=play-pause] .label") == "Pause")
@@ -76,13 +85,13 @@ with sync_playwright() as p:
     # Pause via the bar button: cam and music both pause.
     cam0 = ws("currentCamId")
     n_music_load = calls(pg, "music").count("loadVideoById")
-    pg.click("#bar [data-action=play-pause]")
+    tap(pg, "#bar [data-action=play-pause]")
     pg.wait_for_timeout(300)
     check("phone: bar Pause sets feedPaused", ws("feedPaused") is True)
     check("phone: bar Pause pauses the cam", "pauseVideo" in calls(pg, "cam") and ystate(pg, "cam") == 2)
     check("phone: bar Pause pauses the music", ystate(pg, "music") == 2)
     check("phone: labels read Play (bar and Music panel)", pg.text_content("#bar [data-action=play-pause] .label") == "Play" and pg.text_content("#music-play") == "Play")
-    check("phone: caption says Paused", "Paused" in pg.text_content(".cap-meta"))
+    check("phone: rotation status says Paused", pg.text_content("#lp-status-text") == "Paused")
 
     # Auto-rotation is frozen while paused.
     pg.evaluate("()=>{__windowSeat.state.nextSwapAt=0; __windowSeat.state.pausedRemaining=0}")
@@ -91,7 +100,7 @@ with sync_playwright() as p:
 
     # Resume: cam to the live edge, music continues (no reload).
     before = len(calls(pg, "cam"))
-    pg.click("#bar [data-action=play-pause]")
+    tap(pg, "#bar [data-action=play-pause]")
     pg.wait_for_timeout(300)
     after = calls(pg, "cam")[before:]
     check("phone: resume clears feedPaused", ws("feedPaused") is False)
@@ -102,7 +111,7 @@ with sync_playwright() as p:
     check("phone: cam still muted after resume", pg.evaluate("()=>__yt.cam().isMuted() && __yt.cam().getVolume()===0"))
 
     # Music panel button is the same whole-feed pause.
-    pg.click("#bar [data-action=open-music]")
+    tap(pg, "#bar [data-action=open-music]")
     pg.wait_for_timeout(200)
     check("phone: volume slider is labeled Music", pg.evaluate("()=>document.querySelector('#music-volume').closest('label').querySelector('span').textContent") == "Music")
     pg.click("#music-play")
@@ -145,7 +154,7 @@ with sync_playwright() as p:
     pg.keyboard.press("u")
 
     # Pin: separate pill, toast, music keeps playing, rotation frozen, next/prev keep the pin.
-    pg.click("#pin-pill")
+    tap(pg, "#pin-pill")
     pg.wait_for_timeout(200)
     check("phone: pin pill reads Pinned with aria-pressed true", pg.text_content("#pin-pill") == "Pinned" and pg.get_attribute("#pin-pill", "aria-pressed") == "true")
     check(f"phone: pin toast '{PIN_COPY}'", pg.text_content("#toast") == PIN_COPY)
@@ -163,10 +172,10 @@ with sync_playwright() as p:
     check("phone: prev while pinned keeps the pin", ws("pinned") is True)
 
     # Pause and pin compose.
-    pg.click("#bar [data-action=play-pause]")
+    tap(pg, "#bar [data-action=play-pause]")
     pg.wait_for_timeout(200)
     check("phone: pause while pinned (Paused and pinned)", ws("feedPaused") is True and ws("pinned") is True)
-    pg.click("#pin-pill")
+    tap(pg, "#pin-pill")
     pg.wait_for_timeout(200)
     check("phone: unpin while paused keeps the feed paused", ws("pinned") is False and ws("feedPaused") is True and pg.text_content("#pin-pill") == "Pin cam")
     check("phone: unpin toast is clear and is not the pin copy", pg.text_content("#toast") == "Unpinned. Rotation is back on.")
@@ -179,7 +188,7 @@ with sync_playwright() as p:
     pg.wait_for_timeout(300)
     check("phone: new cam stays paused (no autoplay)", ws("feedPaused") is True and ystate(pg, "cam") == 2 and ystate(pg, "music") == 2)
     check("phone: cam muted after a swap while paused", pg.evaluate("()=>__yt.cam().isMuted() && __yt.cam().getVolume()===0"))
-    pg.click("#bar [data-action=play-pause]")
+    tap(pg, "#bar [data-action=play-pause]")
     pg.wait_for_timeout(300)
     check("phone: resume after the swap plays cam and music", ystate(pg, "cam") == 1 and ystate(pg, "music") == 1)
 
@@ -200,11 +209,11 @@ with sync_playwright() as p:
 
     def archive_round(label):
         pg.evaluate("()=>{__yt.cam().time=1234}")
-        pg.click("#bar [data-action=play-pause]")
+        tap(pg, "#bar [data-action=play-pause]")
         pg.wait_for_timeout(250)
         check(f"phone archive{label}: pause pauses the archived cam", ws("feedPaused") is True and ystate(pg, "cam") == 2)
         before = len(calls(pg, "cam"))
-        pg.click("#bar [data-action=play-pause]")
+        tap(pg, "#bar [data-action=play-pause]")
         pg.wait_for_timeout(1500)
         after = pg.evaluate(f"()=>__yt.cam().calls.slice({before})")
         names = [c[0] for c in after]
@@ -216,39 +225,39 @@ with sync_playwright() as p:
         check(f"phone archive{label}: cam still muted", pg.evaluate("()=>__yt.cam().isMuted() && __yt.cam().getVolume()===0"))
 
     archive_round("")
-    pg.click("#pin-pill")
+    tap(pg, "#pin-pill")
     pg.wait_for_timeout(200)
     check("phone archive: pinned", ws("pinned") is True)
     archive_round(" (pinned)")
-    pg.click("#pin-pill")
+    tap(pg, "#pin-pill")
     pg.wait_for_timeout(200)
     pg.evaluate("()=>{window.__ytArchive=[]}")
 
     # Interval changed while paused: resume uses the new period, not the clock frozen at pause time.
     remaining = lambda: pg.evaluate("()=>__windowSeat.state.nextSwapAt - Date.now()")
     check("phone interval: starts at 60s, Lite off", pg.evaluate("()=>__windowSeat.state.intervalSec===60 && !__windowSeat.state.lite"))
-    pg.click("#bar [data-action=play-pause]")
+    tap(pg, "#bar [data-action=play-pause]")
     pg.wait_for_timeout(200)
     pg.evaluate("()=>{__windowSeat.state.pausedRemaining=58000}")  # paused just after a rotation at 60s
     pg.evaluate("()=>document.querySelector('[data-action=interval]').click()")
     pg.wait_for_timeout(150)
     check("phone interval: toggled to 30s while paused", pg.evaluate("()=>__windowSeat.state.intervalSec") == 30 and ws("feedPaused") is True)
-    pg.click("#bar [data-action=play-pause]")
+    tap(pg, "#bar [data-action=play-pause]")
     pg.wait_for_timeout(200)
     r = remaining()
     check(f"phone interval: after resume the next swap is about 30s away, not 58s ({r}ms)", ws("feedPaused") is False and 28000 <= r <= 30000)
     # Lite while paused: the effective period becomes 60s (Lite rotates every 60s).
-    pg.click("#bar [data-action=play-pause]")
+    tap(pg, "#bar [data-action=play-pause]")
     pg.wait_for_timeout(200)
     pg.evaluate("()=>{__windowSeat.state.pausedRemaining=5000}")
-    pg.evaluate("()=>document.querySelector('.bar-btn[data-action=lite]').click()")
+    pg.evaluate("()=>document.querySelector('#cams-lite').click()")
     pg.wait_for_timeout(150)
     check("phone lite: Lite on while paused", pg.evaluate("()=>__windowSeat.state.lite") is True and ws("feedPaused") is True)
-    pg.click("#bar [data-action=play-pause]")
+    tap(pg, "#bar [data-action=play-pause]")
     pg.wait_for_timeout(200)
     r = remaining()
     check(f"phone lite: after resume the next swap is about 60s away, not 5s ({r}ms)", ws("feedPaused") is False and 58000 <= r <= 60000)
-    pg.evaluate("()=>document.querySelector('.bar-btn[data-action=lite]').click()")
+    pg.evaluate("()=>document.querySelector('#cams-lite').click()")
     pg.evaluate("()=>document.querySelector('[data-action=interval]').click()")
     pg.wait_for_timeout(150)
     check("phone interval: restored to 60s, Lite off", pg.evaluate("()=>__windowSeat.state.intervalSec===60 && !__windowSeat.state.lite"))
