@@ -4,13 +4,14 @@
   const sent = [];
   const msgListeners = [];
   const sessListeners = {};
+  let options = null; // the last CastContext.setOptions argument
   const session = {
     sendMessage(ns, data) {
       sent.push({ ns, data: JSON.parse(JSON.stringify(data)) });
       if (window.__mockFail) return Promise.reject(window.__mockFail);
       return Promise.resolve();
     },
-    getSessionObj() { return { appId: window.__mockAppId || "48BEB59E", namespaces: window.__mockNs || [{ name: "urn:x-cast:com.windowseat" }] }; },
+    getSessionObj() { return { appId: window.__mockAppId || (options && options.receiverApplicationId) || "48BEB59E", namespaces: window.__mockNs || [{ name: "urn:x-cast:com.windowseat" }] }; },
     addMessageListener(ns, fn) { msgListeners.push(fn); },
     getCastDevice() { return { friendlyName: "Mock TV" }; },
     getSessionState() { return sessState; },
@@ -22,7 +23,7 @@
   let ctxState = window.__mockResume ? "SESSION_RESUMED" : "NO_SESSION";
   let castState = window.__mockResume ? "CONNECTED" : "NOT_CONNECTED";
   const ctx = {
-    setOptions() {},
+    setOptions(opts) { options = opts; },
     getCastState: () => castState,
     getSessionState: () => ctxState,
     addEventListener(t, fn) { (listeners[t] = listeners[t] || []).push(fn); },
@@ -47,6 +48,7 @@
   } };
   window.__mockCast = {
     sent,
+    get options() { return options; },
     start() { castState = "CONNECTED"; hasSession = true; sessState = ctxState = "SESSION_STARTED"; (listeners.sessionstatechanged || []).forEach((f) => f({ sessionState: "SESSION_STARTED", session })); },
     // TV picked, receiver launching: no session yet.
     connecting() { castState = "CONNECTING"; hasSession = false; ctxState = "SESSION_STARTING"; fire("caststatechanged", { castState }); fire("sessionstatechanged", { sessionState: "SESSION_STARTING" }); },

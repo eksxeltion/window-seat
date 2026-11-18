@@ -15,6 +15,8 @@
     },
     addEventListener(t, fn) { (sysListeners[t] = sysListeners[t] || []).push(fn); },
     getPlayerManager() { return { setMediaElement() { calls.push("setMediaElement"); } }; },
+    // The registered app the receiver runs as; a test can set window.__cafAppId (default: production).
+    getApplicationData() { return { id: window.__cafAppId || "48BEB59E", name: "Window Seat" }; },
     getSenders() { return window.__cafSenders || [{ id: "sender-1" }]; },
     sendCustomMessage(ns, senderId, data) {
       if (!started) throw new Error("not started");

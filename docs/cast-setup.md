@@ -48,7 +48,7 @@ Source: https://developers.google.com/cast/docs/registration#devices
 
 ## 5. Send the Application ID to Forge
 
-Send me the Application ID. I put it in `js/cast-config.js` (`CAST_APP_ID`) and redeploy.
+Send me the Application ID. I put it in `js/cast-config.js` (`CAST_APP_ID_PROD`, production `48BEB59E`) and redeploy.
 
 ## 6. Use it
 
@@ -79,7 +79,9 @@ The limit: a real Cast session loads the receiver URL registered in the Cast con
 
 Quick alternative with no code change: in the console, temporarily edit the main Window Seat app's Receiver Application URL to the short-timer URL below, test, then change it back. Console edits can take a few minutes to reach the TV. While it is changed, every cast uses the short timers, so do not forget to revert it.
 
-## One-time console step for Stephane (needs your Google sign-in)
+## Test app console step (done, for reference)
+
+This is already done: the test app exists as `Window Seat (test)`, Application ID `CEB296EE`. The steps stay here for reference.
 
 1. Open https://cast.google.com/publish and sign in.
 2. Click **Add New Application**.
@@ -89,13 +91,30 @@ Quick alternative with no code change: in the console, temporarily edit the main
    This gives a 1 minute warning and a 2 minute end. It uses `strip=1`, not `debug=1`, because `debug=1` does not start CAF and the TV would never connect.
 6. Leave it unpublished.
 7. Click **Save**.
-8. Send me the new **Application ID**.
+8. Send me the new **Application ID** (it is `CEB296EE`, now in `js/cast-config.js` as `CAST_APP_ID_TEST`).
 
 Registered test devices apply to all apps on the account. So the living room TV should not need to be added again.
 
 Source: https://developers.google.com/cast/docs/registration
 
-The web app does not switch app IDs yet. It always uses `CAST_APP_ID`. Wiring the test app ID into the sender (for example a `?castApp=` override on `index.html`) is a follow-up once the ID exists.
+## Switching the phone to the test receiver
+
+The web app uses the production app (`48BEB59E`) unless you opt in to the test app (`CEB296EE`). Two ways to turn it on:
+
+- Open https://window-seat-lemon.vercel.app/?castApp=test (`?castApp=CEB296EE` works too).
+- Or open About, find **Cast test receiver** under Debug mode (visible even with Debug off), and turn it on. The page reloads.
+
+The choice is saved on the phone (`windowSeat.castApp` in local storage), so later loads keep using the test app until you switch back. The Cast SDK reads the app ID once when the page loads, so a change always applies through a reload.
+
+To switch back: turn **Cast test receiver** off in About (the page reloads, and drops `castApp=test` from the address so it cannot turn itself back on), or open `?castApp=prod` (`?castApp=main` and `?castApp=48BEB59E` work too).
+
+How to confirm which app is active:
+
+- The About switch shows the app this page load uses, and the line under it names the ID.
+- With Debug mode on, the phone debug panel CAST section shows `App CEB296EE (test receiver)` or `App 48BEB59E (production)`.
+- On the TV debug strip (always on for the test app, because its URL has `strip=1`), the second line shows `app CEB296EE`, and the cam line ends with `override warn 1:00 end 2:00`.
+
+If you are already casting, stop casting first, then switch and cast again. The phone only joins a running session of the app it is using.
 
 ## Notes
 
