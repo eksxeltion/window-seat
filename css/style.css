@@ -666,7 +666,6 @@ body:not(.lp-on) #tuning { display: none; }
 .sleep-mark[hidden] { display: none; }
 .cam-row.is-sleeping .cam-clock { font-weight: 500; color: var(--color-ink-tertiary); }
 /* Unchecked cams stay in the list and look off. */
-.cam-row.is-off .check-box { border-color: var(--color-line); }
 .cam-row.is-off .cam-title, .cam-row.is-off .cam-sub, .cam-row.is-off .cam-clock { color: var(--color-ink-tertiary); }
 .cam-row.is-off .cam-clock { font-weight: 500; }
 .cam-play {
