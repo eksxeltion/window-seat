@@ -108,9 +108,9 @@ Type must read from the couch, about 3 meters away. Sizes are px at 1080p and sh
 | Name | Size / line | Weight | Use |
 | --- | --- | --- | --- |
 | TV start title | 72 / 84 | Fraunces 600 | "Window Seat" on the 10-foot start (`?tv=1` and TV browsers) |
-| TV title | 64 / 76 | Fraunces 600 | Cam name in the lower third |
-| TV meta | 32 / 40 | Plus Jakarta 500 | City, country, then the local time in accent-night |
-| TV mix | 28 / 36 | Plus Jakarta 500 | Current mix, English title |
+| TV title | 48 / 56 | Fraunces 600 | Cam name in the lower third |
+| TV meta | 24 / 32 | Plus Jakarta 500 | City, country, then the local time in accent-night |
+| TV mix | 24 / 32 | Plus Jakarta 500 | Current mix, English title |
 | TV brand | 24 / 32 | Plus Jakarta 600, sentence case, no tracking | 24px Shade mark (night colors) plus "Window Seat" |
 | TV toast, Paused pill | 32 / 40 | Plus Jakarta 600 | Command confirmation ("Pinned. Staying on this cam."), "Paused" |
 | TV unavailable | 32 / 40 | Plus Jakarta 500 | "This window is closed for now. Next window in 5 seconds." |
@@ -118,6 +118,8 @@ Type must read from the couch, about 3 meters away. Sizes are px at 1080p and sh
 | TV button | 32 / 40 | Plus Jakarta 600 | 88px tall pills on the 10-foot start |
 
 Nothing on the TV is under 24px at 1080p, except the Debug strip.
+
+The lower third (TV title, meta, mix, brand) is the exception to the px minimum: its CSS scales with `vh` only, so a 1280x720 TV (most Chromecast and Google TV receivers) shows it at the same share of the screen as 1080p. 720p TVs must not get the 1080p px sizes as floors. With a two-line title the box stays about a quarter of the screen height or less.
 
 ## Spacing
 
@@ -320,10 +322,10 @@ Tapping a row starts that mix immediately on the phone or, while casting, on the
 
 ### TV overlay / lower third
 
-Sits in the bottom-left of the 5% safe area. Max width 960px, padding 32 x 40px, radius 24px, on `--color-overlay` glass.
+Sits in the bottom-left of the 5% safe area. Max width `min(50vw, 960px)`, padding 24 x 32px, radius 24px, on `--color-overlay` glass. Sizes are px at 1080p and scale with `vh` (no px floors); the whole box, two-line title included, is at most about a quarter of the screen height.
 
 - Cam name, TV title, overlay-ink, two lines at most.
-- Meta: `{city}, {country}`, then the local time in accent-night after a 24px gap (no mid-dot). No type tag.
+- Meta: `{city}, {country}`, then the local time in accent-night after a 16px gap (no mid-dot). No type tag.
 - Mix line: "Now playing: {mix}".
 - Brand row: the 24px Shade mark in night colors (frame `#F3F5F7`, blind `#8CC3D6`) plus "Window Seat" in sentence case, overlay-dim.
 

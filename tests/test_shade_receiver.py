@@ -1,5 +1,6 @@
 """Shade rollout PR 2, the TV receiver: build stamp, night overlay tokens, the lower third on the TV type scale
-(64/32/28/24 at 1920x1080), the sentence-case brand row with the Shade mark, the overscaled cam iframe with no pointer
+(48/24/24/24 at 1920x1080, scaled with vh so 720p keeps the same proportions and the box stays about a quarter of
+the screen height), the sentence-case brand row with the Shade mark, the overscaled cam iframe with no pointer
 events, the pause cover, and the unavailable message (YouTube errors 100, 101, 150 and a load that never plays).
 Runs against receiver.html?debug=1 with the stubbed YouTube API (tests/fake_youtube.js). Fonts are aborted.
 Usage: test_shade_receiver.py BASE_URL   (the site root, for example http://localhost:8000/)"""
@@ -14,7 +15,7 @@ if base.endswith(".html"):
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FAKE_YT = open(os.path.join(HERE, "fake_youtube.js")).read()
-BUILD = "2026-11-17.23"
+BUILD = re.search(r'BUILD = "([^"]+)"', open(os.path.join(ROOT, "js/build.js")).read()).group(1)
 MSG = "This window is closed for now. Next window in 5 seconds."
 fails, logs = [], []
 
@@ -102,6 +103,25 @@ def route(pg, tag):
     pg.on("pageerror", lambda e: logs.append(f"PAGEERROR {tag}: {e}"))
 
 
+
+# Force a two-line title plus place, time, mix and brand, show the lower third, and measure it.
+TWO_LINE = """()=>{const c=document.querySelector('#caption');
+  document.querySelector('#cap-title').textContent='The long way home along the harbour at golden hour';
+  const meta=document.querySelector('#cap-meta');
+  if(!meta.querySelector('.cap-place')) meta.innerHTML='<span class="cap-place">Kyoto, Japan</span><span class="cap-time">6:42 pm</span>';
+  const mu=document.querySelector('#cap-music'); if(!mu.textContent.trim()) mu.textContent='Mix: Lofi Girl, beats to relax to';
+  c.style.transition='none'; c.classList.remove('quiet'); void c.offsetWidth;
+  const t=document.querySelector('#cap-title'), ts=getComputedStyle(t), r=c.getBoundingClientRect();
+  return {h:r.height, w:r.width, vh:innerHeight, vw:innerWidth, fs:parseFloat(ts.fontSize), lines:Math.round(t.getBoundingClientRect().height/parseFloat(ts.lineHeight)),
+          clipped:t.scrollHeight>t.clientHeight+1}}"""
+
+
+def two_line_check(rx, tag):
+    m = rx.evaluate(TWO_LINE)
+    check(f"{tag}: two-line caption is at most 26% of the screen height ({m['w']:.0f}x{m['h']:.0f}, {m['h'] / m['vh']:.1%}, title {m['fs']:.1f}px, {m['lines']} lines)",
+          m["lines"] == 2 and not m["clipped"] and m["h"] <= 0.26 * m["vh"])
+    return m
+
 with sync_playwright() as p:
     b = p.chromium.launch()
     ctx = b.new_context(viewport={"width": 1920, "height": 1080})
@@ -155,12 +175,12 @@ with sync_playwright() as p:
                 metaText:document.querySelector('#cap-meta').textContent}}""")
     near = lambda v, want: abs(px(v) - want) <= 1
     check(f"lower third visible ({ty['cap']['op']})", ty["cap"]["op"] == "1")
-    check(f"title 64/76 Fraunces 600 ({ty['title']['fs']}/{ty['title']['lh']} {ty['title']['fw']})", near(ty["title"]["fs"], 64) and near(ty["title"]["lh"], 76) and ty["title"]["fw"] == "600" and "Fraunces" in ty["title"]["ff"])
+    check(f"title 48/56 Fraunces 600 ({ty['title']['fs']}/{ty['title']['lh']} {ty['title']['fw']})", near(ty["title"]["fs"], 48) and near(ty["title"]["lh"], 56) and ty["title"]["fw"] == "600" and "Fraunces" in ty["title"]["ff"])
     check(f"title clamps at 2 lines ({ty['cap']['clamp']})", ty["cap"]["clamp"] == "2")
-    check(f"place 32/40 Jakarta 500 ({ty['meta']['fs']}/{ty['meta']['lh']} {ty['meta']['fw']})", near(ty["meta"]["fs"], 32) and near(ty["meta"]["lh"], 40) and ty["meta"]["fw"] == "500" and "Plus Jakarta Sans" in ty["meta"]["ff"])
-    check(f"local time in accent-night after a 24px gap, no mid-dot ({ty['time']}, {ty['metaText']!r})",
-          ty["time"] and ty["time"]["color"] == "rgb(140, 195, 214)" and abs(ty["time"]["gap"] - 24) <= 1 and abs(ty["time"]["top"]) <= 1 and "·" not in ty["metaText"])
-    check(f"mix line 28/36 Jakarta 500 ({ty['music']['fs']}/{ty['music']['lh']} {ty['music']['fw']})", near(ty["music"]["fs"], 28) and near(ty["music"]["lh"], 36) and ty["music"]["fw"] == "500")
+    check(f"place 24/32 Jakarta 500 ({ty['meta']['fs']}/{ty['meta']['lh']} {ty['meta']['fw']})", near(ty["meta"]["fs"], 24) and near(ty["meta"]["lh"], 32) and ty["meta"]["fw"] == "500" and "Plus Jakarta Sans" in ty["meta"]["ff"])
+    check(f"local time in accent-night after a 16px gap, no mid-dot ({ty['time']}, {ty['metaText']!r})",
+          ty["time"] and ty["time"]["color"] == "rgb(140, 195, 214)" and abs(ty["time"]["gap"] - 16) <= 1 and abs(ty["time"]["top"]) <= 1 and "·" not in ty["metaText"])
+    check(f"mix line 24/32 Jakarta 500 ({ty['music']['fs']}/{ty['music']['lh']} {ty['music']['fw']})", near(ty["music"]["fs"], 24) and near(ty["music"]["lh"], 32) and ty["music"]["fw"] == "500")
     check(f"brand 24/32 Jakarta 600 overlay-dim ({ty['brand']['fs']}/{ty['brand']['lh']} {ty['brand']['fw']} {ty['brand']['color']})",
           near(ty["brand"]["fs"], 24) and near(ty["brand"]["lh"], 32) and ty["brand"]["fw"] == "600" and ty["brand"]["color"] == "rgb(201, 211, 218)")
     check(f"brand is sentence case 'Window Seat', not uppercase or tracked ({ty['brandText']!r}, {ty['brand']['tt']}, {ty['brand']['ls']})",
@@ -168,19 +188,20 @@ with sync_playwright() as p:
     check("no 'Street' in the lower third", "Street" not in rx.text_content("#caption"))
     check(f"brand row has a 24px Shade mark in night colors ({ty['mark']})",
           ty["mark"] and abs(ty["mark"]["h"] - 24) <= 1 and abs(ty["mark"]["w"] / ty["mark"]["h"] - 52 / 74) < 0.03 and ty["mark"]["fills"] == ["#F3F5F7", "#8CC3D6", "#8CC3D6"])
-    check(f"lower third padding 32 x 40, radius 24, max 960px ({ty['cap']})",
-          near(ty["cap"]["pt"], 32) and near(ty["cap"]["pl"], 40) and near(ty["cap"]["rad"], 24) and ty["cap"]["maxw"] == "960px" and ty["cap"]["w"] <= 961)
+    check(f"lower third padding 24 x 32, radius 24, max 960px ({ty['cap']})",
+          near(ty["cap"]["pt"], 24) and near(ty["cap"]["pl"], 32) and near(ty["cap"]["rad"], 24) and ty["cap"]["maxw"] == "960px" and ty["cap"]["w"] <= 961)
     check(f"lower third bottom left inside the 5% safe area ({ty['cap']['x']}, {ty['cap']['bottom']})", abs(ty["cap"]["x"] - 96) <= 1 and abs(ty["cap"]["bottom"] - (1080 - 54)) <= 1)
     tr = rx.evaluate("""()=>{const c=document.querySelector('#caption'); const on=getComputedStyle(c); const a={d:on.transitionDuration, t:on.transform};
         c.classList.add('quiet'); const q=getComputedStyle(c); const out={on:a, quiet:{d:q.transitionDuration, delay:q.transitionDelay}};
         c.style.transition='none'; out.quiet.t=getComputedStyle(c).transform; c.classList.remove('quiet'); void c.offsetWidth; c.style.transition=''; return out}""")
     check(f"enter 400ms, leave 800ms fade with the 16px offset applied after the fade ({tr})",
-          tr["on"]["d"] == "0.4s, 0.4s" and tr["on"]["t"] == "none" and tr["quiet"]["d"].startswith("0.8s") and "0.8s" in tr["quiet"]["delay"] and tr["quiet"]["t"].endswith(", 16)"))
+          tr["on"]["d"] == "0.4s, 0.4s" and tr["on"]["t"] == "none" and tr["quiet"]["d"].startswith("0.8s") and "0.8s" in tr["quiet"]["delay"] and abs(float(tr["quiet"]["t"].rstrip(")").split(",")[-1]) - 16) <= 1)
     small = rx.evaluate("""()=>[...document.querySelectorAll('#caption, #caption *, #cmd-toast, #paused-pill, #paused-pill *, #unavailable-msg')]
         .filter(e=>[...e.childNodes].some(n=>n.nodeType===3 && n.textContent.trim())).map(e=>[e.id||e.className, parseFloat(getComputedStyle(e).fontSize)]).filter(x=>x[1]<24)""")
     check(f"nothing in the TV overlay is under 24px at 1080p ({small})", small == [])
     tp = rx.evaluate("()=>['#cmd-toast','#paused-pill'].map(s=>{const cs=getComputedStyle(document.querySelector(s)); return [cs.fontSize, cs.lineHeight, cs.fontWeight]})")
     check(f"toast and Paused pill 32/40 600 ({tp})", all(near(f, 32) and near(l, 40) and w == "600" for f, l, w in tp))
+    two_line_check(rx, "1080p")
 
     # ------------------------------------------------------------ pause: covered at once, uncovered when playing again
     rx.evaluate("()=>__receiver.send({type:'pause', value:true})")
@@ -228,7 +249,7 @@ with sync_playwright() as p:
           wait_until(rx, "()=>__receiver.state.camId!==window.__failTarget && __yt.cam().state===1 && document.querySelector('#unavailable').hidden", 6000))
     ctx.close()
 
-    # ------------------------------------------------------------ 720p floor and reduced motion
+    # ------------------------------------------------------------ 720p and 540p: sizes scale with vh, no 1080p px floors; reduced motion
     ctx = b.new_context(viewport={"width": 1280, "height": 720}, reduced_motion="reduce")
     rx = ctx.new_page()
     route(rx, "720p")
@@ -236,9 +257,22 @@ with sync_playwright() as p:
     wait_until(rx, "()=>__receiver.state.camId && __yt.cam() && __yt.cam().state===1", 6000)
     rx.wait_for_timeout(300)
     fl = rx.evaluate("()=>['#cap-title','#cap-meta','#cap-music','#cap-brand'].map(s=>getComputedStyle(document.querySelector(s)).fontSize)")
-    check(f"720p: sizes never below the 1080p values ({fl})", [px(v) for v in fl] == [64, 32, 28, 24])
+    want = [v * 720 / 1080 for v in (48, 24, 24, 24)]
+    check(f"720p: sizes scale with the viewport, title about 32px ({fl})", all(abs(px(v) - w) <= 1 for v, w in zip(fl, want)))
+    mw = rx.evaluate("()=>document.querySelector('#caption').getBoundingClientRect().width")
+    check(f"720p: lower third at most 640px wide (50vw) ({mw})", mw <= 641)
+    two_line_check(rx, "720p")
     rm = rx.evaluate("()=>{const c=document.querySelector('#caption'); c.classList.add('quiet'); const t=getComputedStyle(c).transform; c.classList.remove('quiet'); return t}")
     check(f"reduced motion: no rise on the lower third ({rm})", rm == "none")
+    ctx.close()
+
+    ctx = b.new_context(viewport={"width": 960, "height": 540})
+    rx = ctx.new_page()
+    route(rx, "540p")
+    rx.goto(base + "/receiver.html?debug=1")
+    wait_until(rx, "()=>__receiver.state.camId && __yt.cam() && __yt.cam().state===1", 6000)
+    rx.wait_for_timeout(300)
+    two_line_check(rx, "540p")
     ctx.close()
     b.close()
 
