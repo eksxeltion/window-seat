@@ -808,6 +808,7 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
   grid-row: 1 / -1;
   align-self: center;
   width: 100%;
+  height: calc(486 * var(--u)); /* 16:9 of the 864px pane; fallback if aspect-ratio is missing */
   aspect-ratio: 16 / 9;
   overflow: hidden;
   border-radius: calc(24 * var(--u));

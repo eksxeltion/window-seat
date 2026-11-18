@@ -3,6 +3,7 @@
 "Cast from your phone" opens a QR, D-pad focus ring 4px #8CC3D6). ?tv=0 on a phone keeps the current Home card.
 Usage: test_shade_tv_start.py BASE_URL   (the site root, for example http://localhost:8000/)"""
 import sys, os, base64
+from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
@@ -102,7 +103,9 @@ with sync_playwright() as p:
     check("tv: OK opens the Cast from your phone panel", pg.is_visible("#panel-phone") and pg.text_content("#phone-title") == "Cast from your phone")
     qr = pg.evaluate("()=>{const c=document.querySelector('#phone-qr'); const r=c.getBoundingClientRect(); const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data; let dark=0; for(let i=0;i<d.length;i+=4) if(d[i]<128) dark++; return {w:c.width, cw:r.width, dark}}")
     check(f"tv: panel shows a drawn QR ({qr})", qr["w"] > 100 and qr["cw"] >= 300 and qr["dark"] > 1000)
-    check("tv: QR url is the live app", "window-seat-lemon.vercel.app" in pg.text_content("#phone-url"))
+    # PHONE_URL uses the current origin on https, and the production host on http (tests, local).
+    expected_qr_host = urlparse(base).netloc if urlparse(base).scheme == "https" else "window-seat-lemon.vercel.app"
+    check(f"tv: QR url is the live app ({expected_qr_host})", expected_qr_host in pg.text_content("#phone-url"))
     pg.keyboard.press("Escape")
     pg.wait_for_timeout(300)
     check("tv: Back closes the panel and focus returns to Cast from your phone", not pg.is_visible("#panel-phone") and pg.evaluate("()=>document.activeElement.id") == "start-phone")
