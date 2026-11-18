@@ -11,7 +11,11 @@ rule ends evaluation and is logged as `PR #N: SKIP <reason>`.
 1. Draft: the PR must not be a draft.
 2. Labels: the PR must carry `risk:green` and must not carry `hold`,
    `risk:yellow` or `risk:red`.
-3. Files: no changed file (pulls/{n}/files, paginated; both filename and
+3. Files: the file list (pulls/{n}/files, paginated) must be complete: its
+   length must equal the PR's `changed_files` (taken from the single-PR GET
+   pulls/{n}, which is fetched when the list payload lacks it) and must be
+   below 3000, the API's cap on that endpoint. Otherwise the PR is skipped
+   with "file list incomplete". Then no changed file (both filename and
    previous_filename for renames) may start with `.github/` or equal
    `.gitleaks.toml`. Defense in depth: otherwise a PR could edit the ci
    workflow it is judged by.
@@ -22,8 +26,14 @@ rule ends evaluation and is logged as `PR #N: SKIP <reason>`.
    conclusion success.
 5. CI provenance: the workflow run behind the selected check run (looked up
    via actions/runs?check_suite_id=<check_run.check_suite.id>) must be exactly
-   one run whose path, with any `@ref` suffix stripped, is
-   `.github/workflows/ci.yml` and whose head_sha equals the PR head SHA.
+   one run that is tied to this PR:
+     - path, with any `@ref` suffix stripped, is `.github/workflows/ci.yml`,
+     - head_sha equals the PR head SHA,
+     - event is `pull_request`,
+     - status is `completed` and conclusion is `success`,
+     - its pull_requests array contains an entry whose number is this PR's
+       number. GitHub leaves that array empty for fork PRs, so those are
+       skipped with "ci run not linked to this PR".
 6. Head arrival time T: the latest of
      - the head commit committer date,
      - the LATEST check suite created_at for the head SHA (a suite is created
@@ -44,8 +54,12 @@ rule ends evaluation and is logged as `PR #N: SKIP <reason>`.
    mode, first re-check: re-fetch the PR (pulls/{n}), its labels, files,
    comments, check runs, workflow run and timing data, and re-run rules 1 to 7
    on the fresh data. Merge only if the re-check passes and the head SHA is
-   unchanged; then PUT pulls/{n}/merge with merge_method=squash and
-   sha=<head sha>, and log `PR #N: MERGED` or `PR #N: MERGE FAILED <message>`.
+   unchanged. Then, as a final guard immediately before merging, re-fetch the
+   PR and its labels one last time and re-run only rule 1, rule 2 and the head
+   SHA equality check; if any of them now fails, skip with
+   `final guard: <reason>`. Only then PUT pulls/{n}/merge with
+   merge_method=squash and sha=<head sha>, and log `PR #N: MERGED` or
+   `PR #N: MERGE FAILED <message>`.
    A failed merge does not stop the loop, but makes the script exit 1 at the
    end.
 
@@ -80,6 +94,8 @@ PROTECTED_FILES = frozenset({".gitleaks.toml"})
 CI_CHECK_NAME = "ci"
 CI_APP_SLUG = "github-actions"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+CI_WORKFLOW_EVENT = "pull_request"
+PR_FILES_API_CAP = 3000
 SHIP_PREFIX = "SHIP"
 MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 SHIP_MIN_AGE = timedelta(minutes=60)
@@ -132,8 +148,18 @@ def _is_protected_path(path: Optional[str]) -> bool:
     return path.startswith(PROTECTED_PREFIX) or path in PROTECTED_FILES
 
 
+def check_file_list_complete(files: list[dict], changed_files: Any) -> Optional[str]:
+    """Rule 3, completeness. The fetched list must match the PR's changed_files
+    count and stay below the API cap, otherwise unseen files could be protected."""
+    if not isinstance(changed_files, int) or isinstance(changed_files, bool):
+        return "file list incomplete"
+    if len(files) != changed_files or len(files) >= PR_FILES_API_CAP:
+        return "file list incomplete"
+    return None
+
+
 def check_files(files: Iterable[dict]) -> Optional[str]:
-    """Rule 3. Returns a skip reason, or None if the rule passes."""
+    """Rule 3, protected paths. Returns a skip reason, or None if the rule passes."""
     for f in files:
         if _is_protected_path(f.get("filename")) or _is_protected_path(f.get("previous_filename")):
             return "PR changes .github or .gitleaks.toml"
@@ -180,14 +206,28 @@ def _workflow_path(workflow_run: dict) -> str:
     return (workflow_run.get("path") or "").split("@", 1)[0]
 
 
-def check_ci_provenance(workflow_runs: list[dict], head_sha: str) -> Optional[str]:
-    """Rule 5. The ci check suite must belong to exactly one workflow run of
-    .github/workflows/ci.yml on the PR head SHA."""
+def check_ci_provenance(
+    workflow_runs: list[dict], head_sha: str, pr_number: int
+) -> Optional[str]:
+    """Rule 5. The ci check suite must belong to exactly one successful
+    pull_request workflow run of .github/workflows/ci.yml on the PR head SHA,
+    linked to this PR number."""
     if len(workflow_runs) != 1:
         return f"ci check not from {CI_WORKFLOW_PATH}"
     wr = workflow_runs[0]
     if _workflow_path(wr) != CI_WORKFLOW_PATH or wr.get("head_sha") != head_sha:
         return f"ci check not from {CI_WORKFLOW_PATH}"
+    event = wr.get("event")
+    if event != CI_WORKFLOW_EVENT:
+        return f"ci run event is {event}, not {CI_WORKFLOW_EVENT}"
+    if wr.get("status") != "completed":
+        return "ci run not completed"
+    conclusion = wr.get("conclusion")
+    if conclusion != "success":
+        return f"ci run concluded {conclusion}"
+    linked = wr.get("pull_requests") or []
+    if not any(isinstance(p, dict) and p.get("number") == pr_number for p in linked):
+        return "ci run not linked to this PR"
     return None
 
 
@@ -268,6 +308,16 @@ def check_ship(comments: Iterable[dict], threshold: datetime, now: datetime) -> 
     oldest = min(fresh_times)
     age_min = max(0, int((now - oldest).total_seconds() // 60))
     return f"SHIP comment only {age_min}m old (needs {int(SHIP_MIN_AGE.total_seconds() // 60)})"
+
+
+def check_final_guard(pr: dict, expected_sha: str) -> Optional[str]:
+    """Last check before the merge PUT: rules 1 and 2 plus head SHA equality."""
+    reason = check_draft(pr) or check_labels(pr)
+    if reason:
+        return reason
+    if (pr.get("head") or {}).get("sha") != expected_sha:
+        return "head SHA changed"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +463,12 @@ def evaluate(repo: str, pr: dict, now: datetime, tag: str) -> Optional[str]:
     if not sha:
         return "no head SHA"
 
-    reason = check_files(fetch_files(repo, n))
+    files = fetch_files(repo, n)
+    changed_files = pr.get("changed_files")
+    if not isinstance(changed_files, int):
+        # The list endpoint omits changed_files; the single-PR GET has it.
+        changed_files = fetch_pr(repo, n).get("changed_files")
+    reason = check_file_list_complete(files, changed_files) or check_files(files)
     if reason:
         return reason
 
@@ -425,7 +480,7 @@ def evaluate(repo: str, pr: dict, now: datetime, tag: str) -> Optional[str]:
     suite_id = ci_check_suite_id(ci_run)
     if suite_id is None:
         return f"ci check not from {CI_WORKFLOW_PATH}"
-    reason = check_ci_provenance(fetch_workflow_runs_for_suite(repo, suite_id), sha)
+    reason = check_ci_provenance(fetch_workflow_runs_for_suite(repo, suite_id), sha, n)
     if reason:
         return reason
 
@@ -483,6 +538,15 @@ def evaluate_and_act(repo: str, pr: dict, clock: Callable[[], datetime], live: b
         return skip(f"re-check: API error: {exc}")
     if reason:
         return skip(f"re-check: {reason}")
+
+    # Final guard: the full re-check above makes many API calls, so re-read
+    # the cheap, fast-changing state (draft, labels, head SHA) one last time.
+    try:
+        reason = check_final_guard(refetch_pr(repo, n), sha)
+    except GhError as exc:
+        return skip(f"final guard: API error: {exc}")
+    if reason:
+        return skip(f"final guard: {reason}")
 
     try:
         merge_pr(repo, n, sha)
