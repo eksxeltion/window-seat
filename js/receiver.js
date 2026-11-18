@@ -10,7 +10,7 @@ import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-17.29"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-17.30"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -67,10 +67,10 @@ let mixChoice = false; // set by a phone command just before playMix
 const AUTO_REASONS = new Set(["start", "rotate", "skip", "retry", "list"]);
 
 /** cam_shown: user navigation always, automatic reasons 1 in 4 with sampled: 4. */
-function camShown(camId, reason) {
+function camShown(camId, reason, extra) {
   const user = !AUTO_REASONS.has(reason);
   if (!user && Math.random() >= 0.25) return;
-  capture("cam_shown", { cam_id: camId, reason, mode: "cast", sampled: user ? 1 : 4 });
+  capture("cam_shown", { cam_id: camId, reason, mode: "cast", sampled: user ? 1 : 4, ...extra });
 }
 
 const LIST_ERRORS = [
@@ -119,10 +119,20 @@ const s = {
   failed: new Set(),
 };
 const log = [];
+/* Never throws: callers such as failCam rely on it to reach the skip and the retry timer. */
 function note(type, detail) {
-  log.push({ t: Date.now(), type, detail });
-  if (log.length > 500) log.shift();
-  if (DEBUG) console.log("[receiver]", type, detail === undefined ? "" : JSON.stringify(detail));
+  try {
+    log.push({ t: Date.now(), type, detail });
+    if (log.length > 500) log.shift();
+  } catch {
+    // logging never blocks the caller
+  }
+  if (!DEBUG) return;
+  try {
+    console.log("[receiver]", type, detail === undefined ? "" : JSON.stringify(detail));
+  } catch {
+    // logging never blocks the caller
+  }
 }
 
 const camById = (id) => CAMS.find((c) => c.id === id) || null;
@@ -421,6 +431,62 @@ let wantedCam = null; // camera requested before the YouTube player was ready
 let awaitingRetry = false; // all cams failed: camTick stays idle until the retry timer fires
 let pausedRemaining = 0; // ms left on the rotation clock when the feed was paused (frozen while paused)
 
+/* Load diagnostics: what the cam player did between loadVideoById and commit or failure, so a cam that times
+   out on the TV says why (cam_failed and the camDiag log entry). Reset on every beginLoad; never throws.
+   Every SDK value is reduced to an allowlisted primitive first: finite numbers, 11-char video ids, known quality
+   names, integer state codes, short numeric error codes. No free text, no author or channel names
+   (docs/telemetry.md, privacy rules). */
+let trace = null; // { at (null until loadVideoById), states: [], ignoredPlaying, otherVid, errors: [] }
+const VID_RE = /^[A-Za-z0-9_-]{11}$/;
+const QUALITIES = new Set(["tiny", "small", "medium", "large", "hd720", "hd1080", "hd1440", "hd2160", "highres", "auto", "default", "unknown"]);
+const vidOr = (v) => (typeof v === "string" && VID_RE.test(v) ? v : undefined);
+const qualityOr = (v) => (typeof v === "string" && QUALITIES.has(v) ? v : undefined);
+const fin = (v) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+const roundTo = (v, k) => (v === undefined ? undefined : fin(Math.round(v * k) / k));
+const intOr = (v, other) => (Number.isInteger(v) ? v : other);
+const errCode = (v) => {
+  try {
+    const str = String(v);
+    return /^\d{1,4}$/.test(str) ? str : "?";
+  } catch {
+    return "?";
+  }
+};
+const sinceLoad = () => (trace && trace.at !== null ? fin(Date.now() - trace.at) : undefined);
+/* scope "load": the failure is the pending load of this cam, so the load trace belongs to it.
+   scope "snapshot": only the live player state (for example a committed cam that stalled later). */
+function camDiag(camId, scope) {
+  const data = quietly(() => camPlayer.getVideoData()) || {};
+  const vid = vidOr(quietly(() => data.video_id));
+  const isLive = quietly(() => data.isLive);
+  const t = fin(quietly(() => camPlayer.getCurrentTime()));
+  const loadedRaw = fin(quietly(() => camPlayer.getVideoLoadedFraction()));
+  const loaded = loadedRaw === undefined ? undefined : Math.min(1, Math.max(0, loadedRaw));
+  const muted = quietly(() => camPlayer.isMuted());
+  const diag = {
+    diag_v: 1,
+    trace_scope: scope,
+    last_state: intOr(quietly(() => camPlayer.getPlayerState()), undefined),
+    vid,
+    vid_match: vid !== undefined && vid === camId,
+    is_live: typeof isLive === "boolean" ? isLive : undefined,
+    t: roundTo(t, 10),
+    loaded: roundTo(loaded, 100),
+    quality: qualityOr(quietly(() => camPlayer.getPlaybackQuality())),
+    levels: intOr(quietly(() => camPlayer.getAvailableQualityLevels().length), undefined),
+    muted: typeof muted === "boolean" ? muted : undefined,
+    music_state: intOr(quietly(() => musicPlayer.getPlayerState()), undefined),
+  };
+  if (scope === "load" && trace) {
+    diag.ms = sinceLoad();
+    diag.states = trace.states.join(",");
+    diag.ignored_playing = intOr(trace.ignoredPlaying, 0);
+    diag.other_vid = vidOr(trace.otherVid);
+    diag.errors = trace.errors.length ? trace.errors.join(",") : undefined;
+  }
+  return diag;
+}
+
 const blackout = $("blackout");
 /* Lifting the field (a cam is on screen again) also clears the unavailable message. */
 const fadeTo = (on) => {
@@ -535,6 +601,7 @@ function beginLoad(camId, reason = "rotate", origin = reason) {
   rotateOrigin = origin;
   shownReason = reason === "cam" ? "pick" : reason;
   pending = { camId, startedAt: Date.now(), loading: false };
+  trace = { at: null, states: [], ignoredPlaying: 0, otherVid: undefined, errors: [] };
   stall = null;
   fadeTo(true);
   setTimeout(() => {
@@ -542,6 +609,7 @@ function beginLoad(camId, reason = "rotate", origin = reason) {
     pending.loading = true;
     pending.startedAt = Date.now();
     camMute();
+    trace.at = Date.now();
     quietly(() => camPlayer.loadVideoById(camId));
     camMute();
   }, s.camId ? FADE_MS : 0);
@@ -556,6 +624,7 @@ function commitPending() {
   s.camId = cam.id;
   pending = null;
   stall = null;
+  const loadDiag = { load_ms: sinceLoad(), ignored_playing: trace ? intOr(trace.ignoredPlaying, 0) : undefined };
   nextSwapAt = Date.now() + s.interval * 1000;
   if (s.paused) {
     // Changed cam while paused: show its first frame, then hold it (no autoplay).
@@ -569,7 +638,7 @@ function commitPending() {
   if (!s.paused) setPauseCover(false);
   hideSplash();
   note("rotate", { camId: cam.id, reason: rotateReason });
-  camShown(cam.id, shownReason);
+  camShown(cam.id, shownReason, loadDiag);
   // Time to first frame: the first cam after load that is not the random start cam (TV clock).
   if (!firstFrameSent && rotateReason !== "start") {
     firstFrameSent = true;
@@ -581,7 +650,22 @@ function commitPending() {
 
 function failCam(camId, why) {
   note("camError", { camId, why });
-  if (!s.failed.has(camId)) capture("cam_failed", { cam_id: camId, why: /^error/.test(why) ? "error" : String(why).replace(/\s+/g, "_") });
+  const scope = why === "load timeout" && pending && pending.camId === camId ? "load" : "snapshot";
+  const diag = why === "load timeout" || why === "stalled" ? quietly(() => camDiag(camId, scope)) : undefined;
+  if (diag) {
+    try {
+      note("camDiag", { camId, why, ...diag });
+    } catch {
+      // diagnostics never block the skip
+    }
+  }
+  if (!s.failed.has(camId)) {
+    try {
+      capture("cam_failed", { ...diag, cam_id: camId, why: /^error/.test(why) ? "error" : String(why).replace(/\s+/g, "_") });
+    } catch {
+      // diagnostics never block the skip
+    }
+  }
   s.failed.add(camId);
   const from = pending && pending.camId === camId ? rotateOrigin : "skip";
   pending = null;
@@ -607,9 +691,14 @@ function onCamState(e) {
   const code = e.data;
   if (code === YS.PLAYING || code === YS.BUFFERING) camMute();
   if (code === YS.PLAYING && !s.paused) setPauseCover(false);
+  if (pending && pending.loading && trace && trace.states.length < 24) trace.states.push(intOr(code, "?") + "@" + sinceLoad());
   if (pending && pending.loading && code === YS.PLAYING) {
     const vid = quietly(() => camPlayer.getVideoData().video_id);
     if (!vid || vid === pending.camId) commitPending();
+    else if (trace) {
+      trace.ignoredPlaying++;
+      trace.otherVid = vidOr(vid);
+    }
   }
 }
 
@@ -620,9 +709,20 @@ function onCamError(e) {
   const camId = pending ? pending.camId : s.camId;
   // Only fail the cam the player actually reports, so a late error from a replaced video is ignored.
   const reported = quietly(() => camPlayer.getVideoData().video_id);
-  if (reported && camId && reported !== camId) return;
-  if (camId) capture("player_error", { player: "cam", cam_id: camId, code: e.data, mode: "cast" });
-  if (camId) failCam(camId, "error " + e.data);
+  const code = errCode(quietly(() => e.data));
+  if (reported && camId && reported !== camId) {
+    // Not captured as player_error: keep it for the load diagnostics.
+    if (pending && pending.loading && trace && trace.errors.length < 8) trace.errors.push(code);
+    return;
+  }
+  if (camId) {
+    try {
+      capture("player_error", { player: "cam", cam_id: camId, code, mode: "cast" });
+    } catch {
+      // telemetry never blocks the skip
+    }
+    failCam(camId, "error");
+  }
 }
 
 function camTick() {
