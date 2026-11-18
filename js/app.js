@@ -197,7 +197,7 @@ const el = {
   volumeOut: $("#music-volume-out"),
   mixVolume: $("#mix-volume"),
   mixVolumeOut: $("#mix-volume-out"),
-  panels: { cams: $("#panel-cams"), music: $("#panel-music"), tv: $("#panel-tv"), about: $("#panel-about") },
+  panels: { cams: $("#panel-cams"), music: $("#panel-music"), tv: $("#panel-tv"), phone: $("#panel-phone"), about: $("#panel-about") },
 };
 
 const quietly = (fn) => {
@@ -1669,6 +1669,7 @@ function openPanel(name, opener) {
   if (name === "cams") target = $(`.cam-row[data-id="${showingCamId()}"] [data-action="watch"]`, panel);
   if (name === "music") target = $(`.mix-btn[data-id="${shownMusic().mixId}"]`, panel);
   if (name === "tv") renderTvQr();
+  if (name === "phone") renderPhoneQr();
   if (!target) target = $(FOCUSABLE, panel);
   if (target) {
     target.focus();
@@ -1676,20 +1677,20 @@ function openPanel(name, opener) {
   }
 }
 
-let qrDone = false;
+// The app as a phone should open it: this origin when it is served over https, otherwise the live app.
+const PHONE_URL = location.protocol === "https:" ? `${location.origin}/` : "https://window-seat-lemon.vercel.app/";
+const qrDrawn = new Set();
 
-/** Draw the QR code for TV_URL into the panel canvas, with a white quiet zone of 4 modules. */
-function renderTvQr() {
-  $("#tv-url").textContent = TV_URL;
-  if (qrDone) return;
+/** Draw a QR code for `url` into `canvas`, with a white quiet zone of 4 modules. */
+function drawQr(canvas, url) {
+  if (qrDrawn.has(canvas)) return;
   const qr = qrcode(0, "M");
-  qr.addData(TV_URL);
+  qr.addData(url);
   qr.make();
   const n = qr.getModuleCount();
   const cell = 8;
   const quiet = 4;
   const size = (n + quiet * 2) * cell;
-  const canvas = $("#tv-qr");
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d");
@@ -1697,7 +1698,19 @@ function renderTvQr() {
   ctx.fillRect(0, 0, size, size);
   ctx.fillStyle = "#000";
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
-  qrDone = true;
+  qrDrawn.add(canvas);
+}
+
+/** Open in TV browser panel: QR for TV_URL. */
+function renderTvQr() {
+  $("#tv-url").textContent = TV_URL;
+  drawQr($("#tv-qr"), TV_URL);
+}
+
+/** Cast from your phone panel (10-foot start): QR for the app on a phone. */
+function renderPhoneQr() {
+  $("#phone-url").textContent = PHONE_URL.replace(/^https:\/\//, "").replace(/\/$/, "");
+  drawQr($("#phone-qr"), PHONE_URL);
 }
 
 function closePanel(restoreFocus = true) {
@@ -2377,6 +2390,8 @@ function handleAction(action, btn) {
       return openPanel("music", btn);
     case "open-tv":
       return openPanel("tv", btn);
+    case "open-phone":
+      return openPanel("phone", btn);
     case "open-about":
       return openPanel("about", btn);
     case "toggle-chrome":

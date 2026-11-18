@@ -38,6 +38,7 @@
     <symbol id="i-controls" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="17" r="2" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
     <symbol id="i-lite" viewBox="0 0 24 24"><path d="M13 3L5 13.5h6L10 21l8-10.5h-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
     <symbol id="i-tv" viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="12.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 20.5h8M12 17v3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10.5 18h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.6" r="1.2" fill="currentColor"/></symbol>
     <symbol id="i-cast" viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11z" fill="currentColor"/></symbol>
     <symbol id="i-cast-connected" viewBox="0 0 24 24"><path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm18-7H5v1.63c3.96 1.28 7.09 4.41 8.37 8.37H19V7zM1 10v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" fill="currentColor"/></symbol>
@@ -187,6 +188,20 @@
     </div>
   </section>
 
+  <!-- Cast from your phone (10-foot start only): a QR for the app, so someone on the couch can pick up a phone and Cast. -->
+  <section id="panel-phone" class="panel" role="dialog" aria-modal="true" aria-labelledby="phone-title" hidden>
+    <header class="panel-head">
+      <h2 id="phone-title">Cast from your phone</h2>
+      <button class="btn" type="button" data-action="close-panel">Close</button>
+    </header>
+    <div class="panel-body tv-send phone-send">
+      <div class="qr-box"><canvas id="phone-qr" aria-label="QR code for the Window Seat app"></canvas></div>
+      <p class="tv-url" id="phone-url"></p>
+      <p class="tv-hint">Scan with your phone camera to open Window Seat.</p>
+      <p class="tv-hint">Then tap Cast to your TV and pick this TV.</p>
+    </div>
+  </section>
+
   <!-- About panel -->
   <section id="panel-about" class="panel" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
     <header class="panel-head">
@@ -275,6 +290,10 @@
       </button>
       <button class="btn btn-cast cast-launcher cast-start" type="button" data-cast hidden><google-cast-launcher></google-cast-launcher><svg class="icon cast-glyph" aria-hidden="true"><use href="#i-cast"></use></svg><span class="cast-label">Cast to your TV</span></button>
       <p class="cast-status" role="status" hidden></p>
+      <!-- 10-foot start only (body.tv): opens the QR panel. Hidden on phone and desktop. -->
+      <button id="start-phone" class="btn btn-tv-phone" type="button" data-action="open-phone" aria-haspopup="dialog">
+        <svg class="icon" aria-hidden="true"><use href="#i-phone"></use></svg><span>Cast from your phone</span>
+      </button>
       <div class="start-ghosts">
         <button id="start-tv" class="btn btn-ghost" type="button" data-action="open-tv" aria-haspopup="dialog">Open in TV browser</button>
         <button id="start-about" class="btn btn-ghost" type="button" data-action="open-about" aria-haspopup="dialog">About and credits</button>
