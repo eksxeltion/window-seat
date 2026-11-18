@@ -274,8 +274,14 @@ function buildRemote() {
   ui.still.addEventListener("load", () => (ui.still.hidden = false));
   ui.still.addEventListener("error", () => (ui.still.hidden = true));
   // Music volume: the track follows the finger; one absolute volume goes to the TV on release (as in the Mix sheet).
-  ui.volume.addEventListener("input", () => ui.volume.style.setProperty("--vol", `${ui.volume.value}%`));
-  ui.volume.addEventListener("change", () => remoteVolume(ui.volume.value));
+  // Do not treat lingering focus as a drag: after release, later TV state must still move the thumb.
+  const setVolCss = () => ui.volume.style.setProperty("--vol", `${ui.volume.value}%`);
+  ui.volume.addEventListener("pointerdown", () => { ui.volumeDragging = true; });
+  const endVolDrag = () => { ui.volumeDragging = false; };
+  ui.volume.addEventListener("pointerup", endVolDrag);
+  ui.volume.addEventListener("pointercancel", endVolDrag);
+  ui.volume.addEventListener("input", setVolCss);
+  ui.volume.addEventListener("change", () => { endVolDrag(); remoteVolume(ui.volume.value); });
   // The Cams and Mix buttons carry data-action: js/app.js opens the same sheets as on the local player.
   root.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-cmd]");
@@ -376,7 +382,7 @@ function renderRemote() {
   ui.play.querySelector("use").setAttribute("href", remote.paused ? "#i-play" : "#i-pause");
   ui.play.lastElementChild.textContent = remote.paused ? "Play" : "Pause";
   const vol = Number.isFinite(Number(remote.volume)) ? Math.min(100, Math.max(0, Math.round(Number(remote.volume)))) : 60;
-  if (document.activeElement !== ui.volume) ui.volume.value = String(vol);
+  if (!ui.volumeDragging) ui.volume.value = String(vol);
   ui.volume.style.setProperty("--vol", `${ui.volume.value}%`);
   ui.hairline.hidden = !remote.paused;
   ui.pauseWarn.hidden = !(remote.paused && remote.pauseWarning);
