@@ -14,6 +14,19 @@ let providers = { now: () => ({}), cast: () => ({}), toast: () => {}, onChange: 
 const ui = {};
 let timer = 0;
 
+const MONO_FONT_URL = "https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@500&display=swap";
+
+/* Roboto Mono 500 for the debug panel, requested the first time Debug is turned on. Optional: a failed or slow
+   request never blocks anything, and the --font-mono stack falls back to the system monospace. */
+function loadMonoFont() {
+  if (document.querySelector("link[data-font-mono]")) return;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = MONO_FONT_URL;
+  link.dataset.fontMono = "";
+  document.head.append(link);
+}
+
 export const hhmmss = (d = new Date()) => d.toTimeString().slice(0, 8);
 
 /** Add one Cast event to the ring buffer. Repeats of the same text collapse into one line with a count. */
@@ -226,6 +239,7 @@ export function setDebug(value) {
   const toggle = document.getElementById("debug-toggle");
   if (toggle) toggle.checked = on;
   clearInterval(timer);
+  if (on) loadMonoFont();
   if (on) timer = setInterval(render, 1000); // live values (cast state, counts) without wiring every change
   render();
   logEvent(`debug ${on ? "on" : "off"}`);

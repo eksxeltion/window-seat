@@ -9,7 +9,7 @@
   --color-surface-raised: #eef3f6;
   --color-ink: #102536;
   --color-ink-secondary: #4a5c68;
-  --color-ink-tertiary: #7b8b96;
+  --color-ink-tertiary: #5a6b76; /* was #7b8b96 (3.5:1); now 5.06:1 on canvas */
   --color-line: #d5dee4;
   --color-primary: #102536;
   --color-primary-press: #0a1b28;
@@ -20,7 +20,7 @@
   --color-success: #2c6a4f;
   --color-danger: #8f3a3a;
   --color-danger-soft: #f6e6e6;
-  --color-sleeping: #6b7c89;
+  --color-sleeping: #5a6b76; /* was #6b7c89 */
 
   /* Night field (local full-screen player only) */
   --color-night-field: #0a1a26;
@@ -46,7 +46,7 @@
   --radius-sm: 0.5rem;
   --radius-md: 1rem;
   --radius-lg: 1.5rem;
-  --radius-xl: 2rem;
+  --radius-xl: 1.75rem; /* 28px: sheet top corners, matches M3 extraLarge (was 32px) */
   --radius-pill: 999px;
 
   /* Elevation */
@@ -265,7 +265,7 @@ body:not(.lp-on) #tuning { display: none; }
 
 .lp-info { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-12); min-height: 3rem; }
 .caption { min-width: 0; flex: 1; }
-.cap-title { font-size: 1.375rem; line-height: 1.75rem; font-weight: 650; color: var(--color-on-glass); overflow-wrap: anywhere; }
+.cap-title { font-size: 1.375rem; line-height: 1.75rem; font-weight: 600; color: var(--color-on-glass); overflow-wrap: anywhere; }
 .cap-meta { margin-top: var(--space-4); font-size: 0.875rem; line-height: 1.25rem; color: var(--color-on-glass-secondary); }
 
 /* Pin cam: a text pill. Outline when idle, filled night accent when pinned. Never says pause. */
@@ -546,7 +546,7 @@ body:not(.lp-on) #tuning { display: none; }
   gap: var(--space-16);
   padding: var(--space-24) var(--space-24) var(--space-12);
 }
-.panel-head h2 { margin: 0; font-size: 1.75rem; line-height: 2.125rem; font-weight: 650; }
+.panel-head h2 { margin: 0; font-size: 1.75rem; line-height: 2.125rem; font-weight: 600; }
 .panel-tools {
   display: flex;
   flex-wrap: wrap;
@@ -692,7 +692,7 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 .fineprint { margin-top: var(--space-20); font-size: 0.875rem; color: var(--color-ink-tertiary); }
 
 .prose { font-size: 1rem; line-height: 1.5rem; color: var(--color-ink-secondary); max-width: 46rem; }
-.prose h3 { margin: var(--space-24) 0 var(--space-8); color: var(--color-ink); font-size: 1.125rem; font-weight: 650; }
+.prose h3 { margin: var(--space-24) 0 var(--space-8); color: var(--color-ink); font-size: 1.125rem; font-weight: 600; }
 .prose h4 { margin: var(--space-16) 0 var(--space-4); color: var(--color-ink); font-size: 1rem; font-weight: 600; }
 .prose ul { padding-left: var(--space-20); margin: var(--space-4) 0; }
 .prose li { margin: var(--space-4) 0; }
@@ -722,8 +722,9 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
   padding: calc(var(--safe-top) + var(--space-40)) var(--space-24) calc(var(--safe-bottom) + var(--space-32));
   animation: fade-in 200ms ease-out both;
 }
-.wordmark { display: flex; align-items: center; gap: var(--space-12); color: var(--color-ink); }
-.wordmark-mark { width: 2rem; height: 2rem; flex: none; }
+/* Shade mark: 1.75 x the wordmark cap height (about 48px beside the 40px Fraunces h1), gap 0.67 x cap height. */
+.wordmark { display: flex; align-items: center; gap: 1.125rem; color: var(--color-ink); }
+.wordmark-mark { width: auto; height: 3rem; aspect-ratio: 52 / 74; flex: none; }
 .start h1 { margin: 0; font-family: var(--font-display); font-size: 2.5rem; line-height: 3rem; font-weight: 600; letter-spacing: -0.02em; }
 .tagline { margin: 0 0 var(--space-12); font-size: 1rem; line-height: 1.5rem; color: var(--color-ink-secondary); }
 
@@ -739,7 +740,8 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 .hero-media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 .hero-text { padding: var(--space-16) var(--space-20) var(--space-20); }
 .hero-text p { margin: 0; }
-.hero-label { font-size: 0.75rem; line-height: 1rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-accent); font-weight: 600; }
+/* Caption role: sentence case, ink-secondary (accent is for actions and data only). */
+.hero-label { font-size: 0.75rem; line-height: 1rem; letter-spacing: 0.02em; color: var(--color-ink-secondary); font-weight: 600; }
 .hero-time { margin-top: var(--space-8) !important; font-family: var(--font-display); font-size: 1.5rem; line-height: 2rem; font-weight: 600; letter-spacing: -0.01em; }
 .hero-line { margin-top: var(--space-4) !important; font-size: 1rem; line-height: 1.5rem; color: var(--color-ink-secondary); }
 .hero-cam { margin-top: var(--space-8) !important; font-size: 0.875rem; line-height: 1.25rem; color: var(--color-ink-tertiary); }
@@ -772,7 +774,7 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 .tv-send { display: flex; flex-direction: column; align-items: center; gap: var(--space-16); text-align: center; }
 .qr-box { padding: var(--space-12); background: #fff; border-radius: var(--radius-md); line-height: 0; box-shadow: var(--shadow-1); }
 #tv-qr { width: min(18rem, 50vh); height: min(18rem, 50vh); image-rendering: pixelated; }
-.tv-url { margin: 0; font-size: 1.375rem; font-weight: 650; word-break: break-all; color: var(--color-ink); }
+.tv-url { margin: 0; font-size: 1.375rem; font-weight: 600; word-break: break-all; color: var(--color-ink); }
 .tv-hint { margin: 0; font-size: 1rem; color: var(--color-ink-secondary); }
 
 /* ---------- TV browser (10-foot): bigger focus ---------- */
@@ -847,11 +849,11 @@ body.casting #stage, body.casting #tap-music, body.casting #tuning { display: no
 .remote-pill .icon { width: 1.25rem; height: 1.25rem; }
 .remote-card { padding: var(--space-16) var(--space-20); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-1); }
 .remote-now { margin: var(--space-4) 0; font-size: 1rem; }
-.remote-now strong { font-weight: 650; }
+.remote-now strong { font-weight: 600; }
 .remote-label { display: inline-block; min-width: 3.5rem; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-ink-tertiary); }
 .remote-row { display: flex; gap: var(--space-8); align-items: center; }
 .remote-row .btn { flex: 1; min-height: 3.5rem; padding: 0 var(--space-8); }
-.remote-row output { min-width: 2.75rem; text-align: center; font-size: 1.125rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.remote-row output { min-width: 2.75rem; text-align: center; font-size: 1.125rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .remote-mixes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-8); }
 .remote-mixes .btn { width: 100%; justify-content: flex-start; text-align: left; padding: var(--space-12) var(--space-16); }
 .remote-status { margin: 0; font-size: 0.875rem; color: var(--color-ink-secondary); }
@@ -914,7 +916,7 @@ body.casting #stage, body.casting #tap-music, body.casting #tuning { display: no
 .debug-rows { display: grid; grid-template-columns: 5.2rem 1fr; gap: 0.15rem 0.6rem; margin: 0 0 var(--space-4); padding-bottom: var(--space-8); border-bottom: 1px solid var(--color-overlay-line); }
 .debug-rows dt { color: var(--color-on-glass-secondary); }
 .debug-rows dd { margin: 0; color: var(--color-on-glass); font: 500 0.8125rem/1.125rem var(--font-mono); word-break: break-word; }
-.debug-events { list-style: none; margin: 0 0 var(--space-12); padding: 0; font: 0.72rem/1.4 var(--font-mono); color: var(--color-on-glass-secondary); word-break: break-word; }
+.debug-events { list-style: none; margin: 0 0 var(--space-12); padding: 0; font: 500 0.72rem/1.4 var(--font-mono); color: var(--color-on-glass-secondary); word-break: break-word; }
 .debug-copy { width: 100%; justify-content: center; font-size: 0.875rem; }
 /* Casting: a row in the remote's flow, under the casting pill, as a white card. Never over transport or volume. */
 .debug-panel.in-remote { position: static; transform: none; width: 100%; align-items: stretch; opacity: 1; }

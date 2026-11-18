@@ -9,12 +9,15 @@
   <meta name="theme-color" content="#F3F5F7">
   <meta name="color-scheme" content="light">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='16' fill='%23F3F5F7'/%3E%3Crect x='16' y='14' width='32' height='36' rx='6' fill='none' stroke='%23102536' stroke-width='4'/%3E%3Cpath d='M32 14v36M16 32h32' stroke='%23102536' stroke-width='4'/%3E%3C/svg%3E">
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" sizes="any">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- Web fonts (Fraunces, Plus Jakarta Sans, Noto Sans JP) are added by js/app.js after load, so a failed or slow
-       font request never blocks the page. The CSS stacks fall back to Source Serif 4 and system-ui. -->
+       font request never blocks the page. The CSS stacks fall back to Source Serif 4 and system-ui. Roboto Mono is
+       requested only when Debug is turned on. -->
   <link rel="stylesheet" href="css/style.css">
   <script type="module" src="js/app.js"></script>
 </head>
@@ -250,7 +253,9 @@
   <div id="start" class="start">
     <div class="start-inner">
       <header class="wordmark">
-        <svg class="wordmark-mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="5" y="4" width="22" height="24" rx="5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M16 4v24M5 16h22" stroke="currentColor" stroke-width="2.4"/></svg>
+        <!-- Shade mark, day colors (frame #102536, blind #2F6F8A). Paths copied verbatim from icons/shade/mark.svg;
+             the viewBox only trims the 96-unit box to the 52 x 74 window. -->
+        <svg class="wordmark-mark" viewBox="22 11 52 74" aria-hidden="true" focusable="false"><path fill="#102536" fill-rule="evenodd" d="M42,11H54A20,20 0 0 1 74,31V65A20,20 0 0 1 54,85H42A20,20 0 0 1 22,65V31A20,20 0 0 1 42,11ZM42.0,16.8H54.0A14.2,14.2 0 0 1 68.2,31.0V65.0A14.2,14.2 0 0 1 54.0,79.2H42.0A14.2,14.2 0 0 1 27.8,65.0V31.0A14.2,14.2 0 0 1 42.0,16.8Z"/><path fill="#2F6F8A" d="M42.0,20.400000000000002H53.99999999999999A10.6,10.6 0 0 1 64.6,31.0V42.400000000000006H31.400000000000002V31.0A10.6,10.6 0 0 1 42.0,20.400000000000002Z"/><path fill="#2F6F8A" d="M33.0,44.400000000000006H62.99999999999999A1.6,1.6 0 0 1 64.6,46.00000000000001V46.00000000000001A1.6,1.6 0 0 1 62.99999999999999,47.60000000000001H33.0A1.6,1.6 0 0 1 31.400000000000002,46.00000000000001V46.00000000000001A1.6,1.6 0 0 1 33.0,44.400000000000006Z"/></svg>
         <h1>Window Seat</h1>
       </header>
       <p class="tagline">Live windows onto the world, with soft music, made for your TV.</p>

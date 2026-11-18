@@ -1,14 +1,16 @@
 # Window Seat design system
 
-This is the design source of truth for the Window Seat visual redesign. It is a proposal, not shipped UI. The matching mocks live in the Paper file [Window Seat redesign v1](https://app.paper.design/file/01M7KCRQZVMH15C8SWE16RHQFE). v1 artboards are kept in place. v2 artboards sit next to them and reflect the decisions below. Comment on the artboards there; we will iterate from those notes before any app code changes.
+This document describes the design that ships in this repo: the bright fog-and-navy phone app, the night-field local player, and the TV receiver, under the Shade brand. The mocks live in the Paper file [Window Seat redesign v1](https://app.paper.design/file/01M7KCRQZVMH15C8SWE16RHQFE).
 
-The live app today is a dark, gold-accent media player with a crowded control bar. The redesign keeps the product job (phone as remote, TV as the window) and makes the phone feel like a polished consumer app: bright, calm, and easy to use one-handed. Local playback is the exception: once a cam is playing on the phone, it goes full screen, with controls overlaid on the picture.
+The full, newer system (Material 3 roles, Android, the 10-foot start, and the remaining audit fixes) lives in the Rams studio Window Seat DESIGN.md. Where the two disagree, that document wins; this one is kept in step as each piece lands here.
+
+The live app keeps the product job (phone as remote, TV as the window) and feels like a polished consumer app: bright, calm, and easy to use one-handed. Local playback is the exception: once a cam is playing on the phone, it goes full screen, with controls overlaid on the picture. The old dark, gold-accent media player and its gold four-pane PWA icon are retired.
 
 ## Mood
 
 **Maritime, late afternoon at a harbor window.** Soft sea fog on the walls, deep navy for ink and actions, one horizon-blue accent. The scene is a bright living room with a window open to water and city light, not a cinema or a travel brochure.
 
-This is a deliberate step away from the current black-and-gold look, and also away from the common warm-linen-plus-terracotta palette. Airbnb is a reference for hospitality, spacing, and photography as the hero, not for coral buttons on cream.
+This is a deliberate step away from the old black-and-gold look, and also away from the common warm-linen-plus-terracotta palette. Airbnb is a reference for hospitality, spacing, and photography as the hero, not for coral buttons on cream.
 
 On the TV, and on the phone's full-screen local player, the same palette goes nocturnal: the video is the picture, and type sits in a dark water-glass overlay that fades after a change.
 
@@ -32,7 +34,7 @@ Used on Home, the cam menu, the mix picker, and the casting remote.
 | `--color-surface-raised` | `#EEF3F6` | Recessed wells, chip tracks | Shallow tide pool |
 | `--color-ink` | `#102536` | Primary text, icons | Deep harbor water at dusk |
 | `--color-ink-secondary` | `#4A5C68` | Meta, labels | Wet slate |
-| `--color-ink-tertiary` | `#7B8B96` | Captions, timestamps | Distant haze |
+| `--color-ink-tertiary` | `#5A6B76` | Captions, timestamps (5.06:1 on canvas; was `#7B8B96`, 3.5:1) | Distant haze |
 | `--color-line` | `#D5DEE4` | Hairline borders | Horizon mist |
 | `--color-primary` | `#102536` | Primary buttons, key actions | Same navy as ink |
 | `--color-primary-ink` | `#FFFFFF` | Text on primary | Sail canvas |
@@ -41,7 +43,7 @@ Used on Home, the cam menu, the mix picker, and the casting remote.
 | `--color-focus` | `#2F6F8A` | Focus ring | Horizon blue |
 | `--color-success` | `#2C6A4F` | In-rotation, connected | Harbor pine |
 | `--color-danger` | `#8F3A3A` | Destructive or excluded | Channel marker |
-| `--color-sleeping` | `#6B7C89` | Local times and Sleeping marks for night cams | Late harbor haze |
+| `--color-sleeping` | `#5A6B76` | Local times and Sleeping marks for night cams (was `#6B7C89`) | Late harbor haze |
 
 ### Night field (local full-screen player and TV)
 
@@ -51,7 +53,7 @@ Used on top of video only: the phone's full-screen local player, the TV lower th
 | --- | --- | --- |
 | `--color-night-field` | `#0A1A26` | Full-screen player field when no still is shown |
 | `--color-night-glass` | `rgba(10, 26, 38, 0.72)` | Glass panels and scrims on the local player |
-| `--color-accent-night` | `#8CC3D6` | Pinned pill, night accent, readable on video |
+| `--color-accent-night` | `#8CC3D6` | The one night accent: pinned pill, playing or pinned marker, readable on video. Also the receiver's only accent. |
 | `--color-on-glass` | `#F3F5F7` | Titles and primary labels on glass |
 | `--color-on-glass-secondary` | `#A9B8C3` | Meta on glass |
 | `--color-overlay` | `rgba(10, 18, 24, 0.62)` | Glass behind the TV lower third |
@@ -59,13 +61,14 @@ Used on top of video only: the phone's full-screen local player, the TV lower th
 | `--color-overlay-ink` | `#F3F5F7` | Title and brand |
 | `--color-overlay-dim` | `rgba(243, 245, 247, 0.78)` | City, country, mix line |
 | `--color-overlay-line` | `rgba(255, 255, 255, 0.16)` | Hairline on glass |
-| `--color-overlay-accent` | `#8EC4D4` | Playing or pinned marker, readable on video |
+
+`--color-overlay-accent` (`#8EC4D4`) is retired: there is one night accent, `--color-accent-night`. On the receiver, `--color-field` (`#0A1A26`, same as the night field) is the ground for the launch splash and the fade between cams.
 
 The video itself stays untouched. No colored grade on the cam. A soft bottom scrim exists only while chrome is visible on the local player or the TV lower third is on screen.
 
-### Mapping from the current app
+### Mapping from the old app (retired)
 
-| Today | Redesign |
+| Old | Now |
 | --- | --- |
 | `#000` body, `#ffd27f` gold accent, cream type | Bright fog canvas and navy ink on the phone |
 | Glass bar `rgba(18, 18, 24, 0.82)` | White sheets, and night glass only over video |
@@ -73,11 +76,15 @@ The video itself stays untouched. No colored grade on the cam. A soft bottom scr
 
 ## Type
 
-**Display:** Fraunces (soft optical serif). Wordmark, start-screen title, TV cam title. Weight 500 or 600. Tracking slightly tight on large sizes (`-0.02em` at 40px and up).
+**Display:** Fraunces (soft optical serif). Wordmark, start-screen title, TV cam title. Weight 600 only (opsz axis on, SOFT 0, WONK 0). Tracking slightly tight on large sizes (`-0.02em` at 40px and up).
 
-**UI:** Plus Jakarta Sans. Everything else: buttons, meta, lists, chips, mix titles. Weights 500, 600, 700. Labels and small caps use weight 500 with open tracking (`0.06em`).
+**UI:** Plus Jakarta Sans. Everything else: buttons, meta, lists, chips, mix titles. Weights 500 and 600 only (700 and the non-existent 650 are no longer used or loaded). Section labels use weight 500 with open tracking (`0.06em`).
 
-**Japanese:** Noto Sans JP, for mix Japanese titles only. Cam names stay in the sheet language (almost always English).
+**Japanese:** Noto Sans JP 500, for mix Japanese titles only. Cam names stay in the sheet language (almost always English).
+
+**Mono:** Roboto Mono 500, debug surfaces only. It is requested only when Debug mode is turned on.
+
+Web fonts are added after page load and are always optional: a failed or slow request never blocks the page.
 
 If a family is missing at build time, fall back to `Source Serif 4` for display, `system-ui` for UI, and `Noto Sans JP` or `system-ui` for Japanese, and keep the same sizes.
 
@@ -86,11 +93,12 @@ If a family is missing at build time, fall back to `Source Serif 4` for display,
 | Name | Size / line | Weight | Use |
 | --- | --- | --- | --- |
 | Display | 40 / 48 | Fraunces 600 | Start wordmark |
-| Title | 28 / 34 | Plus Jakarta 650 | Sheet titles |
-| Title sm | 22 / 28 | Plus Jakarta 650 | Now-playing cam name |
+| Title | 28 / 34 | Plus Jakarta 600 | Sheet titles |
+| Title sm | 22 / 28 | Plus Jakarta 600 | Now-playing cam name |
 | Body | 16 / 24 | Plus Jakarta 500 | Lists, descriptions |
 | Body sm | 14 / 20 | Plus Jakarta 500 | City, country, duration |
-| Caption | 12 / 16 | Plus Jakarta 500, tracking 0.06em | Section labels, type tags |
+| Caption | 12 / 16 | Plus Jakarta 600, tracking 0.02em, sentence case, ink-secondary | "Right now" on the Home hero |
+| Section label | 12 / 16 | Plus Jakarta 500, tracking 0.06em | Section labels, type tags |
 | Button | 16 / 20 | Plus Jakarta 600 | Buttons |
 
 ### TV scale (10-foot, designed at 1920x1080)
@@ -131,7 +139,7 @@ Rhythm: tight within a control (8 or 12), comfortable between related blocks (16
 | `--radius-sm` | 8px | Chips, small icon buttons |
 | `--radius-md` | 16px | Buttons, list rows, inputs |
 | `--radius-lg` | 24px | Sheets, video card, transport well |
-| `--radius-xl` | 32px | Start card, large panels |
+| `--radius-xl` | 28px | Start card, sheet top corners (matches M3 extraLarge; was 32px) |
 | `--radius-pill` | 999px | Primary CTA, cast pill, volume track, pin pill |
 
 ## Elevation
@@ -182,7 +190,19 @@ No bounce. No looping decorative motion. The cam is already moving.
 
 ### Wordmark
 
-"Window Seat" in Fraunces 600, sentence case. No icon required; if one is used, a simple four-pane window in navy, 32px, to the left of the words. Do not recreate the current gold window glyph as the default mark.
+"Window Seat" in Fraunces 600, sentence case, with the Shade mark to its left: a cabin window with the blind pulled halfway down. The blind is the only color in the mark. On Home the mark uses day colors (frame `#102536`, blind `#2F6F8A`), about 48px tall (1.75 x the wordmark cap height), with a gap of about 0.67 x the cap height. Use the supplied art in `icons/shade/` (`mark.svg` day, `mark-night.svg` night); do not redraw, recolor or re-space it. The old four-pane window and the gold window glyph are retired.
+
+### App icons and favicon
+
+PWA, Apple and favicon art is the Shade mark: fog frame and night-accent blind on an ink `#102536` field.
+
+- `/icons/icon-192.png`, `/icons/icon-512.png`, `/icons/maskable-512.png` (mark inside the 40% safe circle), `/icons/apple-touch-icon.png` (180x180, full-bleed).
+- `/favicon.svg` (day colors, switches to fog and night accent under `prefers-color-scheme: dark`), `/favicon-32.png`, `/favicon.ico` (16, 32, 48).
+- Manifest `theme_color` and `background_color` are `#F3F5F7`.
+
+### TV launch splash
+
+Until the first cam is playing, the receiver shows a full-screen splash on the night field `#0A1A26`: the stacked Shade lockup and the line "Opening a window", both part of the image (`icons/shade/receiver-splash-1920x1080.png`, with a 1280x720 version for 720p devices). When the first cam reaches PLAYING, the splash fades out over 1200ms (no fade with reduced motion) and does not come back for later cam changes, which keep the 400ms field fade.
 
 ### Primary button
 
@@ -194,11 +214,11 @@ Same height, transparent fill, navy label, no border (or a hairline only if it s
 
 ### Start screen (Home)
 
-Bright canvas. Wordmark, a one-line tagline, a "Right now" hero, a full-width Start watching button, then Cast to your TV (official Cast icon), then quieter ghost actions for "Open in TV browser" and "About and credits".
+Bright canvas. Wordmark (Shade mark plus "Window Seat"), a one-line tagline, a "Right now" hero, a full-width Start watching button, then Cast to your TV (official Cast icon), then quieter ghost actions for "Open in TV browser" and "About and credits".
 
 Tagline: "Live windows onto the world, with soft music, made for your TV." This is intentionally wider than Japan. About copy can still lead with Japan.
 
-The "Right now" hero shows a current cam still, the local time in that city, and a short line about how many windows are awake. Example, for a Monday afternoon in Pacific time: "It's 9:51 AM in Tokyo." and "Morning on the harbor. 33 windows are awake." Counts come from the sheet plus the sleeping-cam rule, not from invented places.
+The "Right now" label is sentence case in the Caption role, ink-secondary, not accent (accent is for actions and data only). The hero shows a current cam still, the local time in that city, and a short line about how many windows are awake. Example, for a Monday afternoon in Pacific time: "It's 9:51 AM in Tokyo." and "Morning on the harbor. 33 windows are awake." Counts come from the sheet plus the sleeping-cam rule, not from invented places.
 
 ### Local player
 
@@ -352,6 +372,5 @@ A Cast session that stays paused for 30 minutes ends so the TV can return to its
 
 - A native Google TV app, or publishing the Cast app.
 - The Android sender APK (comes after the web remote feels right).
-- Building the UI in the app. This document and the Paper file are the brief.
 - Changing `js/data.js`. The sheet is gaining a `timezone` column; this document describes how the UI uses it, but this PR does not edit the sheet.
 
