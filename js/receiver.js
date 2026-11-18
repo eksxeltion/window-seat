@@ -709,13 +709,20 @@ function onCamError(e) {
   const camId = pending ? pending.camId : s.camId;
   // Only fail the cam the player actually reports, so a late error from a replaced video is ignored.
   const reported = quietly(() => camPlayer.getVideoData().video_id);
+  const code = errCode(quietly(() => e.data));
   if (reported && camId && reported !== camId) {
     // Not captured as player_error: keep it for the load diagnostics.
-    if (pending && pending.loading && trace && trace.errors.length < 8) trace.errors.push(errCode(quietly(() => e.data)));
+    if (pending && pending.loading && trace && trace.errors.length < 8) trace.errors.push(code);
     return;
   }
-  if (camId) capture("player_error", { player: "cam", cam_id: camId, code: e.data, mode: "cast" });
-  if (camId) failCam(camId, "error " + e.data);
+  if (camId) {
+    try {
+      capture("player_error", { player: "cam", cam_id: camId, code, mode: "cast" });
+    } catch {
+      // telemetry never blocks the skip
+    }
+    failCam(camId, "error");
+  }
 }
 
 function camTick() {
