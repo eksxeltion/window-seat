@@ -593,7 +593,7 @@ body:not(.lp-on) #tuning { display: none; }
 .cams-secondary { margin-top: var(--space-16); border-top: 1px solid var(--color-line); padding-top: var(--space-16); }
 
 /* Cams sheet (v2 / Cam menu): header, TIME OF DAY switch rows with their own captions, QUICK PICKS, a dense list
-   with a right-hand time stack and a 32px play circle, then Playback. Scoped so the Mix sheet keeps its look. */
+   with a right-hand time stack and a 32px play circle, then Playback. Scoped to the Cams sheet; the Mix sheet reuses the switch row. */
 .panel-cams .panel-head { align-items: flex-start; padding: var(--space-24) var(--space-24) var(--space-8); }
 .panel-cams .panel-head h2 { font-size: 1.375rem; line-height: 1.75rem; font-weight: 600; }
 .panel-cams .cams-count { margin-top: var(--space-4); font-size: 0.8125rem; line-height: 1.125rem; font-weight: 500; color: var(--color-ink-secondary); }
@@ -691,48 +691,58 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 .badge-failed { color: var(--color-danger); font-weight: 600; }
 .badge[hidden] { display: none; }
 
-.mix-list { list-style: none; margin: 0; padding: 0; }
-.mix-btn {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  column-gap: var(--space-16);
-  width: 100%;
-  margin: var(--space-8) 0 0;
-  padding: var(--space-12) var(--space-16);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  text-align: left;
-  cursor: pointer;
-  transition: background 200ms ease-out;
-}
-.mix-btn:hover { background: var(--color-surface-raised); }
-.mix-btn.is-current { background: var(--color-accent-soft); border-color: var(--color-accent); }
-.mix-btn:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
-.mix-btn:active { transform: scale(0.98); transition: transform 80ms ease-out; }
-.mix-en { grid-column: 1; font-size: 1rem; line-height: 1.5rem; font-weight: 600; color: var(--color-ink); }
-.mix-ja { grid-column: 1; font-family: "Noto Sans JP", system-ui, sans-serif; font-size: 0.875rem; line-height: 1.25rem; font-weight: 500; color: var(--color-ink-secondary); }
-.mix-side { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-4); }
-.mix-len { font-size: 0.75rem; line-height: 1rem; font-weight: 500; letter-spacing: 0.06em; color: var(--color-ink-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.mix-playing { padding: 0 var(--space-8); border-radius: var(--radius-pill); background: var(--color-accent); color: var(--color-primary-ink); font-size: 0.75rem; line-height: 1.25rem; font-weight: 600; letter-spacing: 0.06em; }
-.mix-playing[hidden] { display: none; }
-.mix-btn.is-current .mix-en { color: var(--color-accent); }
-.mix-btn.is-current .mix-len { color: var(--color-accent); }
+/* Mix sheet (v2 / Mix picker): the Cams sheet header, Shuffle as a switch row with its caption, a bare volume line,
+   a quiet row with Mute, Pause and Next mix, then typographic mix rows (only the playing row has a fill). */
+.panel-mix .panel-head { align-items: flex-start; padding: var(--space-24) var(--space-24) var(--space-8); }
+.panel-mix .panel-head h2 { font-size: 1.375rem; line-height: 1.75rem; font-weight: 600; }
+.panel-mix .cams-count { margin-top: var(--space-4); font-size: 0.875rem; line-height: 1.25rem; font-weight: 500; color: var(--color-ink-secondary); }
+.panel-mix .btn-done { min-height: 2.75rem; margin: calc(-1 * var(--space-8)) calc(-1 * var(--space-12)) 0 0; padding: 0 var(--space-12); font-size: 1rem; line-height: 1.25rem; font-weight: 600; color: var(--color-accent); }
+.panel-mix .panel-body { padding: var(--space-8) var(--space-24) var(--space-24); }
 
-/* Mix sheet: Shuffle and the music volume on the bright sheet (navy fill on a mist track). */
-.mix-controls { padding-top: 0; border-bottom: 1px solid var(--color-line); }
-.mix-play, .mix-next { min-height: 3rem; }
-.mix-volume { margin-top: var(--space-12); padding: 0 var(--space-16); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-ink); }
+.mix-controls { padding: 0 0 var(--space-8); }
+.mix-volume { gap: var(--space-12); min-height: 2.75rem; margin-top: var(--space-4); color: var(--color-ink); }
 .mix-volume .icon { flex: none; width: 1.25rem; height: 1.25rem; }
-.mix-volume output { color: var(--color-ink-secondary); }
+.mix-volume output { min-width: 2rem; font-size: 0.875rem; line-height: 1.25rem; font-weight: 500; color: var(--color-ink-secondary); }
 .mix-volume input[type="range"]::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--color-primary) var(--vol, 60%), var(--color-line) var(--vol, 60%)); }
 .mix-volume input[type="range"]::-moz-range-track { background: var(--color-line); }
 .mix-volume input[type="range"]::-moz-range-progress { background: var(--color-primary); }
 .mix-volume input[type="range"]::-webkit-slider-thumb { background: var(--color-primary); box-shadow: 0 1px 4px rgba(16, 37, 54, 0.3); }
 .mix-volume input[type="range"]::-moz-range-thumb { background: var(--color-primary); }
 .mix-volume input[type="range"]:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; border-radius: var(--radius-pill); }
-.mix-body .mix-list { margin-top: var(--space-8); }
+.mix-caption { margin: 0; font-size: 0.75rem; line-height: 1rem; font-weight: 500; color: var(--color-ink-tertiary); }
+/* Mute, Pause and Next mix came after the artboard: kept, but quiet and below the volume line. */
+.mix-extras { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-8); margin: var(--space-8) 0 0 calc(-1 * var(--space-12)); }
+.mix-extras .switch, .mix-extras .btn { min-height: 2.75rem; padding: 0 var(--space-12); border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--color-ink-secondary); font-size: 0.875rem; line-height: 1.25rem; font-weight: 500; }
+.mix-extras .switch:hover, .mix-extras .btn:hover { background: var(--color-surface-raised); }
+.mix-extras .switch { gap: var(--space-8); }
+
+.mix-list { list-style: none; margin: var(--space-8) calc(-1 * var(--space-8)) 0; padding: 0; }
+.mix-list li + li { margin-top: var(--space-4); }
+.mix-btn {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--space-16);
+  width: 100%;
+  margin: 0;
+  padding: var(--space-12) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 200ms ease-out;
+}
+.mix-btn.is-current { background: var(--color-accent-soft); }
+.mix-btn:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+.mix-en { grid-column: 1; font-size: 0.9375rem; line-height: 1.25rem; font-weight: 600; color: var(--color-ink); }
+.mix-ja { grid-column: 1; margin-top: 0.125rem; font-family: "Noto Sans JP", system-ui, sans-serif; font-size: 0.8125rem; line-height: 1.125rem; font-weight: 500; color: var(--color-ink-secondary); }
+.mix-side { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
+.mix-playing { font-size: 0.75rem; line-height: 1rem; font-weight: 600; color: var(--color-accent); white-space: nowrap; }
+.mix-playing[hidden] { display: none; }
+.mix-len { font-size: 0.75rem; line-height: 1rem; font-weight: 500; color: var(--color-ink-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .fineprint { margin-top: var(--space-20); font-size: 0.875rem; color: var(--color-ink-tertiary); }
 
@@ -909,7 +919,7 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 @media (max-width: 700px) {
   .panel { top: calc(var(--safe-top) + var(--space-12)); bottom: 0; width: 100vw; border-radius: var(--radius-lg) var(--radius-lg) 0 0; border-bottom: 0; }
   .panel-head, .panel-tools, .panel-body, .panel-foot { padding-left: var(--space-16); padding-right: var(--space-16); }
-  .panel-cams .panel-head, .panel-cams .panel-body { padding-left: var(--space-24); padding-right: var(--space-24); }
+  .panel-cams .panel-head, .panel-cams .panel-body, .panel-mix .panel-head, .panel-mix .panel-body { padding-left: var(--space-24); padding-right: var(--space-24); }
 }
 /* Short screens: tighter glass so the picture still shows. */
 @media (max-height: 640px) {

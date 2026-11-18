@@ -309,20 +309,24 @@ Mock local times in the v2 and v3 artboards assume Monday 16 November 2026, 4:51
 
 ### Mix picker (sheet)
 
-Same sheet pattern. Header "Mix". Subhead "Tokyo Chill Lab".
+Same sheet pattern as the cam menu, following the v2 Mix picker artboard. Header "Mix" (Title sm, 22/28 Jakarta 600), subtitle with the current mix name such as "Tokyo Chill Lab" (14/20 500, secondary), and Done (16/20 600, accent).
 
 **Shuffle is on by default for every session.** When it is on, Window Seat picks a random mix and plays it from the beginning. It does not start partway through a playlist, for now. When a mix ends, shuffle picks another random mix, never the same one twice in a row, and that one also starts at the beginning. The user can turn shuffle off for the current session. With it off, mixes play in sheet order from the current one.
 
-Volume slider lives here too, with the helper "Cam sound is always off."
+Shuffle is a switch row: "Shuffle" (15/20 600) with the caption "On for every session, so it starts somewhere new." (12/16 500, secondary) and a 44x26 accent toggle.
 
-List of the 16 mixes, one current row:
+Under it, the volume line: note icon, 8px track, and the numeric value (14/20, secondary), with the caption "Cam sound is always off." (12/16, tertiary). Mute, Pause and Next mix came after the artboard and stay available as a quiet row of small text controls under the volume line, not in the head of the sheet.
 
-- English title, body, ink.
-- Japanese title in Noto Sans JP, body sm, secondary.
-- Duration in minutes, caption, tertiary, trailing.
-- The playing row uses accent-soft and a "Playing" mark.
+The sheet opens scrolled to the top so Shuffle and the volume line are visible. It does not scroll to the playing mix.
 
-Tapping a row starts that mix immediately on the phone or, while casting, on the TV.
+List of the 16 mixes, typographic rows with no card chrome, one current row:
+
+- English title, 15/20 Jakarta 600, ink.
+- Japanese title in Noto Sans JP, 13/18 500, secondary.
+- Duration such as "141 min", 12/16, tertiary, trailing.
+- The playing row is accent-soft with a 16px radius and 12/8 padding, with "Playing" (12/16 600, accent) stacked above the duration.
+
+Tapping a row starts that mix immediately on the phone or, while casting, on the TV. The "Mixes by ..." credit sits at the bottom.
 
 ### TV overlay / lower third
 

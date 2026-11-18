@@ -1,6 +1,7 @@
 """Mix picker (sheet) and shuffle: Shuffle is on at every load (session only), a random mix plays from the beginning,
 a mix that ends goes to another random one (never the same twice in a row), Shuffle off plays in sheet order, the
-sheet lists every mix with exactly one Playing row, a tap switches the mix from 0, and while casting a tap only sends
+sheet follows v2 / Mix picker (opens at the top with Shuffle and the volume line, typographic rows, Playing stacked
+over the duration) and lists every mix with exactly one Playing row, a tap switches the mix from 0, and while casting a tap only sends
 the mix command (no local playback). The receiver starts every mix from 0 and honors the shuffle command.
 Runs against the stubbed YouTube IFrame API (tests/fake_youtube.js) and the mock Cast sender.
 Usage: test_mix_picker.py BASE_URL   (the site root, for example http://localhost:8000/)"""
@@ -169,7 +170,33 @@ with sync_playwright() as p:
     check("sheet: subhead reads Tokyo Chill Lab", pg.text_content("#music-sub").strip() == "Tokyo Chill Lab")
     check("sheet: Shuffle switch present and on", pg.is_visible("#music-shuffle") and "Shuffle" in pg.text_content("#music-shuffle") and pg.get_attribute("#music-shuffle", "aria-pressed") == "true")
     check("sheet: music volume slider in the sheet", pg.is_visible("#panel-music input[type=range]") and pg.get_attribute("#mix-volume", "aria-label") == "Music volume")
-    check("sheet: helper 'Cam sound is always off.'", "Cam sound is always off." in pg.text_content("#panel-music"))
+    check("sheet: helper 'Cam sound is always off.'", pg.text_content("#mix-volume-help").strip() == "Cam sound is always off.")
+    check("sheet: Shuffle caption is the v2 line", pg.text_content("#shuffle-hint").strip() == "On for every session, so it starts somewhere new." and pg.get_attribute("#music-shuffle", "aria-describedby") == "shuffle-hint")
+    check("sheet: the old long shuffle hint is gone", "Off, mixes play in list order" not in pg.text_content("#panel-music"))
+    check("sheet: volume line shows the numeric value", pg.text_content("#mix-volume-out").strip() == pg.evaluate("()=>document.querySelector('#mix-volume').value"))
+    # The sheet opens at the top: Shuffle and the volume line are on screen, focus is on Done, not the Playing row.
+    top = pg.evaluate("""()=>{const body=document.querySelector('#panel-music .panel-body'), br=body.getBoundingClientRect();
+        const inView=(s)=>{const r=document.querySelector(s).getBoundingClientRect(); return r.top>=br.top-1 && r.bottom<=br.bottom+1};
+        return {scroll: body.scrollTop, shuffle: inView('#music-shuffle'), volume: inView('#mix-volume'),
+            done: document.activeElement === document.querySelector('#panel-music .btn-done')}}""")
+    check(f"sheet: opens at the top with Shuffle and volume visible ({top})", top["scroll"] == 0 and top["shuffle"] and top["volume"] and top["done"])
+    # Head of the sheet follows the artboard: Shuffle, then the volume line, then the quiet Mute / Pause / Next mix row.
+    order = pg.evaluate("""()=>['#music-shuffle','#mix-volume','#mix-volume-help','#music-mute','#music-play','#music-next','#mix-list']
+        .map(s=>document.querySelector(s).getBoundingClientRect().top)""")
+    check(f"sheet: Shuffle, volume, caption, then Mute / Pause / Next mix, then the list ({order})", order[0] < order[1] < order[2] < order[3] and order[3] == order[4] == order[5] and order[5] < order[6])
+    check("sheet: Mute, Pause, Next mix stay visible", all(pg.is_visible(s) for s in ("#music-mute", "#music-play", "#music-next")))
+    css = pg.evaluate("""()=>{const g=(s)=>getComputedStyle(document.querySelector(s)); const t=g('#music-title'), d=g('#panel-music .btn-done'),
+        sub=g('#music-sub'), tr=g('#music-shuffle .switch-track'), cap=g('#shuffle-hint'), help=g('#mix-volume-help'), out=g('#mix-volume-out');
+        return {title:[t.fontSize,t.lineHeight,t.fontWeight,t.fontFamily.split(',')[0]], sub:[sub.fontSize,sub.lineHeight,sub.fontWeight],
+            done:[d.fontSize,d.fontWeight,d.color], toggle:[tr.width,tr.height], cap:[cap.fontSize,cap.lineHeight,cap.color],
+            help:[help.fontSize,help.lineHeight,help.color], out:[out.fontSize,out.lineHeight,out.color]}}""")
+    check(f"sheet: title Jakarta 22/28 600 ({css['title']})", css["title"][:3] == ["22px", "28px", "600"] and "Fraunces" not in css["title"][3])
+    check(f"sheet: subtitle 14/20 500 ({css['sub']})", css["sub"] == ["14px", "20px", "500"])
+    check(f"sheet: Done 16 600 accent ({css['done']})", css["done"] == ["16px", "600", "rgb(47, 111, 138)"])
+    check(f"sheet: Shuffle toggle 44x26 ({css['toggle']})", css["toggle"] == ["44px", "26px"])
+    check(f"sheet: Shuffle caption 12/16 ink-secondary ({css['cap']})", css["cap"][:2] == ["12px", "16px"])
+    check(f"sheet: volume caption 12/16 ink-tertiary ({css['help']})", css["help"] == ["12px", "16px", "rgb(90, 107, 118)"])
+    check(f"sheet: volume value 14/20 ({css['out']})", css["out"][:2] == ["14px", "20px"])
     rows = pg.evaluate("""()=>[...document.querySelectorAll('#mix-list .mix-btn')].map(b=>({id:b.dataset.id,
         en:(b.querySelector('.mix-en')||{}).textContent, ja:(b.querySelector('.mix-ja')||{}).textContent,
         jaLang:(b.querySelector('.mix-ja')||{}).lang, len:(b.querySelector('.mix-len')||{}).textContent}))""")
@@ -186,6 +213,22 @@ with sync_playwright() as p:
     check(f"sheet: exactly one Playing row, the current mix ({pr['cur']})", pr["cur"] == [mix_id(pg)] and pr["marks"] == [mix_id(pg)])
     check("sheet: Playing mark reads Playing", pg.text_content(row(mix_id(pg)) + " .mix-playing").strip() == "Playing")
     check(f"sheet: playing row uses accent-soft ({pr['soft']})", pr["soft"] == ["rgb(228, 240, 245)"])
+    rs = pg.evaluate("""(cur)=>{const g=(e)=>getComputedStyle(e); const rows=[...document.querySelectorAll('#mix-list .mix-btn')];
+        const p=rows.find(b=>b.dataset.id===cur), o=rows.find(b=>b.dataset.id!==cur);
+        const mk=p.querySelector('.mix-playing'), ln=p.querySelector('.mix-len');
+        const en=g(o.querySelector('.mix-en')), ja=g(o.querySelector('.mix-ja')), len=g(o.querySelector('.mix-len')), m=g(mk);
+        return {play:[g(p).borderTopLeftRadius,g(p).paddingTop,g(p).paddingLeft],
+            other:[g(o).backgroundColor,g(o).borderTopWidth,g(o).boxShadow],
+            en:[en.fontSize,en.lineHeight,en.fontWeight], ja:[ja.fontSize,ja.lineHeight,ja.fontWeight,ja.fontFamily.split(',')[0]],
+            len:[len.fontSize,len.lineHeight,len.color], mark:[m.fontSize,m.lineHeight,m.fontWeight,m.color,m.backgroundColor],
+            stacked: mk.getBoundingClientRect().bottom <= ln.getBoundingClientRect().top + 1}}""", mix_id(pg))
+    check(f"rows: Playing row radius 16, padding 12/8 ({rs['play']})", rs["play"] == ["16px", "12px", "8px"])
+    check(f"rows: other rows are typographic, no card fill, border or shadow ({rs['other']})", rs["other"] == ["rgba(0, 0, 0, 0)", "0px", "none"])
+    check(f"rows: English 15/20 600 ({rs['en']})", rs["en"] == ["15px", "20px", "600"])
+    check(f"rows: Japanese Noto Sans JP 13/18 500 ({rs['ja']})", rs["ja"][:3] == ["13px", "18px", "500"] and "Noto Sans JP" in rs["ja"][3])
+    check(f"rows: duration 12/16 ink-tertiary ({rs['len']})", rs["len"] == ["12px", "16px", "rgb(90, 107, 118)"])
+    check(f"rows: Playing 12/16 600 accent, no pill ({rs['mark']})", rs["mark"] == ["12px", "16px", "600", "rgb(47, 111, 138)", "rgba(0, 0, 0, 0)"])
+    check("rows: Playing sits stacked above the duration", rs["stacked"])
 
     # Tap a row: that mix, now, from the beginning.
     cur = mix_id(pg)
