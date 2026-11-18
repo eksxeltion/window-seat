@@ -10,7 +10,7 @@ import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-17.19"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-17.20"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -27,7 +27,7 @@ const LOWER_THIRD_MS = 10000; // the lower third shows this long after a cam loa
 const PAUSE_WARN_MS_DEFAULT = 25 * 60 * 1000; // paused this long while casting: warn the phone and the TV pill
 const PAUSE_END_MS_DEFAULT = 30 * 60 * 1000; // paused this long while casting: end the session, the TV goes home
 const PAUSE_STOP_DELAY_MS = 600; // the pauseTimeout message goes out first, then the receiver stops
-const FONTS_URL = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Plus+Jakarta+Sans:wght@500;600&display=swap";
+const FONTS_URL = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,600,0,0&family=Plus+Jakarta+Sans:wght@500;600&display=swap";
 
 const PARAMS = new URLSearchParams(location.search);
 const DEBUG = PARAMS.get("debug") === "1";
@@ -417,6 +417,19 @@ let pausedRemaining = 0; // ms left on the rotation clock when the feed was paus
 const blackout = $("blackout");
 const fadeTo = (on) => blackout.classList.toggle("on", on);
 
+/* Launch splash: fades out (1200ms, CSS) the first time a cam is committed, then is removed from layout for good.
+   Later cam swaps only use the blackout above. */
+const SPLASH_FADE_MS = 1200;
+let splashDone = false;
+function hideSplash() {
+  if (splashDone) return;
+  splashDone = true;
+  const el = $("splash");
+  if (!el) return;
+  el.classList.add("gone");
+  setTimeout(() => { el.hidden = true; }, SPLASH_FADE_MS + 100);
+}
+
 /* Cam audio is always off: every cam play path goes through these. */
 function camMute() {
   quietly(() => camPlayer.mute());
@@ -518,6 +531,7 @@ function commitPending() {
   setCaption(cam);
   showLowerThird();
   fadeTo(false);
+  hideSplash();
   note("rotate", { camId: cam.id, reason: rotateReason });
   camShown(cam.id, shownReason);
   // Time to first frame: the first cam after load that is not the random start cam (TV clock).
@@ -1227,6 +1241,8 @@ Object.defineProperty(window, "__receiverDebug", {
     get strip() { return ($("debug-strip") || {}).textContent || ""; },
     // Pause timeout durations and phase (also with ?strip=1, where __receiver does not exist).
     get pause() { return { warnMs: pt.warnMs, endMs: pt.endMs, phase: pt.phase, stops: pt.stops }; },
+    // Launch splash: true once the first cam was committed and the splash started fading out.
+    get splashDone() { return splashDone; },
   },
 });
 

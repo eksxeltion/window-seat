@@ -28,8 +28,10 @@ const TV_URL = "https://window-seat-lemon.vercel.app/?tv=1";
 const CHROME_HOLD_MS = 6000; // local player: chrome stays up this long after a tap, then fades (not while paused or a sheet is open)
 const THEME_CANVAS = "#F3F5F7"; // --color-canvas: Home, sheets, remote
 const THEME_NIGHT = "#0A1A26"; // --color-night-field: the full-screen local player
+// Only the weights the design uses: Fraunces 600 (opsz on, SOFT 0, WONK 0), Plus Jakarta Sans 500 and 600, Noto Sans JP 500.
+// Roboto Mono 500 is requested by js/debug.js only when Debug is turned on.
 const FONTS_URL =
-  "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Plus+Jakarta+Sans:wght@500;600;700&family=Noto+Sans+JP:wght@400;500&display=swap";
+  "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,600,0,0&family=Plus+Jakarta+Sans:wght@500;600&family=Noto+Sans+JP:wght@500&display=swap";
 
 const YS = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
 

@@ -8,9 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <meta http-equiv="Cache-Control" content="no-cache">
-  <link rel="stylesheet" href="css/receiver.css?v=2026-11-17.19">
+  <link rel="stylesheet" href="css/receiver.css?v=2026-11-17.20">
   <!-- The Cast receiver framework is injected by js/receiver.js (skipped with ?debug=1) so it can never block the page. -->
-  <script type="module" src="js/receiver.js?v=2026-11-17.19"></script>
+  <script type="module" src="js/receiver.js?v=2026-11-17.20"></script>
 </head>
 <body>
   <video id="keepalive" loop muted autoplay playsinline style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none"></video>
@@ -21,6 +21,14 @@
   </div>
   <div id="cam"><div id="cam-player"></div></div>
   <div id="blackout" class="on"></div>
+  <!-- Launch splash (Shade lockup and "Opening a window" are in the image): shown until the first cam is PLAYING,
+       then faded out once by js/receiver.js. Later cam swaps use #blackout only. -->
+  <div id="splash">
+    <img id="splash-img" alt="Window Seat. Opening a window" decoding="async"
+         src="icons/shade/receiver-splash-1920x1080.png"
+         srcset="icons/shade/receiver-splash-1280x720.png 1280w, icons/shade/receiver-splash-1920x1080.png 1920w"
+         sizes="100vw">
+  </div>
 
   <div id="cmd-toast" role="status"></div>
   <div id="paused-pill" role="status" hidden><span>Paused</span><span id="paused-closing"></span></div>

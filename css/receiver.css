@@ -7,17 +7,26 @@
   --color-overlay-ink: #f3f5f7;
   --color-overlay-dim: rgba(243, 245, 247, 0.78);
   --color-overlay-line: rgba(255, 255, 255, 0.16);
-  --color-overlay-accent: #8ec4d4;
+  --color-accent-night: #8cc3d6; /* the one night accent (retired --color-overlay-accent #8ec4d4) */
+  --color-field: #0a1a26; /* night field: splash ground and the fade between cams */
   --font-display: "Fraunces", "Source Serif 4", Georgia, serif;
   --font-ui: "Plus Jakarta Sans", system-ui, "Segoe UI", Roboto, sans-serif;
 }
-html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: var(--color-overlay-ink); font-family: var(--font-ui); }
+html, body { margin: 0; height: 100%; background: var(--color-field); overflow: hidden; color: var(--color-overlay-ink); font-family: var(--font-ui); }
 
-#cam { position: fixed; inset: 0; background: #000; z-index: 1; }
+#cam { position: fixed; inset: 0; background: var(--color-field); z-index: 1; }
 #cam iframe, #cam-player { width: 100%; height: 100%; border: 0; display: block; }
 
-#blackout { position: fixed; inset: 0; z-index: 2; background: #000; opacity: 0; transition: opacity 0.4s ease; pointer-events: none; }
+#blackout { position: fixed; inset: 0; z-index: 2; background: var(--color-field); opacity: 0; transition: opacity 0.4s ease; pointer-events: none; }
 #blackout.on { opacity: 1; }
+
+/* Launch splash: our own full-screen layer on the night field, above the cam and the blackout (same z-index, later
+   in the DOM), below the lower third, toasts and the Debug strip. Fades out once over 1200ms when the first cam plays. */
+#splash { position: fixed; inset: 0; z-index: 2; background: var(--color-field); opacity: 1; transition: opacity 1200ms ease; pointer-events: none; }
+#splash img { width: 100%; height: 100%; object-fit: contain; display: block; }
+#splash.gone { opacity: 0; }
+#splash[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { #splash { transition: none; } }
 
 /* TV safe area: 5% overscan margin on every side. */
 #safe { position: fixed; inset: 5%; pointer-events: none; z-index: 3; }
