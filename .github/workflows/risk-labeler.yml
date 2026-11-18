@@ -1,0 +1,192 @@
+# Risk labeler
+#
+# Runs on pull_request_target, so the workflow definition always comes from the
+# default branch, not from the pull request. It never checks out, downloads, or
+# runs pull request code. It only reads PR metadata and diffs through the
+# GitHub API and applies the risk:red label when sensitive paths or content are
+# touched.
+#
+# Stephane merges the PR that adds or changes this workflow himself.
+
+name: Risk labeler
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Apply risk:red when sensitive files or content change
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const RED = 'risk:red';
+            const DOWNGRADE_LABELS = ['risk:green', 'risk:yellow'];
+            const FILE_LIST_CAP = 3000;
+
+            const LOCKFILES = new Set([
+              'package-lock.json',
+              'yarn.lock',
+              'pnpm-lock.yaml',
+              'bun.lockb',
+              'npm-shrinkwrap.json',
+            ]);
+            const KEYWORDS = ['auth', 'key', 'secret', 'token', 'payment', 'stripe', 'delete'];
+
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const pull_number = pr.number;
+
+            const basename = (p) => {
+              const parts = p.split('/');
+              return parts[parts.length - 1];
+            };
+
+            // Escape untrusted text so it cannot inject workflow commands via logs.
+            const sanitizeLog = (text) =>
+              String(text).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+
+            const findKeyword = (text) => {
+              const lower = String(text).toLowerCase();
+              return KEYWORDS.find((k) => lower.includes(k));
+            };
+
+            // Returns a short reason string if the path matches a rule, else null.
+            const checkPath = (p) => {
+              if (!p) return null;
+              const base = basename(p);
+              if (p === 'vercel.json' || base === 'vercel.json') return 'vercel.json';
+              if (p.startsWith('.github/')) return '.github path';
+              if (base === 'package.json') return 'package.json';
+              if (LOCKFILES.has(base)) return 'lockfile';
+              if (base === '.env' || base.startsWith('.env.') || base.endsWith('.env')) {
+                return 'env file';
+              }
+              const kw = findKeyword(p);
+              if (kw) return `keyword "${kw}" in path`;
+              return null;
+            };
+
+            // Decide whether the PR matches.
+            let reason = null;
+
+            // Prefer a fresh changed_files count from the API over the event payload.
+            let changedFiles =
+              typeof pr.changed_files === 'number' ? pr.changed_files : null;
+            try {
+              const { data: freshPr } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number,
+              });
+              if (typeof freshPr.changed_files === 'number') {
+                changedFiles = freshPr.changed_files;
+              }
+            } catch (err) {
+              core.warning(`Could not refresh changed_files: ${sanitizeLog(err.message || err)}`);
+            }
+
+            // Force red only when the PR is known to exceed the list-files cap.
+            if (typeof changedFiles === 'number' && changedFiles > FILE_LIST_CAP) {
+              reason = `changed_files is ${changedFiles} (cap ${FILE_LIST_CAP})`;
+            }
+
+            if (!reason) {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner,
+                repo,
+                pull_number,
+                per_page: 100,
+              });
+
+              // If the API returned the cap and we cannot confirm the true count
+              // is exactly the cap, assume there may be more files and force red.
+              if (
+                files.length >= FILE_LIST_CAP &&
+                (typeof changedFiles !== 'number' || changedFiles > FILE_LIST_CAP)
+              ) {
+                reason = `file list returned ${files.length} files (cap ${FILE_LIST_CAP})`;
+              }
+
+              for (const f of files) {
+                if (reason) break;
+                for (const p of [f.filename, f.previous_filename]) {
+                  const r = checkPath(p);
+                  if (r) {
+                    reason = `${r}: ${sanitizeLog(p)}`;
+                    break;
+                  }
+                }
+                if (reason) break;
+                // Patch may be missing for binary or very large files.
+                if (f.patch) {
+                  const kw = findKeyword(f.patch);
+                  if (kw) {
+                    reason = `keyword "${kw}" in patch of ${sanitizeLog(f.filename)}`;
+                  }
+                }
+              }
+            }
+
+            if (!reason) {
+              core.info('No sensitive paths or content found. Leaving labels unchanged.');
+              return;
+            }
+
+            core.info(`Forcing ${RED}. Reason: ${reason}`);
+
+            if (
+              context.payload.action === 'unlabeled' &&
+              context.payload.label &&
+              context.payload.label.name === RED
+            ) {
+              core.info(`${RED} was removed but the PR still matches. Restoring it.`);
+            }
+
+            // Read current labels from the API, not only the event payload.
+            const current = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner,
+              repo,
+              issue_number: pull_number,
+              per_page: 100,
+            });
+            const names = new Set(current.map((l) => l.name));
+
+            if (!names.has(RED)) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pull_number,
+                labels: [RED],
+              });
+              core.info(`Added ${RED}.`);
+            } else {
+              core.info(`${RED} already present.`);
+            }
+
+            for (const name of DOWNGRADE_LABELS) {
+              if (!names.has(name)) continue;
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: pull_number,
+                  name,
+                });
+                core.info(`Removed ${name}.`);
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`${name} was already gone.`);
+                } else {
+                  throw err;
+                }
+              }
+            }
