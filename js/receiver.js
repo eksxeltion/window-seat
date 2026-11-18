@@ -438,7 +438,10 @@ function showUnavailable(on, text = UNAVAILABLE_TEXT) {
   const el = $("unavailable");
   if (!el || (!on && !unavailableShown)) return;
   unavailableShown = !!on;
-  if (on) $("unavailable-msg").textContent = text;
+  if (on) {
+    $("unavailable-msg").textContent = text;
+    hideSplash(); // first-cam failures must not stay under the launch splash
+  }
   el.hidden = !on;
 }
 

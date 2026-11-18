@@ -34,7 +34,8 @@ html, body { margin: 0; height: 100%; background: var(--color-field); overflow: 
 
 /* Unavailable stream: cut (no transition in) to the night field over any YouTube error card, with our message centered.
    Hidden again when the next cam is committed. */
-#unavailable { position: fixed; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; background: var(--color-field); pointer-events: none; }
+/* z-index 3: above the launch splash (z-index 2), so a first-cam failure is visible instead of "Opening a window". */
+#unavailable { position: fixed; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center; background: var(--color-field); pointer-events: none; }
 #unavailable[hidden] { display: none; }
 #unavailable-msg {
   margin: 0; max-width: 90%; box-sizing: border-box; padding: 0 5%; text-align: center;

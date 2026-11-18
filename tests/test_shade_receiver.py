@@ -113,6 +113,8 @@ with sync_playwright() as p:
     check("a cam is playing", wait_until(rx, "()=>__receiver.state.camId && __yt.cam() && __yt.cam().state===1", 6000))
     check("splash gone", wait_until(rx, "()=>document.querySelector('#splash').hidden", 3000))
     check(f"debug strip shows build {BUILD}", f"build {BUILD}" in rx.text_content("#debug-strip"))
+    z = rx.evaluate("()=>({u:+getComputedStyle(document.querySelector('#unavailable')).zIndex, s:+getComputedStyle(document.querySelector('#splash')).zIndex})")
+    check(f"unavailable sits above the launch splash so a first-cam failure is visible ({z})", z["u"] > z["s"])
 
     # ------------------------------------------------------------ tokens
     tok = rx.evaluate("""()=>{const cs=getComputedStyle(document.documentElement); const probe=document.createElement('div'); document.body.append(probe);
