@@ -295,7 +295,11 @@ Time of day:
 
 Quick picks, in addition to unchecking from the full list: All, None, and a few country or type shortcuts. A filled chip means every cam in that group is currently checked. These change inclusion; they do not hide rows.
 
-Each row: checkbox, name, country and type, local time, Sleeping mark when relevant, and a Play now button. Tapping Play now starts that cam immediately and does not change the checkbox. Play now can open a sleeping cam. Pinning also wins over the night rule.
+Each switch sits on its own row with its own caption: "Cams where it is midnight to 6 AM local time sit out until morning." under Skip sleeping cams, and "Rotate only cams where it is 7 AM to 7 PM local time." under Only daytime. There is no shared hint under both.
+
+Each row: 20px checkbox, name, country · type, a right-hand time stack (local time, with "Sleeping" under it when relevant), and a 32px circular play control with a play icon only (accessible name "Play {title} now"). Playing a cam from its row starts it immediately and does not change the checkbox. It can open a sleeping or unchecked cam. Pinning also wins over the night rule. The current row is accent-soft with a 12px radius; unchecked rows stay in the list with a muted title.
+
+The sheet opens scrolled to the top so Time of day and Quick picks are visible. It does not scroll to the current cam.
 
 The starting point is the sheet's `in_rotation` set (today, 44 cams), all checked. The user unchecks from that list, or uses shortcuts. Group actions apply to the current filter.
 

@@ -574,76 +574,123 @@ body:not(.lp-on) #tuning { display: none; }
 .cams-switches { display: flex; flex-wrap: wrap; gap: var(--space-8); }
 .cams-hint { margin: var(--space-8) 0 0; font-size: 0.75rem; line-height: 1rem; color: var(--color-ink-tertiary); }
 .cams-quick { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+/* Quick picks (v2): 30px pills; a filled chip (every cam in the group checked) is accent-soft with accent text. */
 .chip {
-  min-height: 2.25rem;
+  min-height: 1.875rem;
   padding: 0 var(--space-12);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-pill);
   background: var(--color-surface);
   color: var(--color-ink);
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: 0.8125rem;
+  line-height: 1rem;
+  font-weight: 500;
   cursor: pointer;
   transition: background 200ms ease-out, border-color 200ms ease-out, color 200ms ease-out;
 }
 .chip:hover { background: var(--color-surface-raised); }
-.chip[aria-pressed="true"] { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-primary-ink); }
+.chip[aria-pressed="true"] { background: var(--color-accent-soft); border-color: var(--color-accent-soft); color: var(--color-accent); font-weight: 600; }
 .cams-secondary { margin-top: var(--space-16); border-top: 1px solid var(--color-line); padding-top: var(--space-16); }
 
-.cam-list { list-style: none; margin: 0; padding: 0; }
+/* Cams sheet (v2 / Cam menu): header, TIME OF DAY switch rows with their own captions, QUICK PICKS, a dense list
+   with a right-hand time stack and a 32px play circle, then Playback. Scoped so the Mix sheet keeps its look. */
+.panel-cams .panel-head { align-items: flex-start; padding: var(--space-24) var(--space-24) var(--space-8); }
+.panel-cams .panel-head h2 { font-size: 1.375rem; line-height: 1.75rem; font-weight: 600; }
+.panel-cams .cams-count { margin-top: var(--space-4); font-size: 0.8125rem; line-height: 1.125rem; font-weight: 500; color: var(--color-ink-secondary); }
+.panel-cams .btn-done { min-height: 2.75rem; margin: calc(-1 * var(--space-8)) calc(-1 * var(--space-12)) 0 0; padding: 0 var(--space-12); font-size: 1rem; line-height: 1.25rem; font-weight: 600; color: var(--color-accent); }
+.panel-cams .panel-body { padding: var(--space-8) var(--space-24) var(--space-24); }
+.panel-cams .cams-section { padding: var(--space-8) 0; }
+.panel-cams .cams-section + .cams-section { border-top: 0; padding-top: var(--space-8); }
+.panel-cams .cams-label { margin: 0 0 var(--space-8); font-size: 0.75rem; line-height: 1rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-ink-tertiary); }
+.cam-switch {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: var(--space-16);
+  min-height: 3.5rem;
+  padding: var(--space-8) 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  white-space: normal;
+}
+.cam-switch:hover { background: transparent; }
+.cam-switch-text { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.cam-switch-title { font-size: 0.9375rem; line-height: 1.25rem; font-weight: 600; color: var(--color-ink); }
+.cam-switch-caption { font-size: 0.75rem; line-height: 1rem; font-weight: 500; color: var(--color-ink-secondary); }
+.cam-switch .switch-track { width: 2.75rem; height: 1.625rem; }
+.cam-switch .switch-thumb { top: 0.1875rem; left: 0.1875rem; width: 1.25rem; height: 1.25rem; }
+.cam-switch[aria-pressed="true"] .switch-thumb { transform: translateX(1.125rem); }
+.panel-cams .cams-secondary { margin-top: var(--space-16); border-top: 1px solid var(--color-line); padding-top: var(--space-16); }
+.panel-cams .cams-secondary .cams-switches .btn, .panel-cams .cams-secondary .switch { min-height: 2.75rem; font-size: 0.875rem; }
+
+.cam-list { list-style: none; margin: var(--space-8) calc(-1 * var(--space-12)) 0; padding: 0; }
 .cam-row {
   display: flex;
   align-items: center;
-  gap: var(--space-8);
-  padding: var(--space-4) var(--space-12) var(--space-4) var(--space-4);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
+  gap: var(--space-4);
+  padding: 0 var(--space-4) 0 0;
+  border-radius: var(--radius-sm);
   transition: background 200ms ease-out;
 }
-.cam-row + .cam-row { margin-top: var(--space-8); }
-.cam-row.is-current { background: var(--color-accent-soft); }
+.cam-row + .cam-row { margin-top: var(--space-4); }
+.cam-row.is-current { border-radius: 0.75rem; background: var(--color-accent-soft); }
 .cam-row.is-failed .cam-info { opacity: 0.55; }
 .cam-check {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-12);
-  min-height: 3.5rem;
+  gap: var(--space-8);
+  min-height: 2.75rem;
   padding: var(--space-8);
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: 0.75rem;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
-.check-box { flex: none; position: relative; width: 1.375rem; height: 1.375rem; border: 2px solid var(--color-ink-tertiary); border-radius: 0.375rem; background: var(--color-surface); transition: background 150ms ease-out, border-color 150ms ease-out; }
+.check-box { flex: none; position: relative; width: 1.25rem; height: 1.25rem; border: 2px solid var(--color-ink-tertiary); border-radius: 0.3125rem; background: var(--color-surface); transition: background 150ms ease-out, border-color 150ms ease-out; }
 .cam-check[aria-checked="true"] .check-box { border-color: var(--color-accent); background: var(--color-accent); }
-.cam-check[aria-checked="true"] .check-box::after { content: ""; position: absolute; left: 0.375rem; top: 0.125rem; width: 0.3125rem; height: 0.625rem; border: solid var(--color-primary-ink); border-width: 0 2px 2px 0; transform: rotate(45deg); }
-.cam-info { flex: 1; min-width: 0; }
-.cam-title { display: block; font-size: 1rem; font-weight: 600; line-height: 1.375rem; }
-.cam-sub { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--space-8); font-size: 0.875rem; line-height: 1.25rem; color: var(--color-ink-secondary); }
-.cam-clock { font-variant-numeric: tabular-nums; color: var(--color-ink-tertiary); }
+.cam-check[aria-checked="true"] .check-box::after { content: ""; position: absolute; left: 0.3125rem; top: 0.0625rem; width: 0.3125rem; height: 0.625rem; border: solid var(--color-primary-ink); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.cam-info { flex: 1; min-width: 0; margin-left: var(--space-4); }
+.cam-title { display: block; font-size: 0.875rem; line-height: 1.125rem; font-weight: 600; color: var(--color-ink); overflow-wrap: anywhere; }
+.cam-sub { display: flex; flex-wrap: wrap; column-gap: var(--space-8); font-size: 0.75rem; line-height: 1rem; font-weight: 500; color: var(--color-ink-secondary); }
+.cam-time { flex: none; display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
+.cam-clock { font-size: 0.8125rem; line-height: 1rem; font-weight: 600; color: var(--color-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cam-clock:empty { display: none; }
-.sleep-mark { padding: 0 var(--space-8); border-radius: var(--radius-pill); background: var(--color-surface-raised); color: var(--color-sleeping); font-size: 0.75rem; font-weight: 600; }
+.sleep-mark { font-size: 0.6875rem; line-height: 0.875rem; font-weight: 500; color: var(--color-sleeping); white-space: nowrap; }
 .sleep-mark[hidden] { display: none; }
-.cam-row.is-off .cam-title { color: var(--color-ink-secondary); }
-.cam-row.is-sleeping .cam-title { color: var(--color-sleeping); }
-.btn-play { flex: none; min-height: 2.5rem; padding: 0 var(--space-12); border-radius: var(--radius-pill); font-size: 0.875rem; }
-body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams and Mix sheets open over the casting remote (other sheets keep their place) */
-.badge {
-  display: inline-block;
-  margin-left: var(--space-8);
-  padding: 0 var(--space-8);
-  border-radius: var(--radius-pill);
-  font-size: 0.75rem;
-  font-weight: 600;
-  vertical-align: 0.12em;
+.cam-row.is-sleeping .cam-clock { font-weight: 500; color: var(--color-ink-tertiary); }
+/* Unchecked cams stay in the list and look off. */
+.cam-row.is-off .check-box { border-color: var(--color-line); }
+.cam-row.is-off .cam-title, .cam-row.is-off .cam-sub, .cam-row.is-off .cam-clock { color: var(--color-ink-tertiary); }
+.cam-row.is-off .cam-clock { font-weight: 500; }
+.cam-play {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
 }
-.badge-now { background: var(--color-accent); color: var(--color-primary-ink); }
-.badge-failed { background: var(--color-danger-soft); color: var(--color-danger); }
+.cam-play-dot { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%; background: var(--color-accent-soft); transition: background 200ms ease-out; }
+.cam-play-dot .icon { width: 0.875rem; height: 0.875rem; margin-left: 0.125rem; }
+.cam-play:hover .cam-play-dot { background: var(--color-line); }
+.cam-row.is-current .cam-play-dot { background: var(--color-surface); }
+body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams and Mix sheets open over the casting remote (other sheets keep their place) */
+/* Now showing is spoken, not drawn (the row highlight shows it); Unavailable right now is a short danger line. */
+.badge-now { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.badge-failed { color: var(--color-danger); font-weight: 600; }
+.badge[hidden] { display: none; }
 
 .mix-list { list-style: none; margin: 0; padding: 0; }
 .mix-btn {
@@ -863,6 +910,7 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 @media (max-width: 700px) {
   .panel { top: calc(var(--safe-top) + var(--space-12)); bottom: 0; width: 100vw; border-radius: var(--radius-lg) var(--radius-lg) 0 0; border-bottom: 0; }
   .panel-head, .panel-tools, .panel-body, .panel-foot { padding-left: var(--space-16); padding-right: var(--space-16); }
+  .panel-cams .panel-head, .panel-cams .panel-body { padding-left: var(--space-24); padding-right: var(--space-24); }
 }
 /* Short screens: tighter glass so the picture still shows. */
 @media (max-height: 640px) {

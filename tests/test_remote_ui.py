@@ -60,7 +60,7 @@ def assert_current_remote(pg, tag, timed_cam=False):
     check(f"{tag}: Cams sheet open", pg.is_visible("#panel-cams"))
     check(f"{tag}: Cams sheet has skip sleeping, only daytime, interval",
           pg.is_visible("#cams-skip-sleeping") and pg.is_visible("#cams-only-daytime") and pg.locator("#cams-interval").count() == 1)
-    check(f"{tag}: Cams sheet has cam checkboxes and Play now",
+    check(f"{tag}: Cams sheet has cam checkboxes and play controls",
           pg.locator('#cams-list [data-action="toggle-cam"]').count() > 0 and pg.locator('#cams-list [data-action="watch"]').count() > 0)
     before = pg.text_content("#cams-interval")
     pg.evaluate("()=>__mockCast.sent.length=0")
