@@ -52,7 +52,7 @@ Used on top of video only: the phone's full-screen local player, the TV lower th
 | Token | Value | Role |
 | --- | --- | --- |
 | `--color-night-field` | `#0A1A26` | Full-screen player field when no still is shown |
-| `--color-night-glass` | `rgba(10, 26, 38, 0.72)` | Glass panels and scrims on the local player |
+| `--color-night-glass` | `rgba(10, 26, 38, 0.78)` | Glass panels and scrims on the local player |
 | `--color-accent-night` | `#8CC3D6` | The one night accent: pinned pill, playing or pinned marker, readable on video. Also the receiver's only accent. |
 | `--color-on-glass` | `#F3F5F7` | Titles and primary labels on glass |
 | `--color-on-glass-secondary` | `#A9B8C3` | Meta on glass |
@@ -169,7 +169,7 @@ Needed set: previous, play, pause, next, volume (music note is acceptable next t
 
 **Cast icons must be the official Google Cast (Material) glyphs:** a rectangle with signal arcs rising from the lower left. Use `cast` when idle and `cast_connected` when a session is live. Do not invent a substitute glyph.
 
-Hit targets on the phone are at least 48px, and 64px for transport (previous, play/pause, next). The floating show/hide-controls button is 52px and always sits at the bottom right of the local player.
+Hit targets on the phone are at least 48px; the local player play / pause circle is 64px. The collapse (show / hide controls) button is 52px and always sits at the bottom right of the local player.
 
 ## Motion
 
@@ -191,7 +191,7 @@ No bounce. No looping decorative motion. The cam is already moving.
 ## Layout principles
 
 - Phone artboards are Pixel-sized, 412x915, with a status bar except on the full-screen local player, where system bars are hidden.
-- Local playback: the cam plays full screen with controls overlaid on the picture. A floating button shows or hides the chrome. Exit full screen restores system bars and leaves the player.
+- Local playback: the cam plays full screen with controls overlaid on the picture. A collapse button shows or hides the chrome. Exit full screen restores system bars and leaves the player.
 - Casting: the phone drops the live video and becomes a remote. A clear "Casting to {room}" pill with the official connected Cast icon is always visible. The TV holds the picture.
 - TV: full-bleed cam, no chrome except a lower third for the first 10 seconds after a cam loads, a 5-second pin toast, and a persistent Paused pill while paused.
 
@@ -244,9 +244,19 @@ The "Right now" label is sentence case in the Caption role, ink-secondary, not a
 
 Full-screen night field, no status bar.
 
-- Top scrim: Home (exit back to the start screen), official Cast icon, and fullscreen_exit.
-- Bottom glass panel: cam name, `{city}, {country}` and local time, rotation status, pin pill, previous / pause / next, Music volume slider, Cams and Mix.
-- A 52px floating button at the bottom right shows or hides the chrome. Auto-hide after 6 seconds, except when paused or a sheet is open.
+Follows the v2 Paper artboards "Playing locally", "Playing locally, pinned" and "Playing locally, paused".
+
+- Full-bleed cam on the night field.
+- Top scrim, about 120px: a back chevron with the word "Home" on the left (exit back to the start screen); the official Cast icon and fullscreen / fullscreen_exit on the right. All 48px hit targets, no glass circles.
+- Bottom night-glass panel, top corners 24, padding 20 / 24 / 88, top to bottom:
+  1. Cam title (Plus Jakarta 24/30 600, on-glass), then `{city}, {country} · {local time}` (14/20 500, on-glass-secondary).
+  2. A row with the status on the left and a 36px "Pin cam" chip on the right. The status reads "Paused" (13/18 600, on-glass) while paused, otherwise "Next cam in M:SS" or "Pinned. Rotation off." (13/18 500, on-glass-secondary).
+  3. A 2px hairline that fills with the rotation clock.
+  4. Centered transport: previous, a 64px filled light play / pause circle (`#F3F5F7`, dark glyph), next.
+  5. Music line: note icon, 8px volume track, "Music".
+  6. Two 44px outline pills, "Cams" and "Mix" (text only, 1px `rgba(255, 255, 255, 0.28)` border), in a compact 280px cluster.
+- Cast status stays off the glass unless something is actually wrong (a failed attempt or Cast unavailable).
+- Collapse: a 52px night-glass circle with a light ring and a down chevron at the bottom right. It shows or hides the chrome and stays visible while the chrome is hidden. Auto-hide after 6 seconds, except when paused or a sheet is open.
 - Exit full screen restores system bars.
 
 ### Pause and pin
@@ -255,9 +265,9 @@ These are independent controls with independent states: Playing, Pinned, Paused,
 
 **Pause** is the large center transport button, icon only. It pauses the entire feed: the cam and the music. On resume, the cam jumps to the live edge and the mix continues where it stopped. While paused, the local player keeps chrome visible, and the TV shows a persistent "Paused" pill so a frozen frame is not mistaken for a crash.
 
-**Pin** is a text pill in the info row, labeled "Pin cam" when idle (outline) and "Pinned" when on (filled with accent-night on the local player, accent-soft on the bright remote). Pin stops auto rotation and keeps showing the current cam. Music keeps playing. Next and previous while pinned still change the cam and keep the pin. Pin wins over the sleeping-cam skip: a pinned cam stays on screen even after local midnight.
+**Pin** is a 36px chip in the status row (an outline chip with the pin icon on the local player), labeled "Pin cam" when idle (outline) and "Pinned" when on (filled with accent-night on the local player, accent-soft on the bright remote). Pin stops auto rotation and keeps showing the current cam. Music keeps playing. Next and previous while pinned still change the cam and keep the pin. Pin wins over the sleeping-cam skip: a pinned cam stays on screen even after local midnight.
 
-The rotation hairline ("Next cam in 2:14") is visible only when rotation is on. When pinned, replace it with "Pinned. Rotation off." When paused and not pinned, show "Paused" and freeze the hairline.
+The rotation hairline ("Next cam in 2:14") is visible only when rotation is on. When pinned, the status reads "Pinned. Rotation off." and the hairline hides. When paused (pinned or not), the status reads "Paused" and the hairline freezes.
 
 ### Transport controls
 
@@ -360,7 +370,7 @@ These decisions are locked for the v2 and v3 mocks.
 3. **Volume is for the mix only.** Cam audio is always muted, with no control for it.
 4. **Inclusion from the full list, plus shortcuts.** The 44 in-rotation cams start checked. Users uncheck from that list, or use All / None / country / type shortcuts. Skip sleeping cams (midnight to 6 AM local) is on by default and resets each session. Only daytime is optional.
 5. **While casting, the phone is a remote.** No live cam on the phone. On a light canvas, top to bottom: the casting pill with the official connected Cast icon, a 160x90 still of the current cam (navy panel until it loads), the cam title (Title, 22/28 600), the place and local time ("Tokyo, Japan · 9:51 AM", place only when the time is unknown), and a 36px pin chip ("Pin cam", or "Pinned" in accent-soft with "Pinned. Rotation off." under it). At the bottom: previous, a 72px filled play or pause circle, next; a music line (note icon, 8px volume track, "Music"); two equal 48px buttons, "Cams" and "Mix", that open the same sheets as the local player; and the footer "Phone is a remote. Video and music play on the TV." Status, the debug line and a quiet Stop casting sit under the footer. There is no second cam or mix list on the remote itself. The rotation interval lives in the Cams sheet; mute, shuffle and next mix live in the Mix sheet.
-6. **Local play is full screen.** Controls overlay the cam, with a floating toggle and an exit.
+6. **Local play is full screen.** Controls overlay the cam, with a collapse toggle and an exit.
 
 7. **Debug mode is opt-in.** Off by default, toggled in About, resets every session (sessionStorage or in-memory, not localStorage), and synced to the TV while casting.
 8. **Shuffle starts mixes from the top.** A random mix, played from the beginning.

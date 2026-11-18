@@ -13,7 +13,7 @@ if base.endswith(".html"):
 here = os.path.dirname(os.path.abspath(__file__))
 FAKE_YT = open(os.path.join(here, "fake_youtube.js")).read()
 MOCK = open(os.path.join(here, "mock_cast_sender.js")).read()
-BUILD = "2026-11-17.28"
+BUILD = "2026-11-17.29"
 TAGLINE = "Live windows onto the world, with soft music, made for your TV."
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 # Every page denies the Fullscreen API: the player must stay full bleed and keep playing anyway.
@@ -176,6 +176,13 @@ with sync_playwright() as p:
     check("player: night field and theme-color", pg.evaluate("()=>getComputedStyle(document.body).backgroundColor") == "rgb(10, 26, 38)" and pg.get_attribute('meta[name="theme-color"]', "content").upper() == "#0A1A26")
     check("player: Start screen gone", wait_until(pg, "()=>document.querySelector('#start').hidden", 2000))
     check("player: top scrim with Home, Cast and full screen", all(pg.is_visible(s) for s in ("#lp-home", "#player-top [data-cast]", "#lp-fullscreen")))
+    check(f"player: Home is a back chevron plus the visible word Home ({pg.inner_text('#lp-home')!r})", pg.inner_text("#lp-home").strip() == "Home" and pg.locator("#lp-home use[href='#i-home']").count() == 1 and box(pg, "#lp-home")["height"] >= 48)
+    check("player: Cast and full screen are 48px hit targets", all(box(pg, s)["width"] == 48 and box(pg, s)["height"] == 48 for s in ("#player-top [data-cast]", "#lp-fullscreen")))
+    check("player: night glass is rgba(10, 26, 38, 0.78)", pg.evaluate("()=>getComputedStyle(document.querySelector('#bar')).backgroundColor") == "rgba(10, 26, 38, 0.78)")
+    radii = pg.evaluate("()=>{const c=getComputedStyle(document.querySelector('#bar')); return [c.borderTopLeftRadius, c.borderTopRightRadius, c.borderBottomLeftRadius, c.paddingTop, c.paddingLeft, c.paddingBottom]}")
+    check(f"player: glass has top corners 24 and padding 20 / 24 / 88 ({radii})", radii == ["24px", "24px", "0px", "20px", "24px", "88px"])
+    tstyle = pg.evaluate("()=>{const c=getComputedStyle(document.querySelector('.cap-title')); return [c.fontSize, c.lineHeight, c.fontWeight, c.color]}")
+    check(f"player: title 24/30 600 on-glass ({tstyle})", tstyle == ["24px", "30px", "600", "rgb(243, 245, 247)"])
     check("player: Cast control is the official launcher", pg.locator("#player-top [data-cast] google-cast-launcher").count() == 1)
     check("player: bottom glass visible", pg.is_visible("#bar"))
     cam = pg.evaluate("async()=>{const {CAMS}=await import('/js/data.js'); return CAMS.find(c=>c.id===__windowSeat.currentCamId())}")
@@ -183,9 +190,19 @@ with sync_playwright() as p:
     check(f"player: meta is '{{place}} · {{local time}}' ({pg.text_content('.cap-meta')})", re.fullmatch(re.escape(place_line(cam)) + r" · \d{1,2}:\d\d (AM|PM)", pg.text_content(".cap-meta")) is not None)
     check("player: meta has no channel or type", cam["channel"] not in pg.text_content(".cap-meta"))
     check(f"player: rotation status 'Next cam in M:SS' ({pg.text_content('#lp-status-text')})", re.fullmatch(r"Next cam in \d:\d\d", pg.text_content("#lp-status-text")) is not None)
+    row = pg.evaluate("()=>[...document.querySelectorAll('#bar > *')].filter(n=>n.offsetParent).map(n=>n.id||n.className)")
+    check(f"player: glass order is caption, Paused / Pin cam row, hairline, transport, music, Cams / Mix ({row})", row == ["caption", "lp-status", "lp-hairline", "lp-transport", "volume lp-volume", "lp-actions"])
+    pin, st = box(pg, "#pin-pill"), box(pg, "#lp-status-text")
+    check(f"player: Pin cam is a 36px chip right of the status on one row ({pin})", pin["height"] == 36 and st["x"] < pin["x"] and abs((st["y"] + st["height"] / 2) - (pin["y"] + pin["height"] / 2)) <= 2 and abs(pin["x"] + pin["width"] - (412 - 24)) <= 1)
     sizes = {s: box(pg, f"#bar [data-action={s}]") for s in ("prev", "play-pause", "next")}
-    check(f"player: transport 64 / 72 / 64 ({[(k, v['width'], v['height']) for k, v in sizes.items()]})",
-          sizes["prev"]["width"] == 64 and sizes["play-pause"]["width"] == 72 and sizes["next"]["width"] == 64 and sizes["prev"]["x"] < sizes["play-pause"]["x"] < sizes["next"]["x"])
+    check(f"player: transport 48 / 64 / 48 ({[(k, v['width'], v['height']) for k, v in sizes.items()]})",
+          sizes["prev"]["width"] == 48 and sizes["play-pause"]["width"] == 64 and sizes["play-pause"]["height"] == 64 and sizes["next"]["width"] == 48 and sizes["prev"]["x"] < sizes["play-pause"]["x"] < sizes["next"]["x"])
+    check("player: play / pause is a filled light circle with a dark glyph", pg.evaluate("()=>{const c=getComputedStyle(document.querySelector('#bar [data-action=play-pause]')); return [c.backgroundColor, c.color].join('|')}") == "rgb(243, 245, 247)|rgb(10, 26, 38)")
+    pills = pg.evaluate("()=>[...document.querySelectorAll('#bar .lp-actions button')].map(b=>{const r=b.getBoundingClientRect(), c=getComputedStyle(b); return [b.textContent.trim(), r.height, b.querySelectorAll('svg').length, c.borderTopWidth, c.borderTopColor, c.backgroundColor]})")
+    check(f"player: Cams and Mix are 44px outline text pills ({pills})", [p[0] for p in pills] == ["Cams", "Mix"] and all(p[1] == 44 and p[2] == 0 and p[3] == "1px" and p[4] == "rgba(255, 255, 255, 0.28)" and p[5] == "rgba(0, 0, 0, 0)" for p in pills))
+    cluster = box(pg, "#bar .lp-actions")
+    check(f"player: Cams / Mix sit in a compact 280px cluster ({cluster['width']})", cluster["width"] <= 280)
+    check("player: no Cast status clutter on the glass when nothing is wrong", not pg.is_visible("#bar .bar-status"))
     order = pg.evaluate("()=>[...document.querySelectorAll('#bar .lp-transport [data-action]')].map(b=>b.dataset.action)")
     check(f"player: transport row is only prev, play-pause, next ({order})", order == ["prev", "play-pause", "next"])
     check("player: Interval and Lite are not in the primary transport", pg.locator("#bar [data-action=interval], #bar [data-action=lite]").count() == 0 and pg.locator("#panel-cams [data-action=interval]").count() == 1 and pg.locator("#panel-cams [data-action=lite]").count() == 1)
@@ -193,6 +210,7 @@ with sync_playwright() as p:
     check(f"player: controls have 48px hit targets ({small})", small == [] or all(x[0] == "pin-pill" for x in small))
     fab = box(pg, "#chrome-toggle")
     check(f"player: 52px floating button at the bottom right ({fab})", fab["width"] == 52 and fab["height"] == 52 and abs(fab["x"] + 52 - (412 - 16)) <= 1 and abs(fab["y"] + 52 - (915 - 16)) <= 1)
+    check("player: collapse control is a ringed down chevron on night glass", pg.locator("#chrome-toggle use[href='#i-chevron-down']").count() == 1 and pg.evaluate("()=>{const c=getComputedStyle(document.querySelector('#chrome-toggle')); return c.backgroundColor==='rgba(10, 26, 38, 0.78)' && c.borderTopWidth==='1px'}"))
     check("player: floating button does not cover the glass controls", not any(overlaps(fab, box(pg, s)) for s in ("[data-action=open-cams]", "[data-action=open-music]", "#music-volume", "#pin-pill", "#bar [data-action=next]")))
 
     # Floating button toggles the chrome.
@@ -220,6 +238,9 @@ with sync_playwright() as p:
     pg.wait_for_timeout(300)
     check("player: pause pauses the whole feed", ws("feedPaused") is True and pg.evaluate("()=>__yt.cam().state") == 2 and pg.evaluate("()=>__yt.music().state") == 2)
     check("player: status reads Paused", pg.text_content("#lp-status-text") == "Paused")
+    pst = pg.evaluate("()=>{const c=getComputedStyle(document.querySelector('#lp-status-text')); return [c.fontSize, c.lineHeight, c.fontWeight, c.color]}")
+    check(f"player: Paused is 13/18 600 on-glass ({pst})", pst == ["13px", "18px", "600", "rgb(243, 245, 247)"])
+    check("player: paused shows the play glyph", pg.get_attribute("#bar [data-action=play-pause] use", "href") == "#i-play")
     check("player: play button label flips to Play", pg.get_attribute("#bar [data-action=play-pause]", "aria-label") == "Play")
     pg.wait_for_timeout(6800)
     check("player: chrome stays visible past 6s while paused", ws("chromeHidden") is False and pg.is_visible("#bar"))
@@ -245,6 +266,7 @@ with sync_playwright() as p:
     pg.click("#pin-pill")
     pg.wait_for_timeout(200)
     check("player: pin pill reads Pinned", pg.text_content("#pin-pill") == "Pinned" and pg.get_attribute("#pin-pill", "aria-pressed") == "true")
+    check("player: pinned chip is filled", pg.evaluate("()=>getComputedStyle(document.querySelector('#pin-pill')).backgroundColor") == "rgb(140, 195, 214)")
     check("player: status reads 'Pinned. Rotation off.'", pg.text_content("#lp-status-text") == "Pinned. Rotation off.")
     c1 = ws("currentCamId")
     pg.click("#bar [data-action=next]")
@@ -261,6 +283,7 @@ with sync_playwright() as p:
     pg.wait_for_timeout(150)
     check("player: Music slider on the glass sets the mix volume", pg.evaluate("()=>__yt.music().getVolume()") == 40 and pg.evaluate("()=>__yt.cam().getVolume()") == 0)
     check("player: slider labeled Music", pg.evaluate("()=>document.querySelector('#music-volume').closest('label').querySelector('span').textContent") == "Music")
+    check("player: Music line is note, track, label (value visually hidden)", pg.evaluate("()=>{const l=document.querySelector('#bar .lp-volume'); const k=[...l.children].map(n=>n.tagName.toLowerCase()); return k.join(',')==='svg,input,span,output' && l.querySelector('output').classList.contains('visually-hidden') && l.querySelector('output').textContent==='40'}"))
 
     # Full screen control: denied request is harmless.
     pg.click("#lp-fullscreen")
@@ -410,6 +433,42 @@ with sync_playwright() as p:
     rx.wait_for_timeout(1500)
     check("tv: no debug strip unless Debug mode is on", rx.evaluate("()=>document.querySelector('#debug-strip').hidden"))
     rx.context.close()
+
+    # ------------------------------------------------------------ Short landscape phone and Lite mode readability
+    def landscape(lite=False):
+        ctx = b.new_context(viewport={"width": 844, "height": 390}, has_touch=True, is_mobile=True)
+        ctx.add_init_script(DENY_FS)
+        if lite:
+            ctx.add_init_script("localStorage.setItem('windowSeat.lite', 'true')")
+        pg = ctx.new_page()
+        route(pg)
+        pg.goto(base + "/index.html")
+        pg.wait_for_timeout(1000)
+        pg.click("#start-btn")
+        wait_until(pg, "()=>__windowSeat.currentCamId() && __yt.cam() && __yt.cam().state===1", 6000)
+        pg.wait_for_timeout(500)
+        return pg
+
+    GEOM = """()=>{const r=s=>document.querySelector(s).getBoundingClientRect(); const bar=r('#bar'), top=r('#player-top'), c=r('#player-top [data-cast]');
+      const hit=document.elementFromPoint(c.left+c.width/2, c.top+c.height/2);
+      return {barTop: bar.top, barBottom: bar.bottom, topBottom: top.bottom, castHit: !!(hit && hit.closest('#player-top [data-cast]'))}}"""
+    pg = landscape()
+    g = pg.evaluate(GEOM)
+    check(f"landscape 844x390: glass top is on screen and below the top bar ({g})", g["barTop"] >= 0 and g["barTop"] >= g["topBottom"] and g["barBottom"] <= 390.5)
+    check("landscape 844x390: Cast is the element at its own center", g["castHit"])
+    check("landscape 844x390: glass does not cover the collapse control", not overlaps(box(pg, "#bar"), box(pg, ".lp-fab")))
+    pg.context.close()
+
+    pg = landscape(lite=True)
+    check("lite: body has the lite class", pg.evaluate("()=>document.body.classList.contains('lite')"))
+    lite = pg.evaluate("""()=>{const scrim=document.querySelector('.scrim'), cs=getComputedStyle(scrim);
+      const scrimOn = cs.display!=='none' && parseFloat(cs.opacity)>0 && cs.backgroundImage!=='none';
+      const alpha = c => { const m=c.match(/rgba?\\(([^)]+)\\)/); if(!m) return 0; const p=m[1].split(',').map(Number); return p.length<4?1:p[3]; };
+      const btns=['#lp-home','#player-top [data-cast]','#lp-fullscreen'].map(s=>getComputedStyle(document.querySelector(s)));
+      return {scrimOn, backed: btns.map(b=>alpha(b.backgroundColor)), blur: btns.map(b=>b.backdropFilter||'none'), anim: btns.map(b=>b.animationName)}}""")
+    check(f"lite: top bar buttons have a night-glass backing or a visible scrim ({lite})", lite["scrimOn"] or all(a >= 0.5 for a in lite["backed"]))
+    check("lite: no blur or animation on the top bar buttons", all(x == "none" for x in lite["blur"]) and all(x == "none" for x in lite["anim"]))
+    pg.context.close()
     b.close()
 
 print("page errors:", logs)

@@ -900,9 +900,11 @@ function renderCastButtons() {
 function setStatus(text) {
   statusText = text;
   const line = text && lastAttempt ? `${text} | ${lastAttempt}` : text || lastAttempt;
+  // The local player glass (v2) shows the line only when something is wrong; normal states stay off that chrome.
+  const trouble = castFailed || (!!lastAttemptCode && lastAttemptCode !== "cancel");
   document.querySelectorAll(".cast-status").forEach((el) => {
     el.textContent = line;
-    el.hidden = !line;
+    el.hidden = !line || (el.classList.contains("bar-status") && !trouble);
   });
   document.querySelectorAll("[data-cast]").forEach((b) => (b.title = text));
   renderCastButtons();

@@ -122,7 +122,7 @@ with sync_playwright() as p:
     order = pg.evaluate("()=>[...document.querySelectorAll('#bar .lp-transport .bar-btn')].map(b=>b.dataset.action)")
     check(f"phone: transport cluster reads prev, play-pause, next ({order})", order == ["prev", "play-pause", "next"])
     check("phone: no pin button inside the transport cluster", pg.locator("#bar .lp-transport [data-action=pin]").count() == 0)
-    check("phone: pin pill exists outside the transport cluster", pg.locator("[data-action=pin]").count() == 1 and pg.evaluate("()=>!document.querySelector('#bar .lp-transport').contains(document.querySelector('[data-action=pin]')) && !!document.querySelector('#bar .lp-info [data-action=pin]')"))
+    check("phone: pin chip sits in the Paused / Pin cam row, outside the transport cluster", pg.locator("[data-action=pin]").count() == 1 and pg.evaluate("()=>!document.querySelector('#bar .lp-transport').contains(document.querySelector('[data-action=pin]')) && !!document.querySelector('#bar .lp-row [data-action=pin]')"))
     check("phone: pin pill starts as 'Pin cam', aria-pressed false", pg.text_content("#pin-pill") == "Pin cam" and pg.get_attribute("#pin-pill", "aria-pressed") == "false")
     check("phone: pin control never says pause", "pause" not in pg.text_content("#pin-pill").lower())
     check("phone: bar play-pause label is 'Pause' (whole feed)", pg.text_content("#bar [data-action=play-pause] .label") == "Pause")
