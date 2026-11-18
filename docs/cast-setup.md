@@ -30,7 +30,7 @@ Source: https://developers.google.com/cast/docs/registration#register_your_appli
 
 Use the software (Cast) serial number, not the one on the box. Either:
 
-- **Easiest:** on a computer on the same wifi, open the Developer Console in Chrome, then use Chrome's Cast menu to cast that tab to the TV. The serial number shows on the TV screen.
+- **Easiest:** on a computer on the same Wi-Fi, open the Developer Console in Chrome, then use Chrome's Cast menu to cast that tab to the TV. The serial number shows on the TV screen.
 - **Or on the TV:** Settings > System > About > select **Android TV OS build** about 7 times until it says you are a developer. Then go to Settings > System > Cast (or Settings > Device Preferences > Google Cast) and read the serial number.
 
 A factory reset changes this number, so you would need to register it again.
@@ -52,7 +52,7 @@ Send me the Application ID. I put it in `js/cast-config.js` (`CAST_APP_ID_PROD`,
 
 ## 6. Use it
 
-1. On your Pixel, open https://window-seat-lemon.vercel.app in Chrome (same wifi as the TV).
+1. On your Pixel, open https://window-seat-lemon.vercel.app in Chrome (same Wi-Fi as the TV).
 2. Tap the Cast button and pick your TV.
 3. The TV plays the cam and music by itself, and the page turns into a remote. You can lock the phone.
 
