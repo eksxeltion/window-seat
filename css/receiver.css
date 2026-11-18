@@ -1,4 +1,5 @@
-/* Window Seat Cast receiver. Designed for a 1920x1080 TV; sizes scale with the viewport (px minimums).
+/* Window Seat Cast receiver. Designed for a 1920x1080 TV; sizes scale with the viewport. The lower third scales with vh
+   only (no px floors), so a 1280x720 TV shows it at the same share of the screen as 1080p, about a quarter or less.
    Night overlay tokens from docs/design.md. The video stays untouched: no grade, and no chrome except the lower
    third (first 10 seconds after a cam loads), the 5 second pin toast, the persistent Paused pill, and the Debug strip.
    No YouTube chrome ever shows: the cam iframe is overscaled, the paused cam is covered, and an unavailable cam is
@@ -14,6 +15,7 @@
   --font-display: "Fraunces", "Source Serif 4", Georgia, serif;
   --font-ui: "Plus Jakarta Sans", system-ui, "Segoe UI", Roboto, sans-serif;
   --radius-lg: 24px;
+  --tv-px: calc(100vh / 1080); /* one 1080p px, scaled with the screen height: the lower third is sized in these */
   --ease-emphasized-decel: cubic-bezier(0.05, 0.7, 0.1, 1);
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
@@ -53,38 +55,39 @@ html, body { margin: 0; height: 100%; background: var(--color-field); overflow: 
 /* TV safe area: 5% overscan margin on every side. */
 #safe { position: fixed; inset: 5%; pointer-events: none; z-index: 3; }
 
-/* Lower third (TV type scale, px at 1920x1080, scaled with the viewport and never below these): bottom left of the
-   safe area, 960px max. Enters with a 400ms fade plus a 16px rise, leaves with an 800ms fade. */
+/* Lower third (TV type scale, px at 1920x1080, scaled with vh and no px floors, so 720p and 540p get the same
+   proportions and the box stays about a quarter of the screen height or less): bottom left of the safe area,
+   min(50vw, 960px) wide at most. Enters with a 400ms fade plus a 16px (1.481vh) rise, leaves with an 800ms fade. */
 #caption {
-  position: absolute; left: 0; bottom: 0; max-width: max(960px, 50vw); box-sizing: border-box;
-  padding: max(32px, 1.667vw) max(40px, 2.083vw);
-  border: 1px solid var(--color-overlay-line); border-radius: max(var(--radius-lg), 1.25vw);
+  position: absolute; left: 0; bottom: 0; max-width: min(50vw, 960px); box-sizing: border-box;
+  padding: calc(var(--tv-px) * 24) calc(var(--tv-px) * 32);
+  border: 1px solid var(--color-overlay-line); border-radius: var(--radius-lg);
   background: var(--color-overlay);
   opacity: 1; transform: none;
   transition: opacity 400ms var(--ease-emphasized-decel), transform 400ms var(--ease-emphasized-decel);
 }
 /* Leaving is a fade only: the 16px drop happens after the fade, ready for the next rise. */
-#caption.quiet { opacity: 0; transform: translateY(max(16px, 0.833vw)); transition: opacity 800ms var(--ease-standard), transform 0s linear 800ms; }
+#caption.quiet { opacity: 0; transform: translateY(calc(var(--tv-px) * 16)); transition: opacity 800ms var(--ease-standard), transform 0s linear 800ms; }
 @media (prefers-reduced-motion: reduce) {
   #caption, #caption.quiet { transform: none; }
   #caption { transition: opacity 150ms var(--ease-standard); }
   #caption.quiet { transition: opacity 800ms var(--ease-standard); }
 }
-/* Title 64/76 Fraunces 600, two lines at most. */
+/* Title 48/56 Fraunces 600, two lines at most. */
 #cap-title {
-  font-family: var(--font-display); font-size: max(64px, 3.333vw); line-height: 1.1875; font-weight: 600; letter-spacing: -0.02em; color: var(--color-overlay-ink);
+  font-family: var(--font-display); font-size: calc(var(--tv-px) * 48); line-height: calc(var(--tv-px) * 56); font-weight: 600; letter-spacing: -0.02em; color: var(--color-overlay-ink);
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
 }
-/* Place 32/40 Jakarta 500, then the local time in accent-night after a 24px gap (no middle dot). */
-#cap-meta { display: flex; flex-wrap: wrap; column-gap: max(24px, 1.25vw); margin-top: max(8px, 0.417vw); font-size: max(32px, 1.667vw); line-height: 1.25; font-weight: 500; color: var(--color-overlay-dim); }
+/* Place 24/32 Jakarta 500, then the local time in accent-night after a 16px gap (no middle dot). */
+#cap-meta { display: flex; flex-wrap: wrap; column-gap: calc(var(--tv-px) * 16); margin-top: calc(var(--tv-px) * 8); font-size: calc(var(--tv-px) * 24); line-height: calc(var(--tv-px) * 32); font-weight: 500; color: var(--color-overlay-dim); }
 #cap-meta:empty { display: none; }
 #cap-meta .cap-time { color: var(--color-accent-night); font-variant-numeric: tabular-nums; }
-/* Mix line 28/36 Jakarta 500. */
-#cap-music { margin-top: max(16px, 0.833vw); font-size: max(28px, 1.458vw); line-height: 1.2857; font-weight: 500; color: var(--color-overlay-dim); }
+/* Mix line 24/32 Jakarta 500, 4px under the place line (both lines carry 8px of leading). */
+#cap-music { margin-top: calc(var(--tv-px) * 4); font-size: calc(var(--tv-px) * 24); line-height: calc(var(--tv-px) * 32); font-weight: 500; color: var(--color-overlay-dim); }
 #cap-music:empty { display: none; }
-/* Brand row: 24px Shade mark plus "Window Seat" 24/32 Jakarta 600, sentence case, overlay-dim. */
-#cap-brand { display: flex; align-items: center; gap: max(12px, 0.625vw); margin-top: max(24px, 1.25vw); font-size: max(24px, 1.25vw); line-height: 1.3333; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--color-overlay-dim); }
-#cap-brand .cap-mark { height: max(24px, 1.25vw); width: auto; aspect-ratio: 52 / 74; flex: none; display: block; }
+/* Brand row, 8px under the mix line: 24px Shade mark plus "Window Seat" 24/32 Jakarta 600, sentence case, overlay-dim. */
+#cap-brand { display: flex; align-items: center; gap: calc(var(--tv-px) * 12); margin-top: calc(var(--tv-px) * 8); font-size: calc(var(--tv-px) * 24); line-height: calc(var(--tv-px) * 32); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--color-overlay-dim); }
+#cap-brand .cap-mark { height: calc(var(--tv-px) * 24); width: auto; aspect-ratio: 52 / 74; flex: none; display: block; }
 
 /* Music: kept in the DOM at 356x200 (above YouTube's 200x200 minimum) so it keeps playing, but hidden
    behind the opaque cam layer and fully transparent. No display:none or visibility:hidden on purpose. */
