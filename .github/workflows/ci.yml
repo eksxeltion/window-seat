@@ -1,0 +1,101 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install playwright==1.65.2 websockets==17.4 greenlet==3.5.6
+          python -m playwright install --with-deps chromium
+
+      - name: Secret scan (gitleaks, full history)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" gitleaks
+          rm -f "$tarball"
+          ./gitleaks git --redact --no-banner --config .gitleaks.toml --exit-code 1 .
+          rm -f gitleaks
+
+      - name: Run tests
+        env:
+          PORT: '8765'
+        run: |
+          set -uo pipefail
+          python3 -m http.server "$PORT" --bind 127.0.0.1 >"$RUNNER_TEMP/http-server.log" 2>&1 &
+          SRV=$!
+          trap 'kill "$SRV" 2>/dev/null || true' EXIT
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS -o /dev/null "http://127.0.0.1:$PORT/"; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::http.server did not answer on 127.0.0.1:$PORT"
+            cat "$RUNNER_TEMP/http-server.log"
+            exit 1
+          fi
+
+          shopt -s nullglob
+          tests=(tests/test_*.py)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "::error::no tests found matching tests/test_*.py"
+            exit 1
+          fi
+
+          pass=0; fail=0; failed=""
+          for t in "${tests[@]}"; do
+            name=$(basename "$t")
+            log="$RUNNER_TEMP/wst-$name.log"
+            echo "running $name"
+            if timeout 300 python3 "$t" "http://127.0.0.1:$PORT/" >"$log" 2>&1; then
+              pass=$((pass+1))
+            else
+              fail=$((fail+1))
+              failed="$failed $name"
+            fi
+          done
+
+          for name in $failed; do
+            echo "::group::FAILED $name"
+            cat "$RUNNER_TEMP/wst-$name.log"
+            echo "::endgroup::"
+          done
+
+          echo "PASS $pass FAIL $fail:$failed"
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
