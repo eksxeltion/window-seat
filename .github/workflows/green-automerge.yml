@@ -1,0 +1,76 @@
+# green-automerge: squash-merges open risk:green PRs that a maintainer has
+# approved with a SHIP comment (see .github/scripts/green_automerge.py for the
+# full rules).
+#
+# - This workflow never deploys. It only checks out the trusted default branch
+#   to run the script; it never checks out or executes PR code.
+# - Merges made with GITHUB_TOKEN do not trigger other workflows, so ci will
+#   not rerun on main for these merges.
+# - The script skips any PR that changes .github/ or .gitleaks.toml, and
+#   requires the ci check to come from .github/workflows/ci.yml on the head
+#   SHA (actions: read is needed for that lookup).
+# - Scheduled runs are dry runs unless the repo variable AUTOMERGE_LIVE is
+#   exactly 'true'. Manual runs are dry runs unless dry_run is explicitly
+#   unchecked. Anything else is a dry run.
+
+name: green-automerge
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (log decisions, do not merge)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+  actions: read
+
+concurrency:
+  group: green-automerge
+  cancel-in-progress: false
+
+jobs:
+  automerge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out default branch (trusted script only, never PR code)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Run green-automerge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Raw values only. DRY_RUN is computed in bash below with exact,
+          # case-sensitive comparisons (Actions expression comparisons are
+          # case-insensitive, so 'TRUE' or 'True' would count as 'true').
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
+          AUTOMERGE_LIVE_VAR: ${{ vars.AUTOMERGE_LIVE }}
+        run: |
+          DRY_RUN=true
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              if [ "$DISPATCH_DRY_RUN" = "false" ]; then DRY_RUN=false; fi
+              ;;
+            schedule)
+              if [ "$AUTOMERGE_LIVE_VAR" = "true" ]; then DRY_RUN=false; fi
+              ;;
+          esac
+          export DRY_RUN
+          if [ "$DRY_RUN" = "false" ]; then
+            echo "Mode: LIVE (DRY_RUN=false)"
+          else
+            echo "Mode: DRY RUN (DRY_RUN=$DRY_RUN)"
+          fi
+          python3 .github/scripts/green_automerge.py
