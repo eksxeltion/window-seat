@@ -1,6 +1,6 @@
 // Window Seat service worker: caches only the app shell so the page opens fast and installs as an app.
 // Bump CACHE_VERSION whenever a shell file changes, and keep it equal to BUILD in js/build.js (all same-origin GETs are network-first with cache fallback).
-const CACHE_VERSION = "2026-11-17.24";
+const CACHE_VERSION = "2026-11-17.25";
 
 const CACHE = "window-seat-" + CACHE_VERSION;
 const SHELL = [
@@ -62,7 +62,8 @@ self.addEventListener("fetch", (event) => {
         return res;
       })
       .catch(() =>
-        caches.match(req).then((hit) => hit || (req.mode === "navigate" ? caches.match("/index.html").then((r) => r || caches.match("/")) : undefined)),
+        // index.html asks for css/style.css?v=BUILD and js/app.js?v=BUILD: the precached copies have no query.
+        caches.match(req).then((hit) => hit || caches.match(req, { ignoreSearch: true })).then((hit) => hit || (req.mode === "navigate" ? caches.match("/index.html").then((r) => r || caches.match("/")) : undefined)),
       ),
   );
 });

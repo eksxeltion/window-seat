@@ -359,12 +359,12 @@ with sync_playwright() as p:
     sent = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     check(f"cast: sheet slider sends volume 70 ({sent})", sent == [{"type": "volume", "value": 70}])
 
-    # Remote "Next mix" goes to the TV too (the TV picks it with its shuffle).
-    pg.click("#panel-music [data-action=close-panel]")
+    # The Mix sheet's "Next mix" goes to the TV too (the TV picks it with its shuffle).
     pg.evaluate("()=>__mockCast.sent.length=0")
-    pg.locator('#remote [data-cmd="next-mix"]').tap()
+    pg.click("#music-next")
     pg.wait_for_timeout(150)
     check("cast: Next mix sends nextMix only", [json.loads(m["data"])["type"] for m in pg.evaluate("()=>__mockCast.sent")] == ["nextMix"])
+    pg.click("#panel-music [data-action=close-panel]")
     check("cast: still no local playback", len(music_loads(pg)) == loads_before and pg.evaluate("()=>__yt.players.length") == n_players)
     pg.context.close()
 

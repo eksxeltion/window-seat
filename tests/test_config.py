@@ -91,7 +91,9 @@ with sync_playwright() as p:
     pg.evaluate("()=>{__mockCast.sent.length=0; __mockCast.reply({type:'state',configured:false})}"); pg.wait_for_timeout(200)
     msgs = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     check("on connect the phone sends the sheet list first", msgs and msgs[0]["type"] == "config" and len(msgs[0]["cams"]) == 23 and len(msgs[0]["mixes"]) == 16)
-    check("remote lists show the sheet rows", pg.locator('#remote-cams [data-cam="TESTROW0001"]').count() == 1)
+    pg.click('#remote [data-action="open-cams"]'); pg.wait_for_timeout(300)
+    check("the Cams sheet over the remote shows the sheet rows", pg.is_visible("#panel-cams") and pg.locator('#cams-list .cam-row[data-id="TESTROW0001"]').count() == 1)
+    check("no inline cam list on the remote", pg.locator("#remote-cams").count() == 0)
     pg.close()
 
     # Receiver: fetches the sheet itself, and accepts the list from the phone.

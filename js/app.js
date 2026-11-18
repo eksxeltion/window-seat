@@ -1226,9 +1226,6 @@ function render() {
   // Pin pill and rotation
   setText(el.pinPill, state.pinned ? "Pinned" : "Pin cam");
   el.pinPill.setAttribute("aria-pressed", String(state.pinned));
-  const secs = rotateSec();
-  for (const b of $$('[data-action="interval"]')) b.disabled = state.lite;
-  setText($("#cams-interval"), `New cam every ${secs}s`);
   for (const b of $$('[data-action="lite"]')) b.setAttribute("aria-pressed", String(state.lite));
 
   // Pause / Play is the whole feed (cam and music).
@@ -1302,6 +1299,10 @@ function showingCamId() {
 /* Cams sheet: count, time of day, quick picks, and the full list in list order. Local times move on, so the
    rows are refreshed on every render and every 30 seconds while the sheet is open. */
 function renderCamsPanel(now = new Date()) {
+  // While casting the Cams sheet shows and changes the TV's rotation (Lite mode is this phone's own setting).
+  const casting = isCasting();
+  for (const b of $$('[data-action="interval"]')) b.disabled = state.lite && !casting;
+  setText($("#cams-interval"), `New cam every ${casting ? remoteState().interval : rotateSec()}s`);
   const showing = showingCamId();
   const checked = checkedCams();
   // The real pool, including the fallback to the checked cams when every one of them is asleep.
@@ -2433,6 +2434,10 @@ function handleAction(action, btn) {
       return pickGroup(btn.dataset.group);
     case "play-mix":
       return playMix(id, { userChoice: true });
+    case "next-mix":
+      // Mix sheet: random with Shuffle on, else list order. While casting the TV picks the mix.
+      if (!isCasting()) localCommand("next_mix");
+      return nextMix();
     default:
   }
 }

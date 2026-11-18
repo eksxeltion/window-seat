@@ -27,21 +27,35 @@ with sync_playwright() as p:
     check("connect sends cams filter", any(m['type']=='cams' and len(m['ids'])>0 for m in init))
     check("all messages are JSON strings on the namespace", all(isinstance(m['data'],str) and m['ns']=='urn:x-cast:com.windowseat' for m in pg.evaluate("()=>__mockCast.sent")))
     check("remote visible", pg.is_visible("#remote"))
-    expect=[('[data-cmd="next"]',{'type':'next'}),('[data-cmd="prev"]',{'type':'prev'}),('[data-cmd="pin"]',{'type':'pin','value':True}),
-            ('[data-cmd="i30"]',{'type':'interval','value':30}),('[data-cmd="vol-up"]',{'type':'volume','value':70}),('[data-cmd="vol-up"]',{'type':'volume','value':80}),
-            ('[data-cmd="vol-down"]',{'type':'volume','value':70}),('[data-cmd="mute"]',{'type':'mute','value':True}),('[data-cmd="mute"]',{'type':'mute','value':False}),
-            ('[data-cmd="play"]',{'type':'pause','value':True}),('[data-cmd="play"]',{'type':'pause','value':False}),('[data-cmd="next-mix"]',{'type':'nextMix'}),
-            ('[data-mix]:nth-of-type(1)',None),('#remote-cams [data-cam]',None)]
-    for sel,exp in expect:
+    expect=[('#remote [data-cmd="next"]',{'type':'next'}),('#remote [data-cmd="prev"]',{'type':'prev'}),('#remote [data-cmd="pin"]',{'type':'pin','value':True}),
+            ('#remote [data-cmd="play"]',{'type':'pause','value':True}),('#remote [data-cmd="play"]',{'type':'pause','value':False})]
+    # Interval lives in the Cams sheet, volume, mute and next mix in the Mix sheet (both open over the remote).
+    cams=[('#cams-interval',{'type':'interval','value':30}),('#cams-list [data-action="watch"]',None)]
+    music=[('#music-mute',{'type':'mute','value':True}),('#music-mute',{'type':'mute','value':False}),('#music-next',{'type':'nextMix'}),('#mix-list .mix-btn',None)]
+    def tap(sel,exp):
         pg.evaluate("()=>__mockCast.sent.length=0")
-        pg.locator("#remote "+sel).last.tap(); pg.wait_for_timeout(120)
+        pg.locator(sel).first.tap(); pg.wait_for_timeout(120)
         got=[json.loads(m['data']) for m in pg.evaluate("()=>__mockCast.sent")]
         if exp is None: check(f"tap {sel} -> {got}", len(got)==1 and got[0]['type'] in ('mix','cam') and got[0].get('id'))
         else: check(f"tap {sel} -> {exp}", got==[exp])
+    for sel,exp in expect: tap(sel,exp)
+    for opener,rows in [('open-cams',cams),('open-music',music)]:
+        for sel,exp in rows:
+            if not pg.is_visible(f'#panel-{opener[5:]}'): pg.locator(f'#remote [data-action="{opener}"]').tap(); pg.wait_for_timeout(300)
+            tap(sel,exp)
+        if pg.is_visible(f'#panel-{opener[5:]}'): pg.locator(f'#panel-{opener[5:]} [data-action="close-panel"]').tap(); pg.wait_for_timeout(300)
+    pg.evaluate("()=>__mockCast.sent.length=0")
+    pg.locator('#remote [data-action="open-music"]').tap(); pg.wait_for_timeout(300)
+    pg.evaluate("()=>{const r=document.querySelector('#mix-volume'); r.value='80'; r.dispatchEvent(new Event('input',{bubbles:true})); r.dispatchEvent(new Event('change',{bubbles:true}))}"); pg.wait_for_timeout(120)
+    got=[json.loads(m['data']) for m in pg.evaluate("()=>__mockCast.sent")]
+    check(f"Mix sheet slider -> volume 80 ({got})", got==[{'type':'volume','value':80}])
+    pg.locator('#panel-music [data-action="close-panel"]').tap(); pg.wait_for_timeout(300)
     check("optimistic pin shown", pg.get_attribute("#remote-pin","aria-pressed")=="true")
     pg.evaluate("()=>__mockCast.reply({type:'state',camId:'5B4LmH4JbnY',camTitle:'Shibuya Scramble Crossing',mixId:'nCtOCLv6eFY',mixTitle:'X',pinned:false,interval:60,volume:40,muted:false,musicPaused:false})"); pg.wait_for_timeout(100)
     check("TV state reflected (cam title)", pg.text_content("#remote-cam")=="Shibuya Scramble Crossing")
-    check("TV state reflected (volume)", pg.text_content("#remote-vol")=="40")
+    pg.locator('#remote [data-action="open-music"]').tap(); pg.wait_for_timeout(300)
+    check("TV state reflected (Mix sheet volume)", pg.text_content("#mix-volume-out")=="40")
+    pg.locator('#panel-music [data-action="close-panel"]').tap(); pg.wait_for_timeout(300)
     check("status says connected", "Connected" in pg.text_content("#remote-status"))
     pg.evaluate("()=>__mockCast.sent.length=0"); pg.locator('#remote [data-cmd="next"]').tap(); pg.wait_for_timeout(4500)
     check("no-reply warning after 4s", "no reply" in pg.text_content("#remote-status"))

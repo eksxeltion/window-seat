@@ -37,9 +37,16 @@ with sync_playwright() as p:
     pg.evaluate("()=>__mockCast.reply({type:'state',configured:false})"); pg.wait_for_timeout(200)  # probe reply: a fresh TV gets the phone's choices
     check("ii: STARTED pushes the phone state to the TV", "getState" in types(pg))
     clear(pg)
-    for sel, t in [('[data-cmd="next"]', "next"), ('[data-cmd="prev"]', "prev"), ('[data-cmd="vol-up"]', "volume"), ('[data-cmd="next-mix"]', "nextMix")]:
-        clear(pg); pg.locator("#remote " + sel).tap(); pg.wait_for_timeout(150)
+    for sel, t in [('#remote [data-cmd="next"]', "next"), ('#remote [data-cmd="prev"]', "prev")]:
+        clear(pg); pg.locator(sel).tap(); pg.wait_for_timeout(150)
         check(f"ii: remote {t} goes to the TV", types(pg) == [t])
+    # Volume and Next mix live in the Mix sheet over the remote.
+    pg.locator('#remote [data-action="open-music"]').tap(); pg.wait_for_timeout(300)
+    clear(pg); pg.evaluate("()=>{const r=document.querySelector('#mix-volume'); r.value='70'; r.dispatchEvent(new Event('input',{bubbles:true})); r.dispatchEvent(new Event('change',{bubbles:true}))}"); pg.wait_for_timeout(150)
+    check("ii: Mix sheet volume goes to the TV", types(pg) == ["volume"])
+    clear(pg); pg.locator("#music-next").tap(); pg.wait_for_timeout(150)
+    check("ii: Mix sheet Next mix goes to the TV", types(pg) == ["nextMix"])
+    pg.locator('#panel-music [data-action="close-panel"]').tap(); pg.wait_for_timeout(300)
     check("ii: no local iframe after controls", pg.evaluate(YT) == 0)
     check("debug line shows builds and states", re.search(r"Phone build " + re.escape(PHONE_BUILD) + r" \| TV build \S+ \| cast CONNECTED \| session SESSION_STARTED", pg.text_content("#remote-debug")) is not None)
     # (vi) keyboard and media keys go to the TV
@@ -55,8 +62,8 @@ with sync_playwright() as p:
         check(f"vi: {key} sends pause {val}", len(sent) == 1 and sent[0]["type"] == "pause" and sent[0]["value"] is val)
     # (vii) build stamps
     pg.evaluate("()=>document.querySelector('[data-action=open-about]').click()"); pg.wait_for_timeout(200)
-    check("vii: About shows the build", pg.text_content("#about-build") == "Build 2026-11-17.24")
-    check("vii: window.__windowSeat.build", pg.evaluate("()=>__windowSeat.build") == "2026-11-17.24")
+    check("vii: About shows the build", pg.text_content("#about-build") == "Build 2026-11-17.25")
+    check("vii: window.__windowSeat.build", pg.evaluate("()=>__windowSeat.build") == "2026-11-17.25")
     # (viii) ending the session (real CAF order) returns to the Start screen
     pg.locator('#remote [data-cmd="stop"]').tap(); pg.wait_for_timeout(500)
     check("viii: Stop casting hides the remote, Start screen back", (not pg.is_visible("#remote")) and pg.is_visible("#start-btn"))
@@ -98,7 +105,9 @@ read = lambda *a: open(os.path.join(root, *a)).read()
 build = re.search(r'BUILD = "([^"]+)"', read("js", "build.js")).group(1)
 recv = re.search(r'BUILD = "([^"]+)"', read("js", "receiver.js")).group(1)
 sw = re.search(r'CACHE_VERSION = "([^"]+)"', read("sw.js")).group(1)
-check(f"vii: build.js == receiver.js == sw.js ({build}, {recv}, {sw})", build == recv == sw == "2026-11-17.24")
+check(f"vii: build.js == receiver.js == sw.js ({build}, {recv}, {sw})", build == recv == sw == "2026-11-17.25")
 check("vii: receiver.html ?v= matches", set(re.findall(r"\?v=([\d.-]+)", read("receiver.html"))) == {build})
+check("vii: index.html ?v= on style.css and app.js matches", set(re.findall(r'(?:css/style\.css|js/app\.js)\?v=([\d.-]+)"', read("index.html"))) == {build}
+      and len(re.findall(r'(?:css/style\.css|js/app\.js)\?v=', read("index.html"))) == 2)
 check("vii: sw.js precaches build.js", '"/js/build.js"' in read("sw.js"))
 print(logs); sys.exit(1 if fails or logs else 0)

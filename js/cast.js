@@ -231,79 +231,33 @@ function buildRemote() {
     </div>
     <div class="remote-row">
       <button class="btn" type="button" data-cmd="prev">Prev cam</button>
+      <button class="btn" type="button" data-cmd="play" id="remote-play">Pause</button>
       <button class="btn" type="button" data-cmd="next">Next cam</button>
       <button class="btn" type="button" data-cmd="pin" id="remote-pin" aria-pressed="false">Pin cam</button>
     </div>
-    <div class="remote-row">
-      <button class="btn" type="button" data-cmd="i30" aria-pressed="false">Every 30s</button>
-      <button class="btn" type="button" data-cmd="i60" aria-pressed="false">Every 60s</button>
-    </div>
-    <div class="remote-row">
-      <button class="btn" type="button" data-cmd="vol-down">Volume -</button>
-      <output id="remote-vol">60</output>
-      <button class="btn" type="button" data-cmd="vol-up">Volume +</button>
-    </div>
-    <div class="remote-row">
-      <button class="btn" type="button" data-cmd="mute" id="remote-mute" aria-pressed="false">Mute</button>
-      <button class="btn" type="button" data-cmd="play" id="remote-play">Pause</button>
-      <button class="btn" type="button" data-cmd="next-mix">Next mix</button>
+    <div class="remote-menus">
+      <button class="btn remote-cams-btn" type="button" data-action="open-cams" aria-haspopup="dialog">Cams and time of day</button>
+      <button class="btn remote-cams-btn" type="button" data-action="open-music" aria-haspopup="dialog">Mix, shuffle and volume</button>
     </div>
     <p class="remote-status" id="remote-status" role="status">Waiting for the TV...</p>
     <p class="remote-debug" id="remote-debug"></p>
-    <h3 class="remote-head">Music</h3>
-    <button class="btn remote-cams-btn" type="button" data-action="open-music" aria-haspopup="dialog">Mix, shuffle and volume</button>
-    <ol class="remote-mixes" id="remote-mixes"></ol>
-    <button class="btn remote-cams-btn" type="button" data-action="open-cams" aria-haspopup="dialog">Cams and time of day</button>
-    <h3 class="remote-head">Show a cam now</h3>
-    <ol class="remote-mixes" id="remote-cams"></ol>
     <button class="btn btn-primary remote-stop" type="button" data-cmd="stop">Stop casting</button>`;
   document.body.append(root);
   ui.root = root;
   ui.cam = $("#remote-cam");
   ui.mix = $("#remote-mix");
-  ui.vol = $("#remote-vol");
   ui.pin = $("#remote-pin");
   ui.device = $("#remote-device");
-  ui.mute = $("#remote-mute");
   ui.play = $("#remote-play");
   ui.status = $("#remote-status");
   ui.debug = $("#remote-debug");
   ui.hairline = $("#remote-hairline");
   ui.pauseWarn = $("#remote-pause-warn");
-  fillRemoteLists();
+  // The Cams and Mix buttons carry data-action: js/app.js opens the same sheets as on the local player.
   root.addEventListener("click", (e) => {
-    const b = e.target.closest("button");
-    if (!b) return;
-    if (b.dataset.mix) {
-      const m = MIXES.find((x) => x.id === b.dataset.mix);
-      return act({ type: "mix", id: b.dataset.mix }, { mixId: b.dataset.mix, mixTitle: m ? m.en : "", paused: false });
-    }
-    if (b.dataset.cam) {
-      const c = CAMS.find((x) => x.id === b.dataset.cam);
-      return act({ type: "cam", id: b.dataset.cam }, { camId: b.dataset.cam, camTitle: c ? c.title : "" });
-    }
-    runCmd(b.dataset.cmd);
+    const b = e.target.closest("button[data-cmd]");
+    if (b) runCmd(b.dataset.cmd);
   });
-}
-
-/* Remote cam and mix buttons, rebuilt whenever the list changes (sheet config). */
-function fillRemoteLists() {
-  const fill = (ol, items, key, label) => {
-    if (!ol) return;
-    ol.textContent = "";
-    for (const it of items) {
-      const li = document.createElement("li");
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "btn";
-      b.dataset[key] = it.id;
-      b.textContent = label(it);
-      li.append(b);
-      ol.append(li);
-    }
-  };
-  fill($("#remote-mixes"), MIXES, "mix", (m) => m.en);
-  fill($("#remote-cams"), CAMS, "cam", (c) => `${c.title} (${c.place})`);
 }
 
 /** Route a phone control to the TV: prev, next, pin, interval, vol-up, vol-down, mute, play, next-mix. */
@@ -323,9 +277,9 @@ export function remoteVolume(v) {
   act({ type: "volume", value: n }, { volume: n, muted: n === 0 ? remote.muted : false });
 }
 
-/** What the TV reports (or the phone just asked for): read only, for the Mix sheet while casting. */
+/** What the TV reports (or the phone just asked for): read only, for the Mix and Cams sheets while casting. */
 export function remoteState() {
-  return { mixId: remote.mixId, mixTitle: remote.mixTitle, volume: remote.volume, muted: !!remote.muted, paused: !!remote.paused, shuffle: remote.shuffle !== false };
+  return { mixId: remote.mixId, mixTitle: remote.mixTitle, volume: remote.volume, muted: !!remote.muted, paused: !!remote.paused, shuffle: remote.shuffle !== false, interval: remote.interval === 30 ? 30 : 60 };
 }
 
 /** Shuffle for this session: the TV picks the next mix itself when one ends, so it follows the phone's switch.
@@ -350,7 +304,6 @@ export function sendCamsToTv(ids, rules = {}) {
 
 /** Send the current cam and mix lists to the TV (only when they come from the sheet). */
 export function sendConfigToTv() {
-  if (ui.root) fillRemoteLists();
   if (!session || listInfo.source === "built-in") return;
   // Joining a running TV, or still asking whether to, must not replace its lists with this phone's copy
   // (a late sheet fetch on this phone can finish after the join; the TV fetches the sheet itself).
@@ -374,14 +327,7 @@ function renderRemote() {
   renderDebug();
   ui.cam.textContent = remote.camTitle || "Tuning in...";
   ui.mix.textContent = remote.mixTitle || "...";
-  ui.vol.textContent = remote.volume;
   ui.pin.setAttribute("aria-pressed", String(remote.pinned));
-  ui.root.querySelector('[data-cmd="i30"]').setAttribute("aria-pressed", String(remote.interval === 30));
-  ui.root.querySelector('[data-cmd="i60"]').setAttribute("aria-pressed", String(remote.interval !== 30));
-  ui.root.querySelectorAll("[data-mix]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mix === remote.mixId)));
-  ui.root.querySelectorAll("[data-cam]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.cam === remote.camId)));
-  ui.mute.setAttribute("aria-pressed", String(!!remote.muted));
-  ui.mute.textContent = remote.muted ? "Unmute" : "Mute";
   ui.pin.textContent = remote.pinned ? "Pinned" : "Pin cam";
   ui.play.textContent = remote.paused ? "Play" : "Pause";
   ui.hairline.hidden = !remote.paused;
@@ -545,7 +491,6 @@ function sendResumeSet(s, joined = false) {
   // Joining: the TV already has its lists (its own sheet fetch, or the sender that set it up). This phone's copy may
   // be older, and replacing the TV's lists can drop cams from its pool or switch the cam or mix it plays.
   if (!joined) sendConfigToTv();
-  else if (ui.root) fillRemoteLists();
   // Shuffle only steers the next mix, so it is safe to send on resume: the TV keeps the mix it is playing.
   sendShuffleToTv(hooks.getLocal().shuffle !== false, s);
   send({ type: "getState" });

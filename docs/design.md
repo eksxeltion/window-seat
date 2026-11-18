@@ -351,7 +351,7 @@ These decisions are locked for the v2 and v3 mocks.
 2. **Pin stops auto rotation only.** The current cam stays on screen and music keeps playing. Pin and pause are visually distinct and can combine.
 3. **Volume is for the mix only.** Cam audio is always muted, with no control for it.
 4. **Inclusion from the full list, plus shortcuts.** The 44 in-rotation cams start checked. Users uncheck from that list, or use All / None / country / type shortcuts. Skip sleeping cams (midnight to 6 AM local) is on by default and resets each session. Only daytime is optional.
-5. **While casting, the phone is a remote.** No live cam on the phone. Same transport and menus, plus a persistent casting pill with the official connected Cast icon.
+5. **While casting, the phone is a remote.** No live cam on the phone. Same transport and menus, plus a persistent casting pill with the official connected Cast icon. The remote opens the same Cams and Mix sheets as the local player, from two buttons right under the transport, with no second cam or mix list on the remote itself. The rotation interval lives in the Cams sheet; volume, mute, shuffle and next mix live in the Mix sheet.
 6. **Local play is full screen.** Controls overlay the cam, with a floating toggle and an exit.
 
 7. **Debug mode is opt-in.** Off by default, toggled in About, resets every session (sessionStorage or in-memory, not localStorage), and synced to the TV while casting.
