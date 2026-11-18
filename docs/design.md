@@ -107,12 +107,15 @@ Type must read from the couch, about 3 meters away. Sizes are px at 1080p and sh
 
 | Name | Size / line | Weight | Use |
 | --- | --- | --- | --- |
+| TV start title | 72 / 84 | Fraunces 600 | "Window Seat" on the 10-foot start (`?tv=1` and TV browsers) |
 | TV title | 64 / 76 | Fraunces 600 | Cam name in the lower third |
 | TV meta | 32 / 40 | Plus Jakarta 500 | City, country, then the local time in accent-night |
 | TV mix | 28 / 36 | Plus Jakarta 500 | Current mix, English title |
 | TV brand | 24 / 32 | Plus Jakarta 600, sentence case, no tracking | 24px Shade mark (night colors) plus "Window Seat" |
 | TV toast, Paused pill | 32 / 40 | Plus Jakarta 600 | Command confirmation ("Pinned. Staying on this cam."), "Paused" |
 | TV unavailable | 32 / 40 | Plus Jakarta 500 | "This window is closed for now. Next window in 5 seconds." |
+| TV start line | 32 / 40 | Plus Jakarta 500 | The tagline on the 10-foot start |
+| TV button | 32 / 40 | Plus Jakarta 600 | 88px tall pills on the 10-foot start |
 
 Nothing on the TV is under 24px at 1080p, except the Debug strip.
 
@@ -219,6 +222,17 @@ Same height, transparent fill, navy label, no border (or a hairline only if it s
 ### Start screen (Home)
 
 Bright canvas. Wordmark (Shade mark plus "Window Seat"), a one-line tagline, a "Right now" hero, a full-width Start watching button, then Cast to your TV (official Cast icon), then quieter ghost actions for "Open in TV browser" and "About and credits".
+
+This is the phone and desktop Home. TV browsers and `?tv=1` get the 10-foot start below instead.
+
+### 10-foot start (TV browser and `?tv=1`)
+
+When `body` has `.tv`, the phone card is replaced by a two-pane 10-foot layout on the same fog canvas with navy ink (the night field is for video only). Sizes are px at 1920x1080 and scale with the viewport (`min(100vh / 1080, 100vw / 1920)`), so they are exactly these values at 1080p and grow on 4K. Safe inset 5%: 96px left and right, 54px top and bottom.
+
+- Left pane: the "Right now" cam still, 864px wide at 16:9, radius 24, media edge to edge. The "Right now" text card is not shown.
+- Right pane: the Shade mark (88px) and "Window Seat" 72/84 Fraunces 600, the tagline 32/40 ink-secondary, then two 88px pills with 32/40 Plus Jakarta 600 labels: "Start watching" (navy, autofocused) and "Cast from your phone" (outlined). "Cast from your phone" opens a panel with a QR for the app, so someone on the couch can open it on a phone and Cast. "About and credits" stays one D-pad step below as a 72px ghost pill.
+- Not shown: the phone "Cast to your TV" pill and "Open in TV browser".
+- D-pad focus: 4px `#8CC3D6` ring, 2px offset, focused start buttons scale to 1.04 (no scale with reduced motion). The 4px ring applies to every focusable on a TV browser.
 
 Tagline: "Live windows onto the world, with soft music, made for your TV." This is intentionally wider than Japan. About copy can still lead with Japan.
 

@@ -14,7 +14,7 @@ if base.endswith(".html"):
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FAKE_YT = open(os.path.join(HERE, "fake_youtube.js")).read()
-BUILD = "2026-11-17.21"
+BUILD = "2026-11-17.22"
 MSG = "This window is closed for now. Next window in 5 seconds."
 fails, logs = [], []
 
