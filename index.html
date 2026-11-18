@@ -203,6 +203,12 @@
           <span class="debug-switch-track" aria-hidden="true"><span class="debug-switch-thumb"></span></span>
         </label>
         <p id="debug-help" class="this-copy-help">Shows build, list, and Cast details on this phone and on the TV. Off unless you turn it on. It resets when you reload the app.</p>
+        <label class="debug-switch" for="cast-app-toggle">
+          <span class="debug-switch-label">Cast test receiver</span>
+          <input id="cast-app-toggle" type="checkbox" role="switch" aria-describedby="cast-app-help" autocomplete="off">
+          <span class="debug-switch-track" aria-hidden="true"><span class="debug-switch-thumb"></span></span>
+        </label>
+        <p id="cast-app-help" class="this-copy-help">For testing on registered test TVs only. Changing it reloads the app. It stays until you turn it off.</p>
         <label class="debug-switch" for="telemetry-toggle">
           <span class="debug-switch-label">Share anonymous usage and errors</span>
           <input id="telemetry-toggle" type="checkbox" role="switch" aria-describedby="telemetry-help telemetry-dnt" autocomplete="off" checked>

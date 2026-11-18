@@ -72,6 +72,7 @@ function collect() {
         ["Mix", mixText],
       ]],
       ["CAST", [
+        ["App", c.appId ? `${c.appId} (${c.appKind === "test" ? "test receiver" : "production"})` : "?"],
         ["Context", c.castState || "-"],
         ["Session", c.sessionState || "-"],
         ["Namespace", c.ns ? `windowseat STRING · ${c.ns.ok ? "listed" : "not listed"}${c.ns.names.length ? ` [${c.ns.names.join(",")}]` : ""}` : "no session"],

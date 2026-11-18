@@ -10,7 +10,7 @@ import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-17.18"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-17.19"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -33,6 +33,7 @@ const PARAMS = new URLSearchParams(location.search);
 const DEBUG = PARAMS.get("debug") === "1";
 const STRIP_FORCED = DEBUG || PARAMS.get("strip") === "1"; // strip stays on after a session ends
 /* Test override for the pause timeout: ?pauseWarnMs=...&pauseEndMs=... (positive numbers), or __receiver.setPauseTimeout. */
+const PAUSE_OVERRIDE = PARAMS.has("pauseWarnMs") || PARAMS.has("pauseEndMs"); // shown on the strip: a short-timer session
 function msParam(name, fallback) {
   const n = Number(PARAMS.get(name));
   return PARAMS.has(name) && Number.isFinite(n) && n > 0 ? n : fallback;
@@ -162,7 +163,7 @@ function snapshot() {
 /* ---------------------------------------------------------------- on-TV debug strip */
 
 // cafError is its own field: later errors (broadcast, handle, sheet) never overwrite the CAF start failure.
-const dbg = { caf: "loading", cafError: "", listener: "no", readyNs: "?", rx: 0, tx: 0, appState: "-", senders: 0, lastIn: "none", lastOut: "none", error: "" };
+const dbg = { caf: "loading", appId: "?", cafError: "", listener: "no", readyNs: "?", rx: 0, tx: 0, appState: "-", senders: 0, lastIn: "none", lastOut: "none", error: "" };
 let injected = false; // test hook: a mocked context stands in for CAF
 let cafStarted = false; // context.start() returned without throwing (or a test injected a context)
 let stripOn = STRIP_FORCED; // hidden by default: Debug mode on the phone turns it on
@@ -196,10 +197,10 @@ function renderStrip() {
   const ev = events[events.length - 1];
   const lines = [
     "WINDOW SEAT · DEBUG",
-    `build ${BUILD} | list ${listInfo.source} ${listInfo.cams}/${listInfo.mixes}`,
+    `build ${BUILD} | app ${dbg.appId} | list ${listInfo.source} ${listInfo.cams}/${listInfo.mixes}`,
     `${caf} | listener ${dbg.listener} | senders ${dbg.senders} | ns windowseat STRING | ready-ns ${dbg.readyNs} | appstate ${dbg.appState}`,
     `rx ${dbg.rx} | tx ${dbg.tx} | last in: ${dbg.lastIn} | last reply: ${out}`,
-    `cam ${s.camId || "-"} | mix ${s.mixId || "-"} | pause timer ${pauseText()}`,
+    `cam ${s.camId || "-"} | mix ${s.mixId || "-"} | pause timer ${pauseText()}${PAUSE_OVERRIDE ? ` | override warn ${mmss(pt.warnMs)} end ${mmss(pt.endMs)}` : ""}`,
   ];
   if (ev) lines.push(`ev ${ev.t} ${ev.text}${ev.n ? ` x${ev.n}` : ""}`);
   if (dbg.error) lines.push(`error: ${dbg.error}`);
@@ -1078,7 +1079,9 @@ function startCast() {
     });
     context.addEventListener(cast.framework.system.EventType.READY, () => {
       castEvent("CAF ready");
-      setDbg({ caf: "ready", listener: "ready" });
+      // The registered app this receiver runs as (production or the test app), for the strip only.
+      const appId = quietly(() => context.getApplicationData().id);
+      setDbg({ caf: "ready", listener: "ready", ...(appId ? { appId: String(appId) } : {}) });
       capture("receiver_ready", { ms_since_load: msSinceLoad() });
       refreshAppState();
     });
@@ -1222,6 +1225,8 @@ Object.defineProperty(window, "__receiverDebug", {
     dbg,
     get stripOn() { return stripOn; },
     get strip() { return ($("debug-strip") || {}).textContent || ""; },
+    // Pause timeout durations and phase (also with ?strip=1, where __receiver does not exist).
+    get pause() { return { warnMs: pt.warnMs, endMs: pt.endMs, phase: pt.phase, stops: pt.stops }; },
   },
 });
 

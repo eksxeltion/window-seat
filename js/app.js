@@ -4,6 +4,7 @@ import qrcode from "./qr.js";
 import { initCast, castConfigured, sendConfigToTv, sendCamsToTv, isCasting, syncRemoteMode, remoteCmd, remoteMix, remoteCam, remoteVolume, remoteState, castDebugInfo, sendDebugToTv, sendShuffleToTv, telemetryCastState, telemetryCastSessionId, castAvailable } from "./cast.js";
 import { initDebug, isDebugOn } from "./debug.js";
 import { BUILD } from "./build.js";
+import { CAST_APP, CAST_APP_ID, saveCastApp } from "./cast-config.js";
 import { refreshFromSheet, listLabel, listInfo } from "./config.js";
 import { initTelemetry, capture, captureError, setTelemetryEnabled, isTelemetryOn, telemetryForcedOff, onTelemetryChange } from "./telemetry.js";
 import { localTime, camLocalTime, awakeCams, placeLine, partOfDay, isSleeping, rotationPool, DEFAULT_TIME_RULES } from "./localtime.js";
@@ -1946,6 +1947,27 @@ function setupCast() {
 /* ================================================================ debug mode */
 
 // Opt-in diagnostics (About, This copy). Off on every page load; see js/debug.js.
+/* ================================================================ cast test receiver switch */
+
+// About, This copy: "Cast test receiver". The Cast SDK reads the app ID once (CastContext setOptions), so a change
+// saves the choice and reloads. The switch shows the app this load actually uses (see js/cast-config.js).
+function setupCastAppSwitch() {
+  const toggle = document.getElementById("cast-app-toggle");
+  const help = document.getElementById("cast-app-help");
+  if (!toggle) return;
+  toggle.checked = CAST_APP === "test";
+  if (help) help.textContent += ` Now using ${CAST_APP === "test" ? "the test receiver" : "the production receiver"} (${CAST_APP_ID}).`;
+  toggle.addEventListener("change", () => {
+    const which = toggle.checked ? "test" : "prod";
+    saveCastApp(which);
+    // Always put the choice in the URL so the reload honors it even if saving to storage failed.
+    const url = new URL(location.href);
+    url.searchParams.set("castApp", which);
+    if (url.href === location.href) location.reload();
+    else location.replace(url.href);
+  });
+}
+
 /* ================================================================ telemetry switch */
 
 // About, This copy: "Share anonymous usage and errors". Do Not Track or Global Privacy Control: off and disabled.
@@ -2509,6 +2531,7 @@ function boot() {
   loadYouTubeApi();
   setupDebug();
   setupTelemetrySwitch();
+  setupCastAppSwitch();
   setupCast();
   loadSheetConfig();
   reportAppOpen();

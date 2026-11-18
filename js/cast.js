@@ -1,5 +1,5 @@
 // Sender side of Google Cast. The phone page starts a session, then becomes a remote for receiver.html.
-import { CAST_APP_ID, RECEIVER_NAMESPACE } from "./cast-config.js";
+import { CAST_APP, CAST_APP_ID, RECEIVER_NAMESPACE } from "./cast-config.js";
 import { CAMS, MIXES } from "./data.js";
 import { listInfo, currentConfig } from "./config.js";
 import { BUILD } from "./build.js";
@@ -55,12 +55,12 @@ const SEND_ERRORS = {
   api_not_initialized: "Cast is still starting",
 };
 
-/* What the session says about the TV app: right app id, and does it declare our channel? */
+/* What the session says about the TV app: right app id (the active one, test or production), and does it declare our channel? */
 function channelCheck() {
   const obj = quietly(() => session.getSessionObj());
   const appId = obj && obj.appId;
   const names = ((obj && obj.namespaces) || []).map((n) => n.name);
-  if (appId && appId !== CAST_APP_ID) return `Connected to a different TV app (${appId}), not Window Seat (${CAST_APP_ID}).`;
+  if (appId && appId !== CAST_APP_ID) return `Connected to a different TV app (${appId}), not Window Seat${CAST_APP === "test" ? " (test)" : ""} (${CAST_APP_ID}).`;
   if (obj && !names.includes(RECEIVER_NAMESPACE)) return "The TV app is running but has not opened the Window Seat channel yet (receiver not started, or an old version). The phone's Chrome does not list the Window Seat channel for this session yet.";
   return "";
 }
@@ -753,6 +753,8 @@ export function castDebugInfo() {
   return {
     casting: remoteOn || !!session,
     connected: !!session,
+    appId: CAST_APP_ID,
+    appKind: CAST_APP,
     castState,
     sessionState: dbg.sessionState,
     ns: session ? nsInfo() : null,
@@ -989,7 +991,7 @@ function initFramework() {
   window.addEventListener("pageshow", () => syncRemoteMode());
   window.addEventListener("focus", () => syncRemoteMode());
   ctx.setOptions({
-    receiverApplicationId: CAST_APP_ID,
+    receiverApplicationId: CAST_APP_ID, // the active app: production, or the test app when opted in
     autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
   });
   castReady = true;
