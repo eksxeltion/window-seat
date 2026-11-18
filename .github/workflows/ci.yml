@@ -78,6 +78,10 @@ jobs:
       - name: Run tests
         env:
           PORT: '8765'
+          # test_receiver_cmds.py and test_receiver_e2e_realcaf.py use the real YouTube IFrame API by
+          # default. On GitHub runners the live-stream (cam) embeds never play (YouTube appears to block
+          # datacenter IPs) while VOD music does, so the cam never loads there. In CI they use tests/fake_youtube.js instead; every assertion still runs.
+          WS_FAKE_YOUTUBE: '1'
         run: |
           set -uo pipefail
           python3 -m http.server "$PORT" --bind 127.0.0.1 >"$RUNNER_TEMP/http-server.log" 2>&1 &
