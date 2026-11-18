@@ -364,6 +364,8 @@ function createCamPlayer() {
 }
 
 function loadCam(camId, delay) {
+  // What the player holds now, so a swap dropped before its load call can keep it (see keepCam).
+  cp.prev = { camId: cp.camId, loadedAt: cp.loadedAt, current: hasCurrentLoad(), nudged: cp.nudged, err: !!cp.errSeq && cp.errSeq === cp.seq };
   cp.camId = camId;
   cp.loadedAt = 0;
   cp.nudged = false;
@@ -429,11 +431,13 @@ function pickCam(fromId, dir = 1) {
 }
 
 /** Start switching to `camId`: cover the screen, then load it on the single player. */
-function beginLoad(camId, dir = 1, fails = 0, reason) {
+function beginLoad(camId, dir = 1, fails = 0, reason, origin) {
   const delay = covered ? 0 : animMs();
-  // Telemetry reason for cam_shown; a restart of the same pending cam keeps its reason.
-  const why = reason || (state.pending && state.pending.camId === camId ? state.pending.reason : "rotate");
-  state.pending = { camId, startedAt: Date.now() + delay, dir, fails, reason: why };
+  // Telemetry reason for cam_shown; a restart of the same pending cam keeps its reason. `origin` is what
+  // started the swap and survives fallbacks (a failed rotation's next candidate is still a rotation).
+  const same = state.pending && state.pending.camId === camId ? state.pending : null;
+  const why = reason || (same ? same.reason : "rotate");
+  state.pending = { camId, startedAt: Date.now() + delay, dir, fails, reason: why, origin: origin || (!reason && same ? same.origin : why) };
   cover(true);
   loadCam(camId, delay);
   render();
@@ -486,7 +490,7 @@ function failPending(why) {
     render();
     return;
   }
-  beginLoad(next, p.dir, p.fails + 1, "skip");
+  beginLoad(next, p.dir, p.fails + 1, "skip", p.origin);
 }
 
 /** The cam on screen broke (error or stream ended). */
@@ -672,14 +676,31 @@ function watchNow(camId) {
   beginLoad(camId, 1, 0, "pick");
 }
 
+/** Drop a swap whose load call has not gone out yet: the player still has the current cam, so keep it playing. */
+function keepCam() {
+  const prev = cp.prev;
+  state.pending = null;
+  cp.camId = prev.camId; // a queued go() or deferred run sees another cam and does nothing
+  cp.loadedAt = prev.loadedAt;
+  cp.nudged = prev.nudged;
+  cp.deferred = null;
+  if (prev.current) cp.loadSeq = cp.seq;
+  cp.errSeq = prev.err ? cp.seq : 0;
+  cover(false);
+}
+
 function togglePin() {
   if (viaTv(() => remoteCmd("pin"))) return;
   state.pinned = !state.pinned;
   localCommand(state.pinned ? "pin" : "unpin");
   const p = state.pending;
-  // Pin holds the cam on screen at the tap: an automatic rotation still loading is dropped and the
-  // current cam reloaded (the swap may already have replaced it on the single player). Next, prev and picks stay.
-  if (state.pinned && p && p.reason === "rotate" && state.currentCamId) beginLoad(state.currentCamId, 1, 0, "retry");
+  // Pin holds the cam on screen at the tap: an automatic rotation still loading (or its fallback) is dropped.
+  // Before its load call the player still has the cam; after it, the cam is reloaded. Next, prev, picks,
+  // list replacements and recovery of a broken cam stay, as does a swap away from a cam the list dropped.
+  if (state.pinned && p && p.origin === "rotate" && camById(state.currentCamId)) {
+    if (!cp.loadedAt && cp.prev && cp.prev.camId === state.currentCamId) keepCam();
+    else beginLoad(state.currentCamId, 1, 0, "retry");
+  }
   if (!state.pinned) {
     state.nextSwapAt = Date.now() + rotateSec() * 1000;
     state.pausedRemaining = rotateSec() * 1000;
@@ -1459,7 +1480,7 @@ function rebuildLists() {
   const gone = state.pending ? !camById(state.pending.camId) : state.currentCamId && !camById(state.currentCamId);
   if (gone && state.started && state.apiReady && !state.casting) {
     const t = pickCam(null, 1);
-    if (t) beginLoad(t, 1);
+    if (t) beginLoad(t, 1, 0, "list");
   }
   render();
   renderHero(); // the sheet can bring timezones and a different list after first paint

@@ -28,9 +28,36 @@ PIN_MID_SWAP = """async ([phone, afterLoad]) => {
   if (!(await until(() => (phone ? __windowSeat.state.pending && __windowSeat.state.pending.reason === 'rotate' : fading())))) return 'no rotation started';
   if (afterLoad ? !(await until(() => __yt.cam().vid !== cam)) : __yt.cam().vid !== cam) return 'load timing missed';
   const target = __yt.cam().vid !== cam ? __yt.cam().vid : phone ? __windowSeat.state.pending.camId : null;
+  const loads = __yt.cam().calls.filter((c) => c[0] === 'loadVideoById').length;
   if (phone) document.querySelector('#pin-pill').click(); else __receiver.send({ type: 'pin', value: true });
+  return { cam, target, loads };
+}"""
+
+# Same, but the rotation's target fails (player error) and Pin lands while the fallback candidate is loading.
+PIN_IN_FALLBACK = """async ([phone]) => {
+  const until = async (f) => { const t0 = Date.now(); while (!f()) { if (Date.now() - t0 > 8000) return false; await new Promise((r) => setTimeout(r, 5)); } return true; };
+  const yt = __yt.cam();
+  const cam = phone ? __windowSeat.currentCamId() : __receiver.state.camId;
+  let target = null;
+  yt.loadVideoById = function (arg) {
+    const v = typeof arg === 'object' && arg ? arg.videoId : arg;
+    if (target !== null || v === cam) return Object.getPrototypeOf(this).loadVideoById.apply(this, arguments);
+    target = v;
+    this._rec('loadVideoById', arguments);
+    this.vid = v;
+    this.state = -1;
+    setTimeout(() => this.opts.events.onError({ data: 150 }), 0);
+  };
+  if (phone) __windowSeat.state.nextSwapAt = 0; else __receiver.expireRotation();
+  const ok = await until(() => (phone ? __windowSeat.state.pending && __windowSeat.state.pending.reason === 'skip' : target && __receiver.state.failedCams.includes(target)));
+  delete yt.loadVideoById;
+  if (!ok) return 'fallback never started';
+  if (phone) document.querySelector('#pin-pill').click(); else __receiver.send({ type: 'pin', value: true });
+  if (phone) __windowSeat.state.failed.delete(target);
   return { cam, target };
 }"""
+
+CAM_LOADS = "()=>__yt.cam().calls.filter((c)=>c[0]==='loadVideoById').length"
 
 
 def check(name, cond):
@@ -225,8 +252,17 @@ with sync_playwright() as p:
             check(f"phone pin mid-swap ({tag}): the cam at the tap stays current", ws("currentCamId") == r["cam"] and not pg.evaluate("()=>__windowSeat.state.pending"))
             check(f"phone pin mid-swap ({tag}): the player shows that cam, playing", pg.evaluate("()=>__yt.cam().vid") == r["cam"] and ystate(pg, "cam") == 1)
             check(f"phone pin mid-swap ({tag}): pinned, music keeps playing", ws("pinned") is True and ws("feedPaused") is False and ystate(pg, "music") == 1)
+            if not after_load:
+                check("phone pin mid-swap (during the fade): no cam load call (playback not restarted)", pg.evaluate(CAM_LOADS) == r["loads"])
         tap(pg, "#pin-pill")
         pg.wait_for_timeout(200)
+    r = pg.evaluate(PIN_IN_FALLBACK, [True])
+    check(f"phone pin in a rotation's fallback: fallback was loading at the tap ({r})", isinstance(r, dict))
+    if isinstance(r, dict):
+        pg.wait_for_timeout(1500)
+        check("phone pin in a rotation's fallback: the cam at the tap stays, playing", ws("currentCamId") == r["cam"] and pg.evaluate("()=>__yt.cam().vid") == r["cam"] and ystate(pg, "cam") == 1 and not pg.evaluate("()=>__windowSeat.state.pending"))
+    tap(pg, "#pin-pill")
+    pg.wait_for_timeout(200)
 
     # Control: playing and unpinned, rotation does advance (so the freezes above mean something).
     cam4 = ws("currentCamId")
@@ -458,7 +494,16 @@ with sync_playwright() as p:
             check(f"tv pin mid-swap ({tag}): the cam at the tap stays current", st()["camId"] == r["cam"])
             check(f"tv pin mid-swap ({tag}): the player shows that cam, playing, no blackout", rx.evaluate("()=>__yt.cam().vid") == r["cam"] and ystate(rx, "cam") == 1 and not rx.evaluate("()=>document.querySelector('#blackout').classList.contains('on')"))
             check(f"tv pin mid-swap ({tag}): pinned, music keeps playing", st()["pinned"] is True and st()["paused"] is False and ystate(rx, "music") == 1)
+            if not after_load:
+                check("tv pin mid-swap (during the fade): no cam load call (playback not restarted)", rx.evaluate(CAM_LOADS) == r["loads"])
         send({"type": "pin", "value": False})
+    rx.wait_for_timeout(300)
+    r = rx.evaluate(PIN_IN_FALLBACK, [False])
+    check(f"tv pin in a rotation's fallback: fallback was loading at the tap ({r})", isinstance(r, dict))
+    if isinstance(r, dict):
+        rx.wait_for_timeout(1500)
+        check("tv pin in a rotation's fallback: the cam at the tap stays, playing, no blackout", st()["camId"] == r["cam"] and rx.evaluate("()=>__yt.cam().vid") == r["cam"] and ystate(rx, "cam") == 1 and not rx.evaluate("()=>document.querySelector('#blackout').classList.contains('on')"))
+    send({"type": "pin", "value": False})
 
     # Interval changed while paused: resume uses the new period, not the clock frozen at pause time.
     rx.wait_for_timeout(300)
