@@ -1,6 +1,6 @@
 // Window Seat service worker: caches only the app shell so the page opens fast and installs as an app.
 // Bump CACHE_VERSION whenever a shell file changes, and keep it equal to BUILD in js/build.js (all same-origin GETs are network-first with cache fallback).
-const CACHE_VERSION = "2026-11-17.29";
+const CACHE_VERSION = "2026-11-17.30";
 
 const CACHE = "window-seat-" + CACHE_VERSION;
 const SHELL = [
