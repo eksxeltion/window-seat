@@ -874,13 +874,16 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 
 /* ================================================================ Google Cast: official icon and states */
 
-/* <google-cast-launcher> draws the official cast / cast_connected glyph once CAF loads; until then the same
-   Material glyph from the sprite stands in. */
+/* Player top bar: <google-cast-launcher> draws the official cast / cast_connected glyph once CAF loads; until
+   then the same Material glyph from the sprite stands in. Home CTA (.cast-start): the sprite glyph always
+   draws (DESIGN.md 7 and 13.4, audit P1 #6) and the launcher never shows, so there is no blank or double icon. */
 .cast-launcher { --connected-color: var(--color-accent); --disconnected-color: currentColor; cursor: pointer; }
 .cast-launcher[hidden] { display: none; }
 .cast-launcher google-cast-launcher { display: block; width: 1.5rem; height: 1.5rem; pointer-events: none; }
 .cast-launcher google-cast-launcher:not(:defined) { display: none; }
 .cast-launcher google-cast-launcher:defined + .cast-glyph { display: none; }
+.cast-start google-cast-launcher, .cast-start google-cast-launcher:defined { display: none; }
+.cast-start .cast-glyph, .cast-start google-cast-launcher:defined + .cast-glyph { display: block; width: 1.25rem; height: 1.25rem; }
 .lp-cast { --connected-color: var(--color-accent-night); }
 
 .cast-start { gap: var(--space-12); }
