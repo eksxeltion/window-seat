@@ -10,7 +10,7 @@ import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-17.17"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-17.18"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -408,6 +408,7 @@ let nextSwapAt = 0;
 let stall = null; // { at, nudged } while the visible cam is not PLAYING
 let retryTimer = 0;
 let rotateReason = "start";
+let rotateOrigin = "start"; // what started the current swap; a failed candidate's fallback keeps it
 let wantedCam = null; // camera requested before the YouTube player was ready
 let awaitingRetry = false; // all cams failed: camTick stays idle until the retry timer fires
 let pausedRemaining = 0; // ms left on the rotation clock when the feed was paused (frozen while paused)
@@ -471,7 +472,7 @@ function pick(fromId, dir) {
   return list[0].id;
 }
 
-function beginLoad(camId, reason = "rotate") {
+function beginLoad(camId, reason = "rotate", origin = reason) {
   if (!camById(camId)) return;
   if (!camReady) {
     wantedCam = camId; // YouTube not ready yet: onReady loads this instead of a random cam
@@ -482,6 +483,7 @@ function beginLoad(camId, reason = "rotate") {
   clearTimeout(retryTimer);
   const my = ++token;
   rotateReason = reason;
+  rotateOrigin = origin;
   shownReason = reason === "cam" ? "pick" : reason;
   pending = { camId, startedAt: Date.now(), loading: false };
   stall = null;
@@ -530,11 +532,12 @@ function failCam(camId, why) {
   note("camError", { camId, why });
   if (!s.failed.has(camId)) capture("cam_failed", { cam_id: camId, why: /^error/.test(why) ? "error" : String(why).replace(/\s+/g, "_") });
   s.failed.add(camId);
+  const from = pending && pending.camId === camId ? rotateOrigin : "skip";
   pending = null;
   stall = null;
   const next = pick(camId, 1);
   if (next) {
-    beginLoad(next, "skip");
+    beginLoad(next, "skip", from);
   } else {
     // Every default cam failed: black screen, forget the failures and try again in a minute.
     note("allFailed");
@@ -813,6 +816,16 @@ function handle(raw, senderId) {
     case "pin": {
       const was = s.pinned;
       s.pinned = !!cmd.value;
+      // Pin holds the cam on screen: drop an automatic rotation (or its fallback) still loading. If the player still
+      // has the cam (load call not made yet), just lift the fade; otherwise reload it. A cam the list dropped is left.
+      if (s.pinned && pending && rotateOrigin === "rotate" && camById(s.camId)) {
+        if (pending.loading || quietly(() => camPlayer.getVideoData().video_id) !== s.camId) beginLoad(s.camId, "retry");
+        else {
+          token++;
+          pending = null;
+          fadeTo(false);
+        }
+      }
       if (!s.pinned) {
         nextSwapAt = Date.now() + s.interval * 1000;
         pausedRemaining = s.interval * 1000;

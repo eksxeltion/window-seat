@@ -43,7 +43,7 @@ with sync_playwright() as p:
     m = re.search(r"rx (\d+)", strip)
     check("(c) getState reached the listener (strip rx >= 1)", bool(m) and int(m.group(1)) >= 1)
     st = states()
-    check("(c) state reply with build 2026-11-17.17", any(d.get("build") == "2026-11-17.17" for d in st))
+    check("(c) state reply with build 2026-11-17.18", any(d.get("build") == "2026-11-17.18" for d in st))
     check("(c) a state reply is addressed to sender-1", any(ns == NS and sid == "sender-1" and isinstance(d, dict) and d.get("type") == "state" for ns, sid, d in fp.parsed()))
     before = [d.get("camId") for d in states()]
     n_before = len(before)
