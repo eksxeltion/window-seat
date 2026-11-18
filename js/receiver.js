@@ -10,7 +10,7 @@ import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-17.20"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-17.21"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -257,17 +257,24 @@ function flash(text, ms = FLASH_MS) {
   cmdTimer = setTimeout(() => el.classList.remove("show"), ms);
 }
 
-/* Lower third: cam name, then "{city}, {country} · local time" (time only with a valid IANA timezone). No type tag,
-   no channel. It shows for 10 seconds after a cam is committed, then fades; the quiet TV is video only. */
+/* Lower third: cam name, then "{city}, {country}" and the local time in accent-night after a 24px gap (time only
+   with a valid IANA timezone; the gap is CSS, and a plain space keeps the text readable). No type tag, no channel.
+   It shows for 10 seconds after a cam is committed, then fades; the quiet TV is video only. */
 let lowerThirdTimer = 0;
-function captionMeta(cam) {
-  const time = camLocalTime(cam);
-  const place = placeLine(cam);
-  return time ? `${place} · ${time}` : place;
-}
 function setCaption(cam) {
   $("cap-title").textContent = cam.title;
-  $("cap-meta").textContent = captionMeta(cam);
+  const meta = $("cap-meta");
+  const place = document.createElement("span");
+  place.className = "cap-place";
+  place.textContent = placeLine(cam);
+  meta.replaceChildren(place);
+  const time = camLocalTime(cam);
+  if (time) {
+    const t = document.createElement("span");
+    t.className = "cap-time";
+    t.textContent = time;
+    meta.append(" ", t);
+  }
 }
 function showLowerThird() {
   const el = $("caption");
@@ -415,7 +422,32 @@ let awaitingRetry = false; // all cams failed: camTick stays idle until the retr
 let pausedRemaining = 0; // ms left on the rotation clock when the feed was paused (frozen while paused)
 
 const blackout = $("blackout");
-const fadeTo = (on) => blackout.classList.toggle("on", on);
+/* Lifting the field (a cam is on screen again) also clears the unavailable message. */
+const fadeTo = (on) => {
+  blackout.classList.toggle("on", on);
+  if (!on) showUnavailable(false);
+};
+
+/* Unavailable stream: our own message on the night field, in place of YouTube's error card. Shown when a cam fails
+   (player error, load timeout or stall), cleared when the next cam is committed. All cams failed: no countdown,
+   since the retry is a minute away. */
+const UNAVAILABLE_TEXT = "This window is closed for now. Next window in 5 seconds.";
+const ALL_UNAVAILABLE_TEXT = "This window is closed for now.";
+let unavailableShown = false;
+function showUnavailable(on, text = UNAVAILABLE_TEXT) {
+  const el = $("unavailable");
+  if (!el || (!on && !unavailableShown)) return;
+  unavailableShown = !!on;
+  if (on) $("unavailable-msg").textContent = text;
+  el.hidden = !on;
+}
+
+/* Pause cover: the night field over the cam while the feed is paused, so YouTube's paused UI never shows. On resume
+   it stays until the cam reports PLAYING again (or a new cam is committed). */
+function setPauseCover(on) {
+  const el = $("pause-cover");
+  if (el) el.classList.toggle("on", !!on);
+}
 
 /* Launch splash: fades out (1200ms, CSS) the first time a cam is committed, then is removed from layout for good.
    Later cam swaps only use the blackout above. */
@@ -531,6 +563,7 @@ function commitPending() {
   setCaption(cam);
   showLowerThird();
   fadeTo(false);
+  if (!s.paused) setPauseCover(false);
   hideSplash();
   note("rotate", { camId: cam.id, reason: rotateReason });
   camShown(cam.id, shownReason);
@@ -551,6 +584,7 @@ function failCam(camId, why) {
   pending = null;
   stall = null;
   const next = pick(camId, 1);
+  showUnavailable(true, next ? UNAVAILABLE_TEXT : ALL_UNAVAILABLE_TEXT);
   if (next) {
     beginLoad(next, "skip", from);
   } else {
@@ -569,6 +603,7 @@ function failCam(camId, why) {
 function onCamState(e) {
   const code = e.data;
   if (code === YS.PLAYING || code === YS.BUFFERING) camMute();
+  if (code === YS.PLAYING && !s.paused) setPauseCover(false);
   if (pending && pending.loading && code === YS.PLAYING) {
     const vid = quietly(() => camPlayer.getVideoData().video_id);
     if (!vid || vid === pending.camId) commitPending();
@@ -785,6 +820,9 @@ function setPaused(on, { music = true } = {}) {
     stall = null;
     if (camReady && s.camId && !pending) camToLiveEdge();
   }
+  // Cover the cam the moment it pauses; on resume the cover lifts when the cam is PLAYING (see onCamState).
+  if (s.paused) setPauseCover(true);
+  else if (!camReady || !s.camId || pending || quietly(() => camPlayer.getPlayerState()) === YS.PLAYING) setPauseCover(false);
   if (s.paused) startPauseTimer("pause");
   else cancelPauseTimer("resume");
   showPausedPill(s.paused);
@@ -1243,6 +1281,9 @@ Object.defineProperty(window, "__receiverDebug", {
     get pause() { return { warnMs: pt.warnMs, endMs: pt.endMs, phase: pt.phase, stops: pt.stops }; },
     // Launch splash: true once the first cam was committed and the splash started fading out.
     get splashDone() { return splashDone; },
+    // Unavailable message and pause cover currently on screen.
+    get unavailable() { return unavailableShown; },
+    get pauseCover() { return !!($("pause-cover") && $("pause-cover").classList.contains("on")); },
   },
 });
 

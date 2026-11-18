@@ -13,7 +13,7 @@ if base.endswith(".html"):
 here = os.path.dirname(os.path.abspath(__file__))
 FAKE_YT = open(os.path.join(here, "fake_youtube.js")).read()
 MOCK = open(os.path.join(here, "mock_cast_sender.js")).read()
-BUILD = "2026-11-17.20"
+BUILD = "2026-11-17.21"
 TAGLINE = "Live windows onto the world, with soft music, made for your TV."
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 # Every page denies the Fullscreen API: the player must stay full bleed and keep playing anyway.
@@ -368,10 +368,10 @@ with sync_playwright() as p:
     meta = rx.text_content("#cap-meta")
     check("tv: lower third visible after the cam loads", cap_opacity() == 1 and rx.is_visible("#caption"))
     check(f"tv: title is the cam name ({rx.text_content('#cap-title')})", rx.text_content("#cap-title") == tcam["title"])
-    check(f"tv: meta is place and the built-in local time ({meta})", re.fullmatch(re.escape(place_line(tcam)) + r" · \d{1,2}:\d\d (AM|PM)", meta) is not None)
+    check(f"tv: meta is place and the built-in local time, no mid-dot ({meta})", re.fullmatch(re.escape(place_line(tcam)) + r" \d{1,2}:\d\d (AM|PM)", meta) is not None)
     check("tv: no type tag and no channel in the lower third", tcam["channel"] not in rx.text_content("#caption") and (not tcam["type"] or tcam["type"] not in meta.lower()))
     cb = rx.locator("#caption").bounding_box()
-    check(f"tv: lower third bottom left of the 5% safe area, at most ~46% wide ({cb})", abs(cb["x"] - 96) <= 1 and abs(cb["y"] + cb["height"] - (1080 - 54)) <= 1 and cb["width"] <= 0.46 * 1920 + 1)
+    check(f"tv: lower third bottom left of the 5% safe area, at most 960px wide ({cb})", abs(cb["x"] - 96) <= 1 and abs(cb["y"] + cb["height"] - (1080 - 54)) <= 1 and cb["width"] <= 960 + 1)
     check("tv: debug strip on with ?debug=1", rx.evaluate("()=>!document.querySelector('#debug-strip').hidden"))
     rx.wait_for_timeout(9000)
     check("tv: still showing just before 10s", cap_opacity() > 0.9)
@@ -379,14 +379,14 @@ with sync_playwright() as p:
     check("tv: quiet TV after about 10s (lower third, brand and mix line faded out)", cap_opacity() == 0 and rx.evaluate("()=>document.querySelector('#caption').classList.contains('quiet')"))
     check("tv: debug strip unchanged by the quiet TV", rx.evaluate("()=>!document.querySelector('#debug-strip').hidden") and f"build {BUILD}" in rx.text_content("#debug-strip"))
 
-    # A cam with a timezone: city, country, mid-dot, local time. Shown again for the new cam.
+    # A cam with a timezone: city, country, then the local time after a gap. Shown again for the new cam.
     cfg = {"type": "config", "cams": SAVED["cams"], "mixes": SAVED["mixes"]}
     rx.evaluate("(c)=>__receiver.send(c)", cfg)
     rx.evaluate("()=>__receiver.send({type:'cam', id:'hlbh4P0Mz8M'})")
     check("tv: timezone cam is showing", wait_until(rx, "()=>__receiver.state.camId==='hlbh4P0Mz8M' && __yt.cam().state===1", 6000))
     rx.wait_for_timeout(400)
     meta = rx.text_content("#cap-meta")
-    check(f"tv: meta with local time 'Tokyo, Japan · 9:51 AM' shape ({meta})", re.fullmatch(r"Tokyo, Japan · \d{1,2}:\d\d (AM|PM)", meta) is not None)
+    check(f"tv: meta with local time 'Tokyo, Japan 9:51 AM' shape ({meta})", re.fullmatch(r"Tokyo, Japan \d{1,2}:\d\d (AM|PM)", meta) is not None)
     check("tv: lower third shows again after a new cam loads", cap_opacity() == 1)
     rx.evaluate("()=>__receiver.send({type:'cam', id:'Yzl9offu5g8'})")
     wait_until(rx, "()=>__receiver.state.camId==='Yzl9offu5g8' && __yt.cam().state===1", 6000)
