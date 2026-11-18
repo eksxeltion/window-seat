@@ -43,6 +43,8 @@ PATCH = """
     }
     if (!st || st.loads <= 0) return load.apply(this, arguments);
     st.loads--;
+    window.__firstLoadAt = window.__firstLoadAt || {};
+    if (!window.__firstLoadAt[id]) window.__firstLoadAt[id] = Date.now();
     this._rec("loadVideoById", arguments);
     this.vid = id;
     this.__stuck = id;
@@ -79,8 +81,14 @@ def wait_for(pg, name, cam_id, ms):
     return None
 
 
-def loads(pg, cam_id):
-    return pg.evaluate("(id)=>__yt.cam().calls.filter(c=>c[0]==='loadVideoById' && c[1]===id).length", cam_id)
+def mark(pg):
+    """Baseline for loads(): the cam player's call count now."""
+    return pg.evaluate("()=>__yt.cam().calls.length")
+
+
+def loads(pg, cam_id, since=0):
+    """loadVideoById calls for cam_id on the cam player since the baseline from mark()."""
+    return pg.evaluate("([id,n])=>__yt.cam().calls.slice(n).filter(c=>c[0]==='loadVideoById' && c[1]===id).length", [cam_id, since])
 
 
 # Index of each call on the cam player, to order playVideo against the loads of one id.
@@ -119,21 +127,31 @@ with sync_playwright() as p:
     cur = pg.evaluate("()=>__receiver.state.camId")
     rec, dead, err = [i for i in ids if i != cur][:3]
     pg.evaluate("([r,d,e])=>{window.__ytStuck={[r]:{state:-1, loads:1}, [d]:{state:3, loads:99}};}", [rec, dead, err])
+    # Controlled rotation pool without the three targets: the automatic skip after a failure never loads one of
+    # them, so every target is loaded only by the explicit pick of its own case.
+    safe = [i for i in ids if i not in (rec, dead, err)]
+    pg.evaluate("(ids)=>__receiver.send({type:'cams', ids, skipSleeping:false, onlyDaytime:false})", safe)
+    check("controlled pool excludes the targets", pg.evaluate("(t)=>!t.includes(__receiver.state.camId)", [rec, dead, err]))
 
     # 1-3: stuck UNSTARTED on the first load, nudged before 12s, retried at 12s, plays in the retry window
+    n0 = mark(pg)
     t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", rec)
     pg.wait_for_function("(id)=>__receiver.log.some(e=>e.type==='loadNudge' && e.detail.camId===id)", arg=rec, timeout=9000)
     nudge = pg.evaluate("(id)=>__receiver.log.find(e=>e.type==='loadNudge' && e.detail.camId===id)", rec)
-    print("nudge:", nudge)
-    check(f"(1) nudged at about 4s, before the 12s cutoff ({nudge['t'] - t0} ms after the pick)", 4000 <= nudge["t"] - t0 < 12000)
-    seq = pg.evaluate(CALLS, rec)
+    first = pg.evaluate("(id)=>window.__firstLoadAt[id]", rec)
+    print("nudge:", nudge, "first load at", first)
+    # LOAD_NUDGE_MS is 4000 and camTick runs every 1000 ms, so the nudge lands 4000-5000 ms after the first load
+    # (6000 allows for timer jitter); a regression to a later nudge, for example 8s, fails here.
+    check(f"(1) nudged about 4s after the first loadVideoById ({nudge['t'] - first} ms, trace {nudge['detail'].get('ms')} ms)",
+          4000 <= nudge["t"] - first <= 6000 and 4000 <= nudge["detail"].get("ms", 0) <= 6000)
+    seq = pg.evaluate(CALLS.replace("__yt.cam().calls.map", "__yt.cam().calls.slice(" + str(n0) + ").map"), rec)
     check(f"(1) playVideo recorded on the fake player after the first load ({seq})", seq[:2] == ["loadVideoById", "playVideo"])
     check("(1) still pending, not failed, no message", not queued(pg, "cam_failed", rec) and pg.evaluate("()=>__receiver.state.camId") != rec
           and pg.evaluate("()=>document.querySelector('#unavailable').hidden"))
     shown = wait_for(pg, "cam_shown", rec, 12000) or {}
     print("recovered cam_shown:", shown)
     t_shown = pg.evaluate("()=>Date.now()")
-    check(f"(2) the same id was reloaded once at the cutoff ({loads(pg, rec)} loads)", loads(pg, rec) == 2)
+    check(f"(2) the same id was reloaded once at the cutoff ({loads(pg, rec, n0)} loads)", loads(pg, rec, n0) == 2)
     retry = pg.evaluate("(id)=>__receiver.log.find(e=>e.type==='loadRetry' && e.detail.camId===id)", rec)
     check(f"(2) retry happened at CAM_LOAD_MS, not before ({retry and retry['t'] - t0} ms)", bool(retry) and 12000 <= retry["t"] - t0 < 15000)
     check("(3) cam_shown for the recovered cam, reason pick, retried=1 nudged=1",
@@ -145,10 +163,11 @@ with sync_playwright() as p:
 
     # 4: stuck BUFFERING across the retry: one retry, then load_timeout and the unavailable / skip path
     settle(pg)
+    n0 = mark(pg)
     t0 = pg.evaluate("(id)=>{window.__uAt=0; window.__uFrom=Date.now(); __receiver.send({type:'cam', id}); return Date.now();}", dead)
     pg.wait_for_timeout(14000)
-    check(f"(4) at 12s: reloaded once, not failed, no message ({loads(pg, dead)} loads)",
-          loads(pg, dead) == 2 and not queued(pg, "cam_failed", dead) and pg.evaluate("()=>window.__uAt") == 0)
+    check(f"(4) at 12s: reloaded once, not failed, no message ({loads(pg, dead, n0)} loads)",
+          loads(pg, dead, n0) == 2 and not queued(pg, "cam_failed", dead) and pg.evaluate("()=>window.__uAt") == 0)
     f = wait_for(pg, "cam_failed", dead, 16000) or {}
     print("dead cam_failed:", f)
     check("(4) cam_failed why=load_timeout, trace_scope load, retried=1 nudged=1",
@@ -164,11 +183,14 @@ with sync_playwright() as p:
     check("(4) failed and skipped: in failedCams, the next cam plays", pg.evaluate("(id)=>__receiver.state.failedCams.includes(id)", dead))
     settle(pg)
     check("(4) next cam is another one", pg.evaluate("()=>__receiver.state.camId") != dead)
-    check(f"(4) only one retry, not two ({loads(pg, dead)} loads)", loads(pg, dead) == 2)
+    check(f"(4) only one retry, not two ({loads(pg, dead, n0)} loads)", loads(pg, dead, n0) == 2)
     check("(4) one cam_failed for it", len(queued(pg, "cam_failed", dead)) == 1)
 
     # 5: a real YouTube error (150) for the cam: fails at once, no nudge, no retry
-    pg.evaluate("(id)=>{window.__ytErr={[id]:150};}", err)  # set only now, so the skip in (4) cannot hit it first
+    pg.evaluate("(id)=>{window.__ytErr={[id]:150};}", err)
+    check("(5) err is not the current cam (the pool kept the skip away from it), so the pick loads it",
+          pg.evaluate("(id)=>__receiver.state.camId!==id", err) and not queued(pg, "cam_failed", err) and not queued(pg, "player_error", err))
+    n0 = mark(pg)
     t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", err)
     f = wait_for(pg, "cam_failed", err, 4000) or {}
     t_fail = pg.evaluate("()=>Date.now()")
@@ -176,9 +198,10 @@ with sync_playwright() as p:
     print("error cam_failed:", f, pe)
     check(f"(5) player_error code 150 and cam_failed why=error at once ({t_fail - t0} ms)",
           f.get("why") == "error" and pe and pe[-1].get("code") == "150" and t_fail - t0 < 4000)
+    check(f"(5) exactly one loadVideoById for it at the failure ({loads(pg, err, n0)})", loads(pg, err, n0) == 1)
     check("(5) no retry or nudge on a real error", f.get("retried") == 0 and f.get("nudged") == 0)
     pg.wait_for_timeout(13000)
-    check(f"(5) still one loadVideoById for it after the cutoff ({loads(pg, err)})", loads(pg, err) == 1)
+    check(f"(5) still one loadVideoById for it after the cutoff ({loads(pg, err, n0)})", loads(pg, err, n0) == 1)
     check("(5) no load nudge or retry logged for it",
           not pg.evaluate("(id)=>__receiver.log.some(e=>(e.type==='loadNudge' || e.type==='loadRetry') && e.detail.camId===id)", err))
 

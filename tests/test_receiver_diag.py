@@ -83,14 +83,20 @@ with sync_playwright() as p:
     cur = pg.evaluate("()=>__receiver.state.camId")
     stuck, ad, errd = [i for i in ids if i != cur][:3]
     pg.evaluate("([s,a,e])=>{window.__ytStuck=[s]; window.__ytAd=[a,e];}", [stuck, ad, errd])
+    # Controlled rotation pool without the three targets: the automatic skip after a failure never loads the next
+    # target, so each one is loaded only by its own explicit pick.
+    pg.evaluate("(ids)=>__receiver.send({type:'cams', ids, skipSleeping:false, onlyDaytime:false})", [i for i in ids if i not in (stuck, ad, errd)])
+    LOADS = "([id,n])=>__yt.cam().calls.slice(n).filter(c=>c[0]==='loadVideoById' && c[1]===id).length"
+    mark = lambda: pg.evaluate("()=>__yt.cam().calls.length")
     LOAD_ONLY = ("ms", "states", "ignored_playing", "other_vid", "errors")
 
     # (a) a cam that never reaches PLAYING (stuck BUFFERING on its own id, no error): nudged, reloaded once at
     # CAM_LOAD_MS, then load_timeout with the trace after the retry window
+    n0 = mark()
     pg.evaluate("(id)=>__receiver.send({type:'cam', id})", stuck)
     pg.wait_for_timeout(13500)
     check("(a) not failed at CAM_LOAD_MS: retried instead", not queued(pg, "cam_failed", stuck)
-          and pg.evaluate("(id)=>__yt.cam().calls.filter(c=>c[0]==='loadVideoById' && c[1]===id).length", stuck) == 2)
+          and pg.evaluate(LOADS, [stuck, n0]) == 2)
     f = wait_for(pg, "cam_failed", stuck, 18000)
     print("stuck cam_failed:", f)
     check("(a) cam_failed why=load_timeout", bool(f) and f.get("why") == "load_timeout")
@@ -101,7 +107,7 @@ with sync_playwright() as p:
     check("(a) retried=1 and nudged=1", f.get("retried") == 1 and f.get("nudged") == 1)
     check("(a) playVideo nudged the stuck load in both windows", pg.evaluate("(id)=>__receiver.log.filter(e=>e.type==='loadNudge' && e.detail.camId===id).length", stuck) == 2
           and pg.evaluate("()=>__yt.cam().calls.some(c=>c[0]==='playVideo')"))
-    check("(a) only one retry: two loadVideoById calls for it", pg.evaluate("(id)=>__yt.cam().calls.filter(c=>c[0]==='loadVideoById' && c[1]===id).length", stuck) == 2)
+    check("(a) only one retry: two loadVideoById calls for it", pg.evaluate(LOADS, [stuck, n0]) == 2)
     check(f"(a) states string starts with BUFFERING ({f.get('states')})", isinstance(f.get("states"), str) and f["states"].startswith("3@"))
     check("(a) last_state BUFFERING, vid is the cam, vid_match true", f.get("last_state") == 3 and f.get("vid") == stuck and f.get("vid_match") is True)
     check("(a) is_live, muted, music_state present; ignored_playing 0", f.get("is_live") is True and f.get("muted") is True and "music_state" in f and f.get("ignored_playing") == 0)
@@ -111,13 +117,14 @@ with sync_playwright() as p:
 
     # (b) PLAYING for another video id: counted, and the cam still times out as before
     pg.wait_for_timeout(1500)  # the automatic skip after (a) settles
+    n0 = mark()
     pg.evaluate("(id)=>__receiver.send({type:'cam', id})", ad)
     f = wait_for(pg, "cam_failed", ad, 18000) or {}
     print("ad cam_failed:", f)
     check("(b) cam_failed why=load_timeout, trace_scope load", f.get("why") == "load_timeout" and f.get("trace_scope") == "load")
     check(f"(b) not recoverable: failed at CAM_LOAD_MS with no nudge and no retry ({f.get('ms')})",
           isinstance(f.get("ms"), int) and 12000 <= f["ms"] < 16000 and f.get("retried") == 0 and f.get("nudged") == 0
-          and pg.evaluate("(id)=>__yt.cam().calls.filter(c=>c[0]==='loadVideoById' && c[1]===id).length", ad) == 1)
+          and pg.evaluate(LOADS, [ad, n0]) == 1)
     check("(b) ignored_playing counted, other_vid is the ad id", f.get("ignored_playing", 0) >= 1 and f.get("other_vid") == "AdVideo0001")
     check("(b) vid is the ad, vid_match false, last_state PLAYING", f.get("vid") == "AdVideo0001" and f.get("vid_match") is False and f.get("last_state") == 1)
     states = f.get("states", "").split(",")
@@ -127,6 +134,7 @@ with sync_playwright() as p:
 
     # (c) an error for another video id during the pending load: kept for the trace, the cam is not failed early
     pg.wait_for_timeout(1500)
+    n0 = mark()
     pg.evaluate("(id)=>__receiver.send({type:'cam', id})", errd)
     pg.wait_for_function("(id)=>__yt.cam().calls.some(c=>c[0]==='loadVideoById' && c[1]===id)", arg=errd, timeout=5000)
     pg.wait_for_timeout(400)
@@ -140,7 +148,7 @@ with sync_playwright() as p:
     check("(c) errors carries the other video's code", f.get("errors") == "150")
     check("(c) ms over CAM_LOAD_MS", isinstance(f.get("ms"), int) and f["ms"] >= 12000)
     check(f"(c) not recoverable: no retry ({f.get('ms')}, retried={f.get('retried')})", f.get("retried") == 0 and f["ms"] < 16000
-          and pg.evaluate("(id)=>__yt.cam().calls.filter(c=>c[0]==='loadVideoById' && c[1]===id).length", errd) == 1)
+          and pg.evaluate(LOADS, [errd, n0]) == 1)
 
     # (d) a normal pick: a fresh cam_shown (reason pick) for cast carries load_ms
     pg.wait_for_timeout(1500)
