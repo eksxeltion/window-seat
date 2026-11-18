@@ -46,6 +46,7 @@ with sync_playwright() as p:
     tap_cast(pg, "#player-top [data-cast]")
     pg.evaluate("()=>__fake.pick()"); pg.wait_for_timeout(1000)
     check("A: remote mode, zero local iframes", pg.is_visible("#remote") and pg.evaluate(YT) == 0)
+    pg.wait_for_timeout(2000)  # no TV answers here: taps are held until the new session's 2.5 s state probe gives up
     controls(pg, "A")
     pg.context.close()
 

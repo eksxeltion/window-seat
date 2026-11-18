@@ -1885,6 +1885,18 @@ function resumeAfterCast() {
   showStartScreen();
 }
 
+/** The TV's pool (null: its default cams) and time-of-day rules become the phone's checks and rules; no command goes
+ *  out. Only cams in this phone's list can be checked here. */
+function adoptTvPool(tv) {
+  const pool = Array.isArray(tv.poolIds) && tv.poolIds.length ? new Set(tv.poolIds) : null;
+  state.enabledOverrides = {};
+  for (const c of CAMS) if ((pool ? pool.has(c.id) : !!c.default) !== !!c.default) state.enabledOverrides[c.id] = !c.default;
+  saveOverrides();
+  if (typeof tv.skipSleeping === "boolean") state.skipSleeping = tv.skipSleeping;
+  if (typeof tv.onlyDaytime === "boolean") state.onlyDaytime = tv.onlyDaytime;
+  render();
+}
+
 function setupCast() {
   const note = $("#about-cast");
   if (!castConfigured) {
@@ -1896,6 +1908,8 @@ function setupCast() {
     getLocal: () => ({ camId: state.currentCamId, mixId: state.mixId, interval: state.intervalSec, volume: state.volume, muted: state.muted, shuffle: state.shuffle, camIds: tvCamIds(), ...timeRules() }),
     onStart: pauseLocalForCast,
     onEnd: resumeAfterCast,
+    // Joined a TV another sender set up: the Cams sheet takes the TV's pool and rules, so one toggle sends only that change.
+    onJoin: (tv) => adoptTvPool(tv),
     onRemoteChange: () => {
       if (state.openPanel === "cams") renderCamsPanel();
       if (state.openPanel === "music") renderMusicPanel(); // the Playing row follows the TV

@@ -24,6 +24,9 @@ MOCK_CTX = """()=>{
     stop() { this.stops++; } };
   __receiver.useContext(window.__ctx);
 }"""
+END_REASONS = ("()=>[...__telemetry.queue().filter(e=>e.name==='cast_session_end').map(e=>e.props.end_reason),"
+               " ...__telemetry.sent().filter(e=>e.event==='cast_session_end').map(e=>e.properties.end_reason)]")
+CHECKED = "()=>[...document.querySelectorAll('#cams-list [data-action=toggle-cam][aria-checked=true]')].map(b=>b.dataset.id).sort()"
 FIRST_STATE = ("()=>[...__telemetry.queue().filter(e=>e.name==='cast_first_state').map(e=>e.props),"
                " ...__telemetry.sent().filter(e=>e.event==='cast_first_state').map(e=>e.properties)]")
 fails, logs = [], []
@@ -80,10 +83,10 @@ class Link:
 with sync_playwright() as p:
     b = p.chromium.launch()
 
-    def tv():
+    def tv(query=""):
         rx = b.new_context(viewport={"width": 1920, "height": 1080}).new_page()
         route(rx)
-        rx.goto(base + "/receiver.html?debug=1")
+        rx.goto(base + "/receiver.html?debug=1" + query)
         check("tv: a cam is playing", wait_until(rx, "()=>__receiver.state.camId && __yt.cam() && __yt.cam().state===1", 6000))
         rx.evaluate(MOCK_CTX)
         return rx
@@ -206,6 +209,106 @@ with sync_playwright() as p:
     pg.wait_for_timeout(3000)
     check(f"(d) exactly once, never replayed ({setup_of(sent(pg))})", all(setup_of(sent(pg)).count(t) == 1 for t in SETUP))
     pg.context.close()
+
+    # ------------------------------------------------------------ (e) join with an older saved sheet: the TV keeps its lists
+    rx, pg = tv(), phone()
+    ph_cam, ph_mix = pg.evaluate("()=>[__windowSeat.currentCamId(), __windowSeat.currentMixId()]")
+    tv_cam, tv_mix = other_sender(rx, ph_cam, ph_mix)
+    pool = [tv_cam] + [c for c in ids["cams"] if c not in (tv_cam, ph_cam)][:2]
+    rx.evaluate("(ids)=>__receiver.send({type:'cams', ids}, 'other')", pool)
+    tv_lists = rx.evaluate("()=>import('./js/data.js').then(d=>[d.CAMS.length, d.MIXES.length])")
+    # The phone's saved copy lacks the TV's cam and mix (an older sheet).
+    pg.evaluate("([c,m])=>Promise.all([import('./js/config.js'), import('./js/data.js')]).then(([cfg,d])=>cfg.applyConfig({"
+                "cams:d.CAMS.filter(x=>x.id!==c).map(x=>({...x})), mixes:d.MIXES.filter(x=>x.id!==m).map(x=>({...x}))}, 'saved'))", [tv_cam, tv_mix])
+    link = Link(pg, rx)
+    pg.evaluate("()=>__mockCast.start()")
+    link.pump(1200)
+    msgs = sent(pg)
+    st = tvst(rx)
+    print("(e) sent:", [m["type"] for m in msgs])
+    check("(e) no config sent on join", "config" not in [m["type"] for m in msgs])
+    now_lists = rx.evaluate("()=>import('./js/data.js').then(d=>[d.CAMS.length, d.MIXES.length])")
+    check(f"(e) TV keeps its lists ({now_lists} vs {tv_lists})", now_lists == tv_lists)
+    check(f"(e) TV keeps its cam, mix and pool ({st['camId']}, {st['mixId']}, {st['poolIds']})", st["camId"] == tv_cam and st["mixId"] == tv_mix and st["poolIds"] == pool)
+    rx.close(); pg.context.close()
+
+    # ------------------------------------------------------------ (f) after a join the Cams sheet edits the TV's pool and rules
+    rx, pg = tv(), phone()
+    ph_cam, ph_mix = pg.evaluate("()=>[__windowSeat.currentCamId(), __windowSeat.currentMixId()]")
+    other_sender(rx, ph_cam, ph_mix)
+    pool = ids["cams"][-3:]
+    rx.evaluate("(ids)=>__receiver.send({type:'cams', ids, skipSleeping:false, onlyDaytime:true}, 'other')", pool)
+    before = pg.evaluate(CHECKED)
+    link = Link(pg, rx)
+    pg.evaluate("()=>__mockCast.start()")
+    link.pump(1200)
+    check(f"(f) phone checks are the TV's pool ({pg.evaluate(CHECKED)} vs {sorted(pool)}, before {len(before)})", pg.evaluate(CHECKED) == sorted(pool))
+    rules = pg.evaluate("()=>[__windowSeat.state.skipSleeping, __windowSeat.state.onlyDaytime]")
+    check(f"(f) phone rules are the TV's ({rules})", rules == [False, True])
+    check("(f) adopting sends no cams command", [m["type"] for m in sent(pg)].count("cams") == 0)
+    extra = ids["cams"][0]
+    pg.evaluate("(id)=>document.querySelector(`#cams-list [data-action=toggle-cam][data-id=\"${id}\"]`).click()", extra)
+    link.pump(600)
+    cams = [m for m in sent(pg) if m["type"] == "cams"]
+    want = sorted(pool + [extra])
+    check(f"(f) one toggle sends the TV's pool plus that cam ({cams and sorted(cams[-1]['ids'])})", len(cams) == 1 and sorted(cams[0]["ids"]) == want
+          and cams[0]["skipSleeping"] is False and cams[0]["onlyDaytime"] is True)
+    st = tvst(rx)
+    check(f"(f) TV pool and rules after the toggle ({st['poolIds']}, {st['skipSleeping']}, {st['onlyDaytime']})", sorted(st["poolIds"]) == want and st["skipSleeping"] is False and st["onlyDaytime"] is True)
+    rx.close(); pg.context.close()
+
+    # ------------------------------------------------------------ (g) a tap while the phone asks a fresh TV is not undone by the push
+    rx, pg = tv(), phone()
+    pg.evaluate("()=>{__windowSeat.state.volume = 35}")
+    link = Link(pg, rx)
+    pg.evaluate("()=>__mockCast.start()")
+    pg.evaluate("()=>document.querySelector('#remote [data-cmd=\"vol-up\"]').click()")  # before the TV's reply
+    link.pump(1200)
+    vols = [(m["value"], m.get("silent") is True) for m in sent(pg) if m["type"] == "volume"]
+    print("(g) sent:", [m["type"] for m in sent(pg)], vols)
+    check(f"(g) the push still ran, then the tap went out after it ({vols})", vols == [(35, True), (70, False)])
+    check(f"(g) TV volume is the tap ({tvst(rx)['volume']})", tvst(rx)["volume"] == 70)
+    rx.close(); pg.context.close()
+
+    # ------------------------------------------------------------ (h) configured broadcast before the namespace: telemetry follows the decision
+    pg = phone()
+    pg.evaluate("()=>{window.__mockNs=[{name:'urn:x-cast:com.google.cast.media'}]}")
+    pg.evaluate("()=>__mockCast.start()")
+    pg.wait_for_timeout(300)
+    pg.evaluate("()=>__mockCast.reply({type:'state', configured:true})")  # unsolicited, before the channel is listed
+    pg.evaluate("()=>{window.__mockNs=[{name:'urn:x-cast:com.windowseat'}]; __mockCast.fireSession('applicationmetadatachanged')}")
+    pg.wait_for_timeout(300)
+    pg.evaluate("()=>__mockCast.reply({type:'state', configured:true})")  # the probe reply: join
+    pg.wait_for_timeout(300)
+    check(f"(h) joined, nothing pushed ({setup_of(sent(pg))})", setup_of(sent(pg)) == [])
+    got = wait_until(pg, f"()=>({FIRST_STATE})().length>0", 10000)
+    fs = pg.evaluate(FIRST_STATE)
+    check(f"(h) one cast_first_state, joined_running true ({[e.get('joined_running') for e in fs]})", got and len(fs) == 1 and fs[0].get("joined_running") is True)
+    pg.context.close()
+
+    # ------------------------------------------------------------ (i) join during the TV's pause warning: same deadline, ends as a timeout
+    WARN_MS, END_MS = 1500, 5000
+    rx, pg = tv(f"&pauseWarnMs={WARN_MS}&pauseEndMs={END_MS}"), phone()
+    ph_cam, ph_mix = pg.evaluate("()=>[__windowSeat.currentCamId(), __windowSeat.currentMixId()]")
+    other_sender(rx, ph_cam, ph_mix)
+    check("(i) TV shows the pause warning", wait_until(rx, "()=>__receiver.state.pauseWarning===true", WARN_MS + 1500))
+    deadline = rx.evaluate("()=>Date.now() + __receiver.state.pauseEndsInMs")
+    link = Link(pg, rx)
+    pg.evaluate("()=>__mockCast.start()")
+    link.pump(800)
+    check(f"(i) joined, nothing pushed ({setup_of(sent(pg))})", setup_of(sent(pg)) == [])
+    after = rx.evaluate("()=>Date.now() + __receiver.state.pauseEndsInMs")
+    check(f"(i) TV deadline unchanged by the join ({after - deadline} ms)", abs(after - deadline) < 300)
+    check("(i) phone shows the warning", pg.is_visible("#remote-pause-warn"))
+    while rx.evaluate("()=>__ctx.stops") == 0 and time.time() * 1000 < deadline + 4000:
+        link.pump(200)
+    link.pump(200)
+    check("(i) TV stopped at its deadline", rx.evaluate("()=>__ctx.stops") == 1)
+    pg.evaluate("()=>cast.framework.CastContext.getInstance().endCurrentSession()")  # the TV ending the session
+    got = wait_until(pg, f"()=>({END_REASONS})().length>0", 10000)
+    reasons = pg.evaluate(END_REASONS)
+    check(f"(i) cast_session_end end_reason pause_timeout ({reasons})", got and reasons == ["pause_timeout"])
+    rx.close(); pg.context.close()
     b.close()
 
 print(logs)

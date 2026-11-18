@@ -280,6 +280,7 @@ with sync_playwright() as p:
     pg.goto(base + "/index.html")
     pg.wait_for_timeout(800)
     pg.evaluate("()=>__mockCast.start()")
+    pg.evaluate("()=>__mockCast.reply({type:'state',configured:false})")  # probe reply: a fresh TV (taps are held until it settles)
     pg.wait_for_timeout(400)
     connect = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     check("cast: connect sends no pause command", not any(m["type"] in ("pause", "playMusic") for m in connect))

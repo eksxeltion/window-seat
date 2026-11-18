@@ -163,6 +163,9 @@ function act(cmd, patch) {
     remote = { ...remote, ...patch };
     renderRemote();
   }
+  // A new session still asking the TV whether to join or push: hold the tap until that is settled, so the push that
+  // may follow cannot undo it (a volume tap reaching a fresh TV before its reply, then the phone's old volume).
+  if (session && session.__wsProbe) return void (session.__wsHeld = [...(session.__wsHeld || []), cmd]);
   send(cmd);
 }
 
@@ -398,7 +401,8 @@ function onMessage(_ns, raw) {
     clearTimeout(probe.__wsProbeTimer);
     probe.__wsJoined = msg.configured === true; // missing on older receivers: push as before
   }
-  if (session && !session.__wsTelFirstState) {
+  // A new session reports its first state only once it has decided (join or push), so joined_running is that decision.
+  if (session && !session.__wsTelFirstState && session.__wsPending !== "probe") {
     session.__wsTelFirstState = true;
     capture("cast_first_state", { ms_since_connect: session.__wsTelConnectAt ? Date.now() - session.__wsTelConnectAt : undefined, resumed: !!session.__wsTelResumed, joined_running: !!session.__wsJoined });
   }
@@ -419,8 +423,14 @@ function onMessage(_ns, raw) {
 function settleInit(s, joined) {
   if (session !== s) return;
   logEvent(joined ? "joined a running TV session: adopting its state" : "new TV session: sending this phone's choices");
-  if (joined) sendResumeSet(s);
-  else pushChoices();
+  if (joined) {
+    sendResumeSet(s, true);
+    if (hooks.onJoin) quietly(() => hooks.onJoin(remote)); // the Cams sheet edits the TV's pool and rules, not the phone's
+  } else pushChoices();
+  // Taps held while asking go out now, after the push, so they win over it.
+  const held = s.__wsHeld || [];
+  s.__wsHeld = null;
+  for (const cmd of held) send(cmd);
 }
 
 /* Remote mode first, unconditionally: stop local playback and show the remote,
@@ -528,8 +538,11 @@ function flushInit(s) {
 const PROBE_MS = 2500;
 
 /* Reconnecting to (or joining) a TV that is already playing: do not override it. */
-function sendResumeSet(s) {
-  sendConfigToTv();
+function sendResumeSet(s, joined = false) {
+  // Joining: the TV already has its lists (its own sheet fetch, or the sender that set it up). This phone's copy may
+  // be older, and replacing the TV's lists can drop cams from its pool or switch the cam or mix it plays.
+  if (!joined) sendConfigToTv();
+  else if (ui.root) fillRemoteLists();
   // Shuffle only steers the next mix, so it is safe to send on resume: the TV keeps the mix it is playing.
   sendShuffleToTv(hooks.getLocal().shuffle !== false, s);
   send({ type: "getState" });
