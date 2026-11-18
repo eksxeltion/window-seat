@@ -1,24 +1,46 @@
 /* Window Seat Cast receiver. Designed for a 1920x1080 TV; sizes scale with the viewport (px minimums).
    Night overlay tokens from docs/design.md. The video stays untouched: no grade, and no chrome except the lower
-   third (first 10 seconds after a cam loads), the 5 second pin toast, the persistent Paused pill, and the Debug strip. */
+   third (first 10 seconds after a cam loads), the 5 second pin toast, the persistent Paused pill, and the Debug strip.
+   No YouTube chrome ever shows: the cam iframe is overscaled, the paused cam is covered, and an unavailable cam is
+   replaced by our own message on the night field. */
 :root {
-  --color-overlay: rgba(10, 18, 24, 0.62);
-  --color-overlay-strong: rgba(10, 18, 24, 0.82);
+  --color-overlay: rgba(10, 26, 38, 0.78);
+  --color-overlay-strong: rgba(10, 26, 38, 0.86);
   --color-overlay-ink: #f3f5f7;
-  --color-overlay-dim: rgba(243, 245, 247, 0.78);
+  --color-overlay-dim: #c9d3da;
   --color-overlay-line: rgba(255, 255, 255, 0.16);
   --color-accent-night: #8cc3d6; /* the one night accent (retired --color-overlay-accent #8ec4d4) */
   --color-field: #0a1a26; /* night field: splash ground and the fade between cams */
   --font-display: "Fraunces", "Source Serif 4", Georgia, serif;
   --font-ui: "Plus Jakarta Sans", system-ui, "Segoe UI", Roboto, sans-serif;
+  --radius-lg: 24px;
+  --ease-emphasized-decel: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 html, body { margin: 0; height: 100%; background: var(--color-field); overflow: hidden; color: var(--color-overlay-ink); font-family: var(--font-ui); }
 
-#cam { position: fixed; inset: 0; background: var(--color-field); z-index: 1; }
-#cam iframe, #cam-player { width: 100%; height: 100%; border: 0; display: block; }
+/* The cam iframe is 112% of the screen, centered (6% cropped on every side), so YouTube's title bar at the top and its
+   "More videos" strip at the bottom fall outside the 1920x1080 frame. No pointer events reach it. */
+#cam { position: fixed; inset: 0; background: var(--color-field); z-index: 1; overflow: hidden; }
+#cam iframe, #cam-player { position: absolute; left: -6%; top: -6%; width: 112%; height: 112%; border: 0; display: block; pointer-events: none; }
 
 #blackout { position: fixed; inset: 0; z-index: 2; background: var(--color-field); opacity: 0; transition: opacity 0.4s ease; pointer-events: none; }
 #blackout.on { opacity: 1; }
+
+/* Pause cover: the night field over the cam from the moment the feed pauses (no transition in), so YouTube's paused
+   title, logo and pause card never show. Lifts (400ms) once the resumed cam is PLAYING again. */
+#pause-cover { position: fixed; inset: 0; z-index: 2; background: var(--color-field); opacity: 0; transition: opacity 400ms ease; pointer-events: none; }
+#pause-cover.on { opacity: 1; transition: none; }
+
+/* Unavailable stream: cut (no transition in) to the night field over any YouTube error card, with our message centered.
+   Hidden again when the next cam is committed. */
+/* z-index 3: above the launch splash (z-index 2), so a first-cam failure is visible instead of "Opening a window". */
+#unavailable { position: fixed; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center; background: var(--color-field); pointer-events: none; }
+#unavailable[hidden] { display: none; }
+#unavailable-msg {
+  margin: 0; max-width: 90%; box-sizing: border-box; padding: 0 5%; text-align: center;
+  font-family: var(--font-ui); font-size: max(32px, 1.667vw); line-height: 1.25; font-weight: 500; color: var(--color-overlay-ink);
+}
 
 /* Launch splash: our own full-screen layer on the night field, above the cam and the blackout (same z-index, later
    in the DOM), below the lower third, toasts and the Debug strip. Fades out once over 1200ms when the first cam plays. */
@@ -31,22 +53,38 @@ html, body { margin: 0; height: 100%; background: var(--color-field); overflow: 
 /* TV safe area: 5% overscan margin on every side. */
 #safe { position: fixed; inset: 5%; pointer-events: none; z-index: 3; }
 
-/* Lower third: bottom left of the safe area, about 46% wide at most. Slides in (280ms), fades out over 800ms. */
+/* Lower third (TV type scale, px at 1920x1080, scaled with the viewport and never below these): bottom left of the
+   safe area, 960px max. Enters with a 400ms fade plus a 16px rise, leaves with an 800ms fade. */
 #caption {
-  position: absolute; left: 0; bottom: 0; max-width: 46%; box-sizing: border-box;
-  padding: max(16px, 1.25vw) max(24px, 1.667vw);
-  border: 1px solid var(--color-overlay-line); border-radius: max(16px, 1.25vw);
+  position: absolute; left: 0; bottom: 0; max-width: max(960px, 50vw); box-sizing: border-box;
+  padding: max(32px, 1.667vw) max(40px, 2.083vw);
+  border: 1px solid var(--color-overlay-line); border-radius: max(var(--radius-lg), 1.25vw);
   background: var(--color-overlay);
   opacity: 1; transform: none;
-  transition: opacity 280ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: opacity 400ms var(--ease-emphasized-decel), transform 400ms var(--ease-emphasized-decel);
 }
-#caption.quiet { opacity: 0; transform: translateY(8px); transition: opacity 800ms ease, transform 800ms ease; }
-#cap-title { font-family: var(--font-display); font-size: max(40px, 3.333vw); line-height: 1.1875; font-weight: 600; letter-spacing: -0.02em; color: var(--color-overlay-ink); }
-#cap-meta { margin-top: 0.3em; font-size: max(22px, 1.667vw); line-height: 1.25; font-weight: 500; color: var(--color-overlay-dim); }
+/* Leaving is a fade only: the 16px drop happens after the fade, ready for the next rise. */
+#caption.quiet { opacity: 0; transform: translateY(max(16px, 0.833vw)); transition: opacity 800ms var(--ease-standard), transform 0s linear 800ms; }
+@media (prefers-reduced-motion: reduce) {
+  #caption, #caption.quiet { transform: none; }
+  #caption { transition: opacity 150ms var(--ease-standard); }
+  #caption.quiet { transition: opacity 800ms var(--ease-standard); }
+}
+/* Title 64/76 Fraunces 600, two lines at most. */
+#cap-title {
+  font-family: var(--font-display); font-size: max(64px, 3.333vw); line-height: 1.1875; font-weight: 600; letter-spacing: -0.02em; color: var(--color-overlay-ink);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+}
+/* Place 32/40 Jakarta 500, then the local time in accent-night after a 24px gap (no middle dot). */
+#cap-meta { display: flex; flex-wrap: wrap; column-gap: max(24px, 1.25vw); margin-top: max(8px, 0.417vw); font-size: max(32px, 1.667vw); line-height: 1.25; font-weight: 500; color: var(--color-overlay-dim); }
 #cap-meta:empty { display: none; }
-#cap-music { margin-top: 0.5em; font-size: max(18px, 1.25vw); line-height: 1.333; font-weight: 500; color: var(--color-overlay-dim); }
+#cap-meta .cap-time { color: var(--color-accent-night); font-variant-numeric: tabular-nums; }
+/* Mix line 28/36 Jakarta 500. */
+#cap-music { margin-top: max(16px, 0.833vw); font-size: max(28px, 1.458vw); line-height: 1.2857; font-weight: 500; color: var(--color-overlay-dim); }
 #cap-music:empty { display: none; }
-#cap-brand { margin-top: 0.8em; font-size: max(14px, 0.9375vw); line-height: 1.333; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-overlay-dim); }
+/* Brand row: 24px Shade mark plus "Window Seat" 24/32 Jakarta 600, sentence case, overlay-dim. */
+#cap-brand { display: flex; align-items: center; gap: max(12px, 0.625vw); margin-top: max(24px, 1.25vw); font-size: max(24px, 1.25vw); line-height: 1.3333; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--color-overlay-dim); }
+#cap-brand .cap-mark { height: max(24px, 1.25vw); width: auto; aspect-ratio: 52 / 74; flex: none; display: block; }
 
 /* Music: kept in the DOM at 356x200 (above YouTube's 200x200 minimum) so it keeps playing, but hidden
    behind the opaque cam layer and fully transparent. No display:none or visibility:hidden on purpose. */
@@ -59,8 +97,9 @@ html, body { margin: 0; height: 100%; background: var(--color-field); overflow: 
 #cmd-toast {
   position: fixed; top: 5%; left: 50%; z-index: 4; transform: translateX(-50%);
   padding: 0.45em 1.1em; border: 1px solid var(--color-overlay-line); border-radius: 999px; background: var(--color-overlay-strong);
-  color: var(--color-overlay-ink); font-size: max(20px, 1.458vw); line-height: 1.286; font-weight: 600;
+  color: var(--color-overlay-ink); font-size: max(32px, 1.667vw); line-height: 1.25; font-weight: 600;
   opacity: 0; transition: opacity 200ms ease-out; pointer-events: none; white-space: nowrap;
+  max-width: 90%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;
 }
 #cmd-toast.show { opacity: 1; }
 
@@ -69,17 +108,17 @@ html, body { margin: 0; height: 100%; background: var(--color-field); overflow: 
 #paused-pill {
   position: fixed; top: 5%; right: 5%; z-index: 4;
   padding: 0.45em 1.1em; border: 1px solid var(--color-overlay-line); border-radius: 999px; background: var(--color-overlay-strong);
-  color: var(--color-overlay-ink); font-size: max(20px, 1.458vw); line-height: 1.286; font-weight: 600; letter-spacing: 0.04em; pointer-events: none;
+  color: var(--color-overlay-ink); font-size: max(32px, 1.667vw); line-height: 1.25; font-weight: 600; letter-spacing: 0.04em; pointer-events: none;
 }
 #paused-pill[hidden] { display: none; }
 /* Pause timeout warning (25 minutes paused while casting): the pill adds "Closing in 5 minutes", in overlay-dim. */
 #paused-closing { color: var(--color-overlay-dim); font-weight: 500; letter-spacing: 0; }
 #paused-closing:not(:empty)::before { content: "\00B7"; margin: 0 0.5em; color: var(--color-overlay-dim); }
 
-/* Debug strip (Debug mode only): bottom right in the 5% safe area, clear of the caption at the bottom left.
+/* Debug strip (Debug mode only): bottom right in the 5% safe area, 38% wide at most so it clears the 960px lower third.
    Build, list, Cast channel state, message counts, current ids and the latest Cast event. */
 #debug-strip {
-  position: fixed; right: 5%; bottom: 5%; z-index: 5; max-width: 44%; box-sizing: border-box;
+  position: fixed; right: 5%; bottom: 5%; z-index: 5; max-width: 38%; box-sizing: border-box;
   padding: 0.6em 0.9em; border-radius: 10px; background: rgba(8, 12, 18, 0.78);
   color: rgba(255, 255, 255, 0.72); font: max(14px, 1.05vw)/1.35 system-ui, "Segoe UI", Roboto, sans-serif;
   text-align: right; white-space: pre-line; overflow-wrap: anywhere; pointer-events: none;

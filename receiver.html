@@ -8,9 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <meta http-equiv="Cache-Control" content="no-cache">
-  <link rel="stylesheet" href="css/receiver.css?v=2026-11-17.20">
+  <link rel="stylesheet" href="css/receiver.css?v=2026-11-17.21">
   <!-- The Cast receiver framework is injected by js/receiver.js (skipped with ?debug=1) so it can never block the page. -->
-  <script type="module" src="js/receiver.js?v=2026-11-17.20"></script>
+  <script type="module" src="js/receiver.js?v=2026-11-17.21"></script>
 </head>
 <body>
   <video id="keepalive" loop muted autoplay playsinline style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none"></video>
@@ -19,8 +19,13 @@
     <div id="music-frame"><div id="music-player"></div></div>
     <div id="music-title"></div>
   </div>
+  <!-- The cam iframe is overscaled to 112% (css/receiver.css) so YouTube's title bar and "More videos" strip fall off screen. -->
   <div id="cam"><div id="cam-player"></div></div>
   <div id="blackout" class="on"></div>
+  <!-- Pause cover: night field over the cam while the feed is paused, so YouTube's paused UI never shows. -->
+  <div id="pause-cover" aria-hidden="true"></div>
+  <!-- Unavailable stream: night field and our own message over any YouTube error card, until the next cam plays. -->
+  <div id="unavailable" role="status" hidden><p id="unavailable-msg"></p></div>
   <!-- Launch splash (Shade lockup and "Opening a window" are in the image): shown until the first cam is PLAYING,
        then faded out once by js/receiver.js. Later cam swaps use #blackout only. -->
   <div id="splash">
@@ -37,7 +42,7 @@
       <div id="cap-title"></div>
       <div id="cap-meta"></div>
       <div id="cap-music"></div>
-      <div id="cap-brand">Window Seat</div>
+      <div id="cap-brand"><svg class="cap-mark" viewBox="22 11 52 74" aria-hidden="true" focusable="false"><path fill="#F3F5F7" fill-rule="evenodd" d="M42,11H54A20,20 0 0 1 74,31V65A20,20 0 0 1 54,85H42A20,20 0 0 1 22,65V31A20,20 0 0 1 42,11ZM42.0,16.8H54.0A14.2,14.2 0 0 1 68.2,31.0V65.0A14.2,14.2 0 0 1 54.0,79.2H42.0A14.2,14.2 0 0 1 27.8,65.0V31.0A14.2,14.2 0 0 1 42.0,16.8Z"/><path fill="#8CC3D6" d="M42.0,20.4H54.0A10.6,10.6 0 0 1 64.6,31.0V42.4H31.4V31.0A10.6,10.6 0 0 1 42.0,20.4Z"/><path fill="#8CC3D6" d="M33.0,44.4H63.0A1.6,1.6 0 0 1 64.6,46.0V46.0A1.6,1.6 0 0 1 63.0,47.6H33.0A1.6,1.6 0 0 1 31.4,46.0V46.0A1.6,1.6 0 0 1 33.0,44.4Z"/></svg><span>Window Seat</span></div>
     </div>
   </div>
   <div id="debug-strip" role="status"></div>

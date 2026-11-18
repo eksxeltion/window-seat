@@ -56,13 +56,13 @@ Used on top of video only: the phone's full-screen local player, the TV lower th
 | `--color-accent-night` | `#8CC3D6` | The one night accent: pinned pill, playing or pinned marker, readable on video. Also the receiver's only accent. |
 | `--color-on-glass` | `#F3F5F7` | Titles and primary labels on glass |
 | `--color-on-glass-secondary` | `#A9B8C3` | Meta on glass |
-| `--color-overlay` | `rgba(10, 18, 24, 0.62)` | Glass behind the TV lower third |
-| `--color-overlay-strong` | `rgba(10, 18, 24, 0.82)` | TV toasts, command confirmation |
-| `--color-overlay-ink` | `#F3F5F7` | Title and brand |
-| `--color-overlay-dim` | `rgba(243, 245, 247, 0.78)` | City, country, mix line |
+| `--color-overlay` | `rgba(10, 26, 38, 0.78)` | Glass behind the TV lower third |
+| `--color-overlay-strong` | `rgba(10, 26, 38, 0.86)` | TV toasts, Paused pill, command confirmation |
+| `--color-overlay-ink` | `#F3F5F7` | Title, unavailable message |
+| `--color-overlay-dim` | `#C9D3DA` | City, country, mix line, brand row |
 | `--color-overlay-line` | `rgba(255, 255, 255, 0.16)` | Hairline on glass |
 
-`--color-overlay-accent` (`#8EC4D4`) is retired: there is one night accent, `--color-accent-night`. On the receiver, `--color-field` (`#0A1A26`, same as the night field) is the ground for the launch splash and the fade between cams.
+`--color-overlay-accent` (`#8EC4D4`) is retired: there is one night accent, `--color-accent-night`. On the receiver, `--color-field` (`#0A1A26`, same as the night field) is the ground for the launch splash, the fade between cams, the pause cover and the unavailable message.
 
 The video itself stays untouched. No colored grade on the cam. A soft bottom scrim exists only while chrome is visible on the local player or the TV lower third is on screen.
 
@@ -108,10 +108,13 @@ Type must read from the couch, about 3 meters away. Sizes are px at 1080p and sh
 | Name | Size / line | Weight | Use |
 | --- | --- | --- | --- |
 | TV title | 64 / 76 | Fraunces 600 | Cam name in the lower third |
-| TV meta | 32 / 40 | Plus Jakarta 500 | City, country, local time |
-| TV mix | 24 / 32 | Plus Jakarta 500 | Current mix, English title |
-| TV brand | 18 / 24 | Plus Jakarta 600, tracking 0.14em, uppercase | WINDOW SEAT |
-| TV toast | 28 / 36 | Plus Jakarta 600 | Command confirmation ("Pinned. Staying on this cam.") |
+| TV meta | 32 / 40 | Plus Jakarta 500 | City, country, then the local time in accent-night |
+| TV mix | 28 / 36 | Plus Jakarta 500 | Current mix, English title |
+| TV brand | 24 / 32 | Plus Jakarta 600, sentence case, no tracking | 24px Shade mark (night colors) plus "Window Seat" |
+| TV toast, Paused pill | 32 / 40 | Plus Jakarta 600 | Command confirmation ("Pinned. Staying on this cam."), "Paused" |
+| TV unavailable | 32 / 40 | Plus Jakarta 500 | "This window is closed for now. Next window in 5 seconds." |
+
+Nothing on the TV is under 24px at 1080p, except the Debug strip.
 
 ## Spacing
 
@@ -170,10 +173,11 @@ Calm and short. The living room should feel still.
 | Motion | Duration | Easing | Use |
 | --- | --- | --- | --- |
 | Fade | 200ms | ease-out | Sheets, toasts, chips |
-| Slide | 280ms | cubic-bezier(0.2, 0.8, 0.2, 1) | Bottom sheets, lower third in |
+| Slide | 280ms | cubic-bezier(0.2, 0.8, 0.2, 1) | Bottom sheets |
+| Lower third in | 400ms | cubic-bezier(0.05, 0.7, 0.1, 1) | TV lower third: fade plus a 16px rise (fade only with reduced motion) |
 | Cam crossfade | 400ms | ease | Existing cam blackout, keep this |
 | Local chrome hold | 6s visible after a tap, then fade, except when paused or a sheet is open |  | Local player only |
-| Lower third hold | 10s visible after a cam loads, then 800ms fade out |  | TV only |
+| Lower third hold | 10s visible after a cam loads, then 800ms fade out | cubic-bezier(0.2, 0, 0, 1) | TV only |
 | Pin toast hold | 5s visible after pinning, then fade |  | TV only |
 | Press | 80ms | ease-out | Button scale to 0.98 |
 
@@ -302,16 +306,24 @@ Tapping a row starts that mix immediately on the phone or, while casting, on the
 
 ### TV overlay / lower third
 
-Sits in the bottom-left of the 5% safe area. Max width about 46% of the screen.
+Sits in the bottom-left of the 5% safe area. Max width 960px, padding 32 x 40px, radius 24px, on `--color-overlay` glass.
 
-- Cam name, TV title, overlay-ink.
-- Meta: `{city}, {country}` then a mid-dot then local time. No type tag.
+- Cam name, TV title, overlay-ink, two lines at most.
+- Meta: `{city}, {country}`, then the local time in accent-night after a 24px gap (no mid-dot). No type tag.
+- Mix line: "Now playing: {mix}".
+- Brand row: the 24px Shade mark in night colors (frame `#F3F5F7`, blind `#8CC3D6`) plus "Window Seat" in sentence case, overlay-dim.
 
 The lower third shows for the first 10 seconds after the cam loads, then fades so more of the video is visible. After it fades, the quiet TV is video only.
 
 A pin toast ("Pinned. Staying on this cam.") appears top-center in the safe area for 5 seconds after pinning, then fades. It is temporary, not persistent.
 
-While the feed is paused, a persistent "Paused" pill stays on the TV.
+While the feed is paused, a persistent "Paused" pill stays on the TV, and the night field covers the cam so YouTube's paused UI never shows. The cover lifts when the cam is playing again.
+
+### No YouTube chrome on the TV
+
+The cam player runs with `controls=0`, `disablekb=1`, `fs=0`, `iv_load_policy=3`, `modestbranding=1`, `rel=0` and `playsinline=1`. Its iframe is overscaled to 112% and centered, so the title bar and the "More videos" strip fall outside the frame, and it takes no pointer events. The music player stays hidden behind the cam.
+
+When a cam cannot play (a YouTube error such as 100, 101 or 150, no PLAYING within the load timeout, or a stall), the receiver cuts to the night field and shows "This window is closed for now. Next window in 5 seconds." centered, 32/40 Jakarta 500, over any YouTube error card, then moves on to the next cam with the existing skip. The message clears when the next cam is on screen. If every cam failed, it reads "This window is closed for now." while the receiver waits a minute before trying again.
 
 No debug strip unless Debug mode is on. See Debug mode.
 
@@ -358,7 +370,7 @@ Required fields:
 
 **Phone overlay.** A collapsed pill (`DEBUG  {build}`, with a status dot that turns danger red and reads `DEBUG  error` when there is an error). On the local player it sits centered in the top scrim. It stays visible at 70% opacity when the chrome auto-hides, and expands into a night-glass panel that drops from the top and never covers the bottom panel or the floating button. On the casting remote it is a slim row under the casting pill and expands as a white card over the now-playing panel, never over transport or volume. Labels use Caption. Values and ids use Roboto Mono 500 13/18 (debug surfaces only). "Copy details" copies one plain line.
 
-**TV strip.** Bottom right in the 5% safe area, right-aligned, max 44% width. Overlay glass, 24/32 type, overlay-dim text, error text `#E8A3A3`. No auto-fade. It coexists with the lower third (bottom left, 46% max) with a 10% gutter. The pin toast is top center and the Paused pill is top right, so there is no overlap. If space is ever contested, the strip moves; guest-facing elements do not. Hidden by default. The strip turns off when the Cast session ends.
+**TV strip.** Bottom right in the 5% safe area, right-aligned, max 38% width. Overlay glass, 24/32 type, overlay-dim text, error text `#E8A3A3`. No auto-fade. It coexists with the lower third (bottom left, 960px max at 1080p) with a 2% gutter. The pin toast is top center and the Paused pill is top right, so there is no overlap. If space is ever contested, the strip moves; guest-facing elements do not. Hidden by default. The strip turns off when the Cast session ends.
 
 ## Pause timeout while casting
 
