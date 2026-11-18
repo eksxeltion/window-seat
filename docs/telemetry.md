@@ -65,7 +65,7 @@ Computed by the wrapper at capture time (not `posthog.register`, which persists 
 | Property | Values | Notes |
 | --- | --- | --- |
 | `app` | `window-seat` | Identifies the app inside the shared "Eksxel" PostHog project. Required on every event. |
-| `build` | e.g. `2026-11-17.17` | `BUILD` from `js/build.js` or `js/receiver.js`. |
+| `build` | e.g. `2026-11-17.18` | `BUILD` from `js/build.js` or `js/receiver.js`. |
 | `surface` | `web`, `pwa`, `receiver` | `web` is a browser tab, `pwa` is the installed app (display-mode standalone), `receiver` is the TV page. The Android app adds `android`. The spec's single `web` is split into `web` and `pwa`. |
 | `device_class` | `phone`, `tablet`, `desktop`, `tv` | Coarse, from screen size and the existing TV detection. Receiver is always `tv`. |
 | `cast_state` | `none`, `connecting`, `connected` | Phone side, at capture time. Receiver is always `connected`. |
