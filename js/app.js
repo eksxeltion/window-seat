@@ -178,6 +178,7 @@ const el = {
   hairline: $("#lp-hairline-fill"),
   nextBtn: $("#btn-next"),
   pinPill: $("#pin-pill"),
+  pinLabel: $("#pin-pill .pin-label"),
   caption: $("#caption"),
   capTitle: $(".cap-title"),
   capMeta: $(".cap-meta"),
@@ -1195,17 +1196,17 @@ function camMeta(cam) {
   return time ? `${place} · ${time}` : place;
 }
 
-/* Rotation line under the cam name: "Next cam in M:SS" with a hairline, "Pinned. Rotation off.", or "Paused" (frozen hairline). */
+/* Left of the Pin cam chip: "Paused" while paused (frozen hairline), else "Next cam in M:SS" or "Pinned. Rotation off.". */
 function renderStatus() {
   if (!state.started || state.casting) return;
   const period = rotateSec() * 1000;
   let text;
   let left = period;
-  if (state.pinned) {
-    text = state.feedPaused ? "Paused. Pinned, rotation off." : "Pinned. Rotation off.";
-  } else if (state.feedPaused) {
+  if (state.feedPaused) {
     text = "Paused";
     left = state.pausedRemaining;
+  } else if (state.pinned) {
+    text = "Pinned. Rotation off.";
   } else if (state.pending || !state.currentCamId) {
     text = state.allFailed ? "The cams are resting" : "Tuning in...";
   } else {
@@ -1224,7 +1225,7 @@ function renderStatus() {
 
 function render() {
   // Pin pill and rotation
-  setText(el.pinPill, state.pinned ? "Pinned" : "Pin cam");
+  setText(el.pinLabel, state.pinned ? "Pinned" : "Pin cam");
   el.pinPill.setAttribute("aria-pressed", String(state.pinned));
   for (const b of $$('[data-action="lite"]')) b.setAttribute("aria-pressed", String(state.lite));
 

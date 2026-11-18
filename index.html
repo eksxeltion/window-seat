@@ -18,8 +18,8 @@
   <!-- Web fonts (Fraunces, Plus Jakarta Sans, Noto Sans JP) are added by js/app.js after load, so a failed or slow
        font request never blocks the page. The CSS stacks fall back to Source Serif 4 and system-ui. Roboto Mono is
        requested only when Debug is turned on. -->
-  <link rel="stylesheet" href="css/style.css?v=2026-11-17.28">
-  <script type="module" src="js/app.js?v=2026-11-17.28"></script>
+  <link rel="stylesheet" href="css/style.css?v=2026-11-17.29">
+  <script type="module" src="js/app.js?v=2026-11-17.29"></script>
 </head>
 <body class="is-starting kbd">
   <!-- Icon sprite: 24px line icons, 2px stroke, round caps and joins. The Cast glyphs are the official Material
@@ -36,7 +36,7 @@
     <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-fullscreen-exit" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-home" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="i-controls" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="17" r="2" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-lite" viewBox="0 0 24 24"><path d="M13 3L5 13.5h6L10 21l8-10.5h-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
     <symbol id="i-tv" viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="12.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 20.5h8M12 17v3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10.5 18h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
@@ -69,27 +69,25 @@
     <button id="notice-btn" class="btn btn-primary" type="button"></button>
   </div>
 
-  <!-- Full-screen local player chrome (only while playing on this device, never while casting). -->
+  <!-- Full-screen local player chrome (only while playing on this device, never while casting). v2 / Playing locally. -->
   <div id="player-top" class="lp-top" role="toolbar" aria-label="Player">
-    <button id="lp-home" class="lp-icon-btn" type="button" data-action="home" aria-label="Home"><svg class="icon" aria-hidden="true"><use href="#i-home"></use></svg></button>
+    <button id="lp-home" class="lp-home" type="button" data-action="home"><svg class="icon" aria-hidden="true"><use href="#i-home"></use></svg><span>Home</span></button>
     <span class="lp-top-spacer"></span>
     <button class="lp-icon-btn cast-launcher lp-cast" type="button" data-cast hidden aria-label="Cast to your TV"><google-cast-launcher></google-cast-launcher><svg class="icon cast-glyph" aria-hidden="true"><use href="#i-cast"></use></svg><span class="cast-label visually-hidden">Cast to your TV</span></button>
     <button id="lp-fullscreen" class="lp-icon-btn" type="button" data-action="fullscreen" aria-label="Full screen"><svg class="icon" aria-hidden="true"><use href="#i-fullscreen"></use></svg></button>
   </div>
 
   <section id="bar" class="lp-glass" aria-label="Controls">
-    <div class="lp-info">
-      <div id="caption" class="caption" hidden>
-        <div class="cap-title"></div>
-        <div class="cap-meta"></div>
-      </div>
-      <!-- Pin is its own text pill, separate from the transport cluster (previous, pause / play, next). -->
-      <button id="pin-pill" class="pin-pill" type="button" data-action="pin" aria-pressed="false">Pin cam</button>
+    <div id="caption" class="caption" hidden>
+      <div class="cap-title"></div>
+      <div class="cap-meta"></div>
     </div>
-    <div class="lp-status" id="lp-status">
+    <!-- Status row: "Paused" (or the rotation line) on the left, the Pin cam chip on the right. -->
+    <div class="lp-row" id="lp-status">
       <span class="lp-status-text" id="lp-status-text" role="status"></span>
-      <span class="lp-hairline" aria-hidden="true"><span class="lp-hairline-fill" id="lp-hairline-fill"></span></span>
+      <button id="pin-pill" class="pin-pill" type="button" data-action="pin" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg><span class="pin-label">Pin cam</span></button>
     </div>
+    <span class="lp-hairline" aria-hidden="true"><span class="lp-hairline-fill" id="lp-hairline-fill"></span></span>
     <div class="lp-transport">
       <button class="bar-btn lp-skip" type="button" data-action="prev"><svg class="icon" aria-hidden="true"><use href="#i-prev"></use></svg><span class="label visually-hidden">Previous</span></button>
       <button class="bar-btn lp-play" type="button" data-action="play-pause"><svg class="icon" aria-hidden="true"><use href="#i-pause"></use></svg><span class="label visually-hidden">Pause</span></button>
@@ -97,19 +95,20 @@
     </div>
     <label class="volume lp-volume">
       <svg class="icon" aria-hidden="true"><use href="#i-music"></use></svg>
-      <span>Music</span>
       <input id="music-volume" type="range" min="0" max="100" step="5" value="60" aria-label="Music volume">
-      <output id="music-volume-out">60</output>
+      <span>Music</span>
+      <output id="music-volume-out" class="visually-hidden">60</output>
     </label>
+    <!-- Only when something is actually wrong with Cast (js/cast.js); the normal states stay off this chrome. -->
     <p class="cast-status bar-status" role="status" hidden></p>
     <div class="lp-actions">
-      <button class="lp-chip" type="button" data-action="open-cams" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-cams"></use></svg><span>Cams</span></button>
-      <button class="lp-chip" type="button" data-action="open-music" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-music"></use></svg><span>Mix</span></button>
+      <button class="lp-pill" type="button" data-action="open-cams" aria-haspopup="dialog">Cams</button>
+      <button class="lp-pill" type="button" data-action="open-music" aria-haspopup="dialog">Mix</button>
     </div>
   </section>
 
-  <!-- Floating show / hide controls: always at the bottom right of the local player, also while the chrome is hidden. -->
-  <button id="chrome-toggle" class="lp-fab" type="button" data-action="toggle-chrome" aria-controls="bar" aria-expanded="true" aria-label="Hide controls"><svg class="icon" aria-hidden="true"><use href="#i-controls"></use></svg></button>
+  <!-- Collapse: 52px ringed chevron at the bottom right of the local player, also while the chrome is hidden. -->
+  <button id="chrome-toggle" class="lp-fab" type="button" data-action="toggle-chrome" aria-controls="bar" aria-expanded="true" aria-label="Hide controls"><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
 
   <!-- Cams panel -->
   <section id="panel-cams" class="panel panel-cams" role="dialog" aria-modal="true" aria-labelledby="cams-title" aria-describedby="cams-count" hidden>
