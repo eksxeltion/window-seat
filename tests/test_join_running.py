@@ -309,6 +309,29 @@ with sync_playwright() as p:
     reasons = pg.evaluate(END_REASONS)
     check(f"(i) cast_session_end end_reason pause_timeout ({reasons})", got and reasons == ["pause_timeout"])
     rx.close(); pg.context.close()
+
+    # ------------------------------------------------------------ (j) a late sheet fetch after a join does not replace the TV's lists
+    rx, pg = tv(), phone()
+    ph_cam, ph_mix = pg.evaluate("()=>[__windowSeat.currentCamId(), __windowSeat.currentMixId()]")
+    tv_cam, tv_mix = other_sender(rx, ph_cam, ph_mix)
+    pool = [tv_cam] + [c for c in ids["cams"] if c not in (tv_cam, ph_cam)][:2]
+    rx.evaluate("(ids)=>__receiver.send({type:'cams', ids}, 'other')", pool)
+    tv_lists = rx.evaluate("()=>import('./js/data.js').then(d=>[d.CAMS.length, d.MIXES.length])")
+    link = Link(pg, rx)
+    pg.evaluate("()=>__mockCast.start()")
+    link.pump(1200)
+    check("(j) joined, nothing pushed", setup_of(sent(pg)) == [])
+    n_cfg = [m["type"] for m in sent(pg)].count("config")
+    # The phone later "fetches" a sheet that lacks the TV's cam and mix, then tries to push it.
+    pg.evaluate("([c,m])=>Promise.all([import('./js/config.js'), import('./js/data.js'), import('./js/cast.js')]).then(([cfg,d,cast])=>{cfg.applyConfig({cams:d.CAMS.filter(x=>x.id!==c).map(x=>({...x})), mixes:d.MIXES.filter(x=>x.id!==m).map(x=>({...x}))}, 'sheet'); cast.sendConfigToTv()})", [tv_cam, tv_mix])
+    link.pump(600)
+    st = tvst(rx)
+    now_lists = rx.evaluate("()=>import('./js/data.js').then(d=>[d.CAMS.length, d.MIXES.length])")
+    print("(j) sent:", [m["type"] for m in sent(pg)])
+    check("(j) late sendConfigToTv sends no config", [m["type"] for m in sent(pg)].count("config") == n_cfg)
+    check(f"(j) TV keeps its lists after the late fetch ({now_lists} vs {tv_lists})", now_lists == tv_lists)
+    check(f"(j) TV keeps its cam, mix and pool ({st['camId']}, {st['mixId']}, {st['poolIds']})", st["camId"] == tv_cam and st["mixId"] == tv_mix and st["poolIds"] == pool)
+    rx.close(); pg.context.close()
     b.close()
 
 print(logs)

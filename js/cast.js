@@ -352,6 +352,9 @@ export function sendCamsToTv(ids, rules = {}) {
 export function sendConfigToTv() {
   if (ui.root) fillRemoteLists();
   if (!session || listInfo.source === "built-in") return;
+  // Joining a running TV, or still asking whether to, must not replace its lists with this phone's copy
+  // (a late sheet fetch on this phone can finish after the join; the TV fetches the sheet itself).
+  if (session.__wsProbe || session.__wsPending === "probe" || session.__wsJoined) return;
   send({ type: "config", source: listInfo.source, ...currentConfig(), silent: true }, { silent: true });
 }
 
