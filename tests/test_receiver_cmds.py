@@ -1,10 +1,12 @@
 """Receiver commands in debug mode (receiver.html?debug=1, driven through window.__receiver.send) against the REAL
-YouTube IFrame API, so it needs network.
+YouTube IFrame API, so it needs network. With WS_FAKE_YOUTUBE=1 it uses tests/fake_youtube.js instead (tests/yt_mode.py).
 Usage: test_receiver_cmds.py BASE_URL   (BASE_URL serves receiver.html; a receiver.html URL also works)"""
 import sys
 from playwright.sync_api import sync_playwright
 import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
+import yt_mode  # noqa: E402  WS_FAKE_YOUTUBE=1 swaps in tests/fake_youtube.js (CI)
+yt_mode.announce()
 base = sys.argv[1].split("?")[0].rstrip("/")
 if base.endswith(".html"):
     base = base.rsplit("/", 1)[0]
@@ -15,6 +17,7 @@ with sync_playwright() as p:
     b=p.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
     pg=b.new_page(viewport={"width":1920,"height":1080})
     pg.on("pageerror", lambda e: logs.append(f"PAGEERROR: {e}"))
+    yt_mode.route(pg)
     pg.goto(url); pg.wait_for_timeout(15000)
     st=lambda: pg.evaluate("()=>__receiver.state"); send=lambda js: pg.evaluate(f"()=>__receiver.send({js})")
     c0=st()['camId']; send('JSON.stringify({type:"next"})'); pg.wait_for_timeout(9000)
