@@ -1,4 +1,4 @@
-"""Telemetry (PostHog and Sentry) on the phone page and the receiver, with both hosts stubbed.
+"""Telemetry (PostHog and Sentry) on the phone page and the receiver, with both hosts aborted (requests are recorded, never answered).
 Usage: test_telemetry.py BASE_URL   (the site root, for example http://localhost:8000/)
 
 Covers docs/telemetry.md section 10: the About switch, Do Not Track and Global Privacy Control, "off means no requests
@@ -7,7 +7,7 @@ and the receiver gate (nothing before a telemetry message, sends after on, stops
 import sys, os, json, re, time
 from playwright.sync_api import sync_playwright
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import telemetry_guard  # noqa: E402  stubs *.posthog.com and *.sentry.io
+import telemetry_guard  # noqa: E402  aborts every PostHog and Sentry request
 
 base = sys.argv[1].rstrip("/")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -65,7 +65,10 @@ def open_phone(b, query="", init="", mobile=False):
 
 
 def host_hits(reqs):
-    return [u for u in reqs if TELEMETRY_HOST.match(u)]
+    """Requests to PostHog or Sentry, minus PostHog's own replays of an earlier failed send (?retry_count=N). The guard
+    aborts every request, so the SDK retries the events it already queued; those are not new telemetry (the opt-out
+    checks care about new sends after off)."""
+    return [u for u in reqs if TELEMETRY_HOST.match(u) and "retry_count=" not in u]
 
 
 def vendor_loads(reqs):
@@ -583,4 +586,5 @@ real = [h["url"] for h in telemetry_guard.hits if not TELEMETRY_HOST.match(h["ur
 check("no request escaped the stub", not real)
 print("page errors:", page_errors)
 check("no page errors", not page_errors)
+telemetry_guard.assert_no_leaks()  # every telemetry request was aborted, none got a response
 sys.exit(1 if fails else 0)

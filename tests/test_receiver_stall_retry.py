@@ -5,7 +5,7 @@ window if it never plays (cam_failed why=load_timeout retried=1, unavailable mes
 the cam still fails at once with no retry.
 Runs against receiver.html?debug=1&telemetry=1 with the stubbed YouTube API (tests/fake_youtube.js). No telemetry
 message is sent, so events stay in the receiver buffer (window.__telemetry.queue()) and nothing leaves the page;
-telemetry_guard stubs the real hosts anyway.
+telemetry_guard aborts the real hosts anyway.
 Usage: test_receiver_stall_retry.py BASE_URL"""
 import os
 import re
@@ -15,7 +15,7 @@ from playwright.sync_api import sync_playwright
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
+import telemetry_guard  # noqa: E402,F401  aborts PostHog and Sentry: tests never reach the real hosts
 
 base = sys.argv[1].split("?")[0].rstrip("/")
 if base.endswith(".html"):
@@ -125,13 +125,13 @@ with sync_playwright() as p:
 
     ids = pg.evaluate("async()=>(await import('./js/data.js')).CAMS.map(c=>c.id)")
     cur = pg.evaluate("()=>__receiver.state.camId")
-    rec, dead, err = [i for i in ids if i != cur][:3]
-    pg.evaluate("([r,d,e])=>{window.__ytStuck={[r]:{state:-1, loads:1}, [d]:{state:3, loads:99}};}", [rec, dead, err])
+    rec, dead, err, left = [i for i in ids if i != cur][:4]
+    pg.evaluate("([r,d,l])=>{window.__ytStuck={[r]:{state:-1, loads:1}, [d]:{state:3, loads:99}, [l]:{state:3, loads:1}};}", [rec, dead, left])
     # Controlled rotation pool without the three targets: the automatic skip after a failure never loads one of
     # them, so every target is loaded only by the explicit pick of its own case.
-    safe = [i for i in ids if i not in (rec, dead, err)]
+    safe = [i for i in ids if i not in (rec, dead, err, left)]
     pg.evaluate("(ids)=>__receiver.send({type:'cams', ids, skipSleeping:false, onlyDaytime:false})", safe)
-    check("controlled pool excludes the targets", pg.evaluate("(t)=>!t.includes(__receiver.state.camId)", [rec, dead, err]))
+    check("controlled pool excludes the targets", pg.evaluate("(t)=>!t.includes(__receiver.state.camId)", [rec, dead, err, left]))
 
     # 1-3: stuck UNSTARTED on the first load, nudged before 12s, retried at 12s, plays in the retry window
     n0 = mark(pg)
@@ -205,7 +205,29 @@ with sync_playwright() as p:
     check("(5) no load nudge or retry logged for it",
           not pg.evaluate("(id)=>__receiver.log.some(e=>(e.type==='loadNudge' || e.type==='loadRetry') && e.detail.camId===id)", err))
 
+    # 6: a leftover error for ANOTHER video id (a late error from the previous cam) is in the load trace before the
+    # stall; the cam then stalls BUFFERING on its own id. The error must not veto the nudge or the retry.
+    settle(pg)
+    prev = pg.evaluate("()=>__receiver.state.camId")
+    pe0 = len(queued(pg, "player_error"))
+    n0 = mark(pg)
+    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", left)
+    pg.wait_for_function("(id)=>__yt.cam().vid===id", arg=left, timeout=5000)
+    # Late error for the previous cam while the new cam is loading: the player reports another id, so it is ignored
+    # by onCamError (not a player_error, no failCam) and only recorded in the trace.
+    pg.evaluate("([p])=>{const c=__yt.cam(), v=c.vid; c.vid=p; c.opts.events.onError({data:2, target:c}); c.vid=v;}", [prev])
+    check("(6) the leftover other-id error is ignored: no cam_failed, no player_error, still pending",
+          not queued(pg, "cam_failed", left) and len(queued(pg, "player_error")) == pe0 and pg.evaluate("(id)=>__receiver.state.camId!==id", left))
+    pg.wait_for_function("(id)=>__receiver.log.some(e=>e.type==='loadNudge' && e.detail.camId===id)", arg=left, timeout=9000)
+    shown = wait_for(pg, "cam_shown", left, 14000) or {}
+    print("leftover-error cam_shown:", shown)
+    check(f"(6) retried once despite the leftover error ({loads(pg, left, n0)} loads)", loads(pg, left, n0) == 2)
+    check("(6) loadRetry logged for it", pg.evaluate("(id)=>__receiver.log.some(e=>e.type==='loadRetry' && e.detail.camId===id)", left))
+    check("(6) recovered: cam_shown retried=1 nudged=1, no cam_failed",
+          shown.get("retried") == 1 and shown.get("nudged") == 1 and not queued(pg, "cam_failed", left))
+
     check("nothing left the page", not telemetry_guard.hits)
+    telemetry_guard.assert_no_leaks()
     b.close()
 
 print("page errors:", logs)

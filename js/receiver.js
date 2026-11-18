@@ -730,14 +730,16 @@ function onCamError(e) {
 }
 
 /* A pending load that is stuck rather than broken: the player is UNSTARTED or BUFFERING on this cam's own video id
-   (or reports none), and no player error was seen during the load. Seen on the TV for some live cams that never
-   leave BUFFERING or UNSTARTED until poked. PLAYING for another id (an ad), other states and errors do not qualify. */
+   (or reports none). Seen on the TV for some live cams that never leave BUFFERING or UNSTARTED until poked.
+   PLAYING for another id (an ad) and other states do not qualify. An error for this cam's own id fails the cam at
+   once in onCamError, so it never gets here; trace.errors only holds errors for OTHER ids (a late error from the
+   previous cam) and must not veto the retry. */
 function pendingStalled() {
   const st = quietly(() => camPlayer.getPlayerState());
   if (st !== YS.UNSTARTED && st !== YS.BUFFERING) return false;
   const vid = quietly(() => camPlayer.getVideoData().video_id);
   if (vid && vid !== pending.camId) return false;
-  return !(trace && trace.errors.length);
+  return true;
 }
 
 /* Pending load watchdog. A stuck load is nudged with playVideo after LOAD_NUDGE_MS (checked on every tick, so a
