@@ -1,5 +1,5 @@
 """Phone with the REAL gstatic cast_framework.js on top of tests/fake_chrome_cast.js (needs network). Usage: test_sender_realcaf.py PHONE_URL"""
-import sys, os, json
+import sys, os, json, time
 from playwright.sync_api import sync_playwright
 import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import telemetry_guard  # noqa: E402,F401  stubs PostHog and Sentry: tests never reach the real hosts
@@ -32,7 +32,16 @@ with sync_playwright() as p:
         if l.count() and l.first.is_visible(): l.first.tap()
         else: pg.evaluate("(s)=>document.querySelector(s).click()", sel)
         pg.wait_for_timeout(300)
+    def wait_fresh_push(pg):
+        # No TV answers here: taps are held until the 2.5 s state probe gives up and the phone pushes.
+        t0 = time.time()
+        while time.time() - t0 < 6:
+            if any(typ in ("config", "cams", "volume") for typ in sent(pg)):
+                return True
+            pg.wait_for_timeout(100)
+        return False
     def controls(pg, label):
+        check(f"{label}: new session pushes after the probe times out", wait_fresh_push(pg))
         pg.evaluate("()=>__fakeSent.length=0")
         pg.locator('#remote [data-cmd="next"]').tap(); pg.wait_for_timeout(200)
         pg.keyboard.press("n"); pg.wait_for_timeout(200)
@@ -46,7 +55,6 @@ with sync_playwright() as p:
     tap_cast(pg, "#player-top [data-cast]")
     pg.evaluate("()=>__fake.pick()"); pg.wait_for_timeout(1000)
     check("A: remote mode, zero local iframes", pg.is_visible("#remote") and pg.evaluate(YT) == 0)
-    pg.wait_for_timeout(2000)  # no TV answers here: taps are held until the new session's 2.5 s state probe gives up
     controls(pg, "A")
     pg.context.close()
 
