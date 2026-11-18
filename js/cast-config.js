@@ -1,6 +1,6 @@
 // Google Cast settings. Registered Cast Application IDs (Google Cast SDK Developer Console).
 // A leaf module: it must not import app.js or cast.js.
-export const CAST_APP_ID_PROD = "48BEB59E"; // Window Seat, published
+export const CAST_APP_ID_PROD = "48BEB59E"; // Window Seat, unpublished until phase 3
 export const CAST_APP_ID_TEST = "CEB296EE"; // Window Seat (test), unpublished: registered test devices only
 export const RECEIVER_NAMESPACE = "urn:x-cast:com.windowseat";
 export const CAST_APP_STORAGE_KEY = "windowSeat.castApp"; // "test" or "prod"

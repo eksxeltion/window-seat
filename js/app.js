@@ -1960,10 +1960,9 @@ function setupCastAppSwitch() {
   toggle.addEventListener("change", () => {
     const which = toggle.checked ? "test" : "prod";
     saveCastApp(which);
-    // Drop ?castApp= so it can never undo the choice, then set it again only when turning the test app on.
+    // Always put the choice in the URL so the reload honors it even if saving to storage failed.
     const url = new URL(location.href);
-    url.searchParams.delete("castApp");
-    if (which === "test") url.searchParams.set("castApp", "test");
+    url.searchParams.set("castApp", which);
     if (url.href === location.href) location.reload();
     else location.replace(url.href);
   });

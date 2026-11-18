@@ -106,7 +106,7 @@ The web app uses the production app (`48BEB59E`) unless you opt in to the test a
 
 The choice is saved on the phone (`windowSeat.castApp` in local storage), so later loads keep using the test app until you switch back. The Cast SDK reads the app ID once when the page loads, so a change always applies through a reload.
 
-To switch back: turn **Cast test receiver** off in About (the page reloads, and drops `castApp=test` from the address so it cannot turn itself back on), or open `?castApp=prod` (`?castApp=main` and `?castApp=48BEB59E` work too).
+To switch back: turn **Cast test receiver** off in About (the page reloads with `?castApp=prod`, so the choice applies even if the phone cannot save it), or open `?castApp=prod` (`?castApp=main` and `?castApp=48BEB59E` work too).
 
 How to confirm which app is active:
 

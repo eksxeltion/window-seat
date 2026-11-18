@@ -90,7 +90,7 @@ with sync_playwright() as p:
     with pg.expect_navigation():
         pg.click("label[for=cast-app-toggle]")
     pg.wait_for_timeout(1200)
-    check(f"switch off: URL has no castApp=test ({pg.url})", "castApp=test" not in pg.url)
+    check(f"switch off: URL has castApp=prod ({pg.url})", "castApp=prod" in pg.url and "castApp=test" not in pg.url)
     check(f"switch off: setOptions uses production ({app_id()})", app_id() == PROD)
     check("switch off: saved prod", stored() == "prod")
     open_about()
