@@ -156,12 +156,16 @@ function setRemoteStatus(text) {
 /* Update the phone UI right away; the TV's state reply then confirms or corrects it. */
 function act(cmd, patch) {
   capture("command", { type: commandType(cmd), mode: "cast" });
+  if (session) session.__wsActed = true;
   // Any command restarts the TV's pause timer (or resumes the feed), so the warning goes until the TV says otherwise.
   if (remote.pauseWarning && cmd.type !== "getState") patch = { ...patch, pauseWarning: false };
   if (patch) {
     remote = { ...remote, ...patch };
     renderRemote();
   }
+  // A new session still asking the TV whether to join or push: hold the tap until that is settled, so the push that
+  // may follow cannot undo it (a volume tap reaching a fresh TV before its reply, then the phone's old volume).
+  if (session && session.__wsProbe) return void (session.__wsHeld = [...(session.__wsHeld || []), cmd]);
   send(cmd);
 }
 
@@ -348,6 +352,9 @@ export function sendCamsToTv(ids, rules = {}) {
 export function sendConfigToTv() {
   if (ui.root) fillRemoteLists();
   if (!session || listInfo.source === "built-in") return;
+  // Joining a running TV, or still asking whether to, must not replace its lists with this phone's copy
+  // (a late sheet fetch on this phone can finish after the join; the TV fetches the sheet itself).
+  if (session.__wsProbe || session.__wsPending === "probe" || session.__wsJoined) return;
   send({ type: "config", source: listInfo.source, ...currentConfig(), silent: true }, { silent: true });
 }
 
@@ -390,9 +397,17 @@ function onMessage(_ns, raw) {
   if (msg && msg.debug && typeof msg.debug === "object") tvDebug = msg.debug;
   if (msg && msg.type === "pauseTimeout") return onPauseTimeout();
   if (!msg || msg.type !== "state") return;
-  if (session && !session.__wsTelFirstState) {
+  // A new session waits for this first state: a TV already set up by any sender is joined, not overwritten.
+  const probe = session && session.__wsProbe ? session : null;
+  if (probe) {
+    probe.__wsProbe = false;
+    clearTimeout(probe.__wsProbeTimer);
+    probe.__wsJoined = msg.configured === true; // missing on older receivers: push as before
+  }
+  // A new session reports its first state only once it has decided (join or push), so joined_running is that decision.
+  if (session && !session.__wsTelFirstState && session.__wsPending !== "probe") {
     session.__wsTelFirstState = true;
-    capture("cast_first_state", { ms_since_connect: session.__wsTelConnectAt ? Date.now() - session.__wsTelConnectAt : undefined, resumed: !!session.__wsTelResumed });
+    capture("cast_first_state", { ms_since_connect: session.__wsTelConnectAt ? Date.now() - session.__wsTelConnectAt : undefined, resumed: !!session.__wsTelResumed, joined_running: !!session.__wsJoined });
   }
   lastReplyAt = Date.now();
   warnedNoReply = false;
@@ -401,8 +416,24 @@ function onMessage(_ns, raw) {
   pauseEndAt = typeof msg.pauseEndsInMs === "number" && msg.paused !== false ? Date.now() + msg.pauseEndsInMs : 0;
   // Play or Keep paused reached the TV in its stop delay: the feed plays or the timer runs again, so no end is coming.
   if (pauseEnded && (msg.paused === false || typeof msg.pauseEndsInMs === "number")) clearPauseEnd("TV state");
-  setRemoteStatus(`Connected. The TV confirms each tap.${msg.build ? ` (TV build ${msg.build})` : ""}`);
+  const kept = session && session.__wsJoined && !session.__wsActed;
+  setRemoteStatus(`Connected. ${kept ? "The TV kept what it was playing." : "The TV confirms each tap."}${msg.build ? ` (TV build ${msg.build})` : ""}`);
   renderRemote();
+  if (probe) settleInit(probe, probe.__wsJoined);
+}
+
+/* New session, first state (or none in time): join a TV another sender set up, else push this phone's choices. Once. */
+function settleInit(s, joined) {
+  if (session !== s) return;
+  logEvent(joined ? "joined a running TV session: adopting its state" : "new TV session: sending this phone's choices");
+  if (joined) {
+    sendResumeSet(s, true);
+    if (hooks.onJoin) quietly(() => hooks.onJoin(remote)); // the Cams sheet edits the TV's pool and rules, not the phone's
+  } else pushChoices();
+  // Taps held while asking go out now, after the push, so they win over it.
+  const held = s.__wsHeld || [];
+  s.__wsHeld = null;
+  for (const cmd of held) send(cmd);
 }
 
 /* Remote mode first, unconditionally: stop local playback and show the remote,
@@ -493,14 +524,31 @@ function flushInit(s) {
   if (session !== s || !s.__wsPending || !nsInfo().ok) return;
   const mode = s.__wsPending;
   s.__wsPending = null;
-  if (mode === "push") {
-    pushChoices();
+  if (mode === "probe") {
+    // Ask first: the TV may already be playing what another sender (or this phone before a reload) set up.
+    s.__wsProbe = true;
+    s.__wsProbeTimer = setTimeout(() => {
+      if (!s.__wsProbe) return;
+      s.__wsProbe = false;
+      logEvent(`no TV state in ${PROBE_MS} ms`);
+      settleInit(s, false);
+    }, PROBE_MS);
+    send({ type: "getState" });
   } else {
-    sendConfigToTv();
-    // Shuffle only steers the next mix, so it is safe to send on resume: the TV keeps the mix it is playing.
-    sendShuffleToTv(hooks.getLocal().shuffle !== false, s);
-    send({ type: "getState" }); // reconnecting to a TV that is already playing: do not override it
+    sendResumeSet(s);
   }
+}
+const PROBE_MS = 2500;
+
+/* Reconnecting to (or joining) a TV that is already playing: do not override it. */
+function sendResumeSet(s, joined = false) {
+  // Joining: the TV already has its lists (its own sheet fetch, or the sender that set it up). This phone's copy may
+  // be older, and replacing the TV's lists can drop cams from its pool or switch the cam or mix it plays.
+  if (!joined) sendConfigToTv();
+  else if (ui.root) fillRemoteLists();
+  // Shuffle only steers the next mix, so it is safe to send on resume: the TV keeps the mix it is playing.
+  sendShuffleToTv(hooks.getLocal().shuffle !== false, s);
+  send({ type: "getState" });
 }
 
 /* Play services can refresh the app's namespace list after the session started. */
@@ -554,9 +602,9 @@ function onSessionStarted(s, resumed, via = "event") {
       s.__wsPending = "resume";
     }
   } else if (!s.__wsPushed) {
-    s.__wsPushed = true; // a real start: push the phone's choices once, even if the session was adopted first
+    s.__wsPushed = true; // a real start: push the phone's choices once (or join a set-up TV), even if adopted first
     s.__wsInit = true;
-    s.__wsPending = "push";
+    s.__wsPending = "probe";
   }
   const ns = quietly(nsInfo) || { ok: false, names: [] };
   logEvent(`${resumed ? "session resumed" : "session started"}: windowseat ${ns.ok ? "listed" : "not listed"} [${ns.names.join(",")}]`);

@@ -253,6 +253,8 @@ with sync_playwright() as p:
     # ------------------------------------------------------------ casting: the TV gets the same pool
     pg.evaluate("()=>__mockCast.start()")
     pg.wait_for_timeout(400)
+    pg.evaluate("()=>__mockCast.reply({type:'state',configured:false})")  # probe reply: a fresh TV gets the phone's choices
+    pg.wait_for_timeout(200)
     msgs = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     cams = [m for m in msgs if m.get("type") == "cams"]
     check(f"cast: connect sends the checked pool and Skip on ({cams[:1]})", cams and cams[0].get("skipSleeping") is True and cams[0].get("onlyDaytime") is False and SHINJUKU not in cams[0]["ids"] and EIFFEL in cams[0]["ids"])

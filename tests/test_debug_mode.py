@@ -9,7 +9,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SENDER = open(os.path.join(HERE, "mock_cast_sender.js")).read()
 CAF = open(os.path.join(HERE, "mock_caf_receiver.js")).read()
 NS = "urn:x-cast:com.windowseat"
-BUILD = "2026-11-17.16"
+BUILD = "2026-11-17.17"
 # Clipboard stub: records what Copy details writes (headless clipboard permissions vary by platform).
 CLIP = "window.__copied=null; try{Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:(t)=>{window.__copied=t;return Promise.resolve();}}});}catch(e){}"
 fails, logs = [], []
@@ -105,12 +105,13 @@ with sync_playwright() as p:
     pg = phone()
     open_about(pg); pg.check("#debug-toggle"); close_about(pg)
     pg.evaluate("()=>__mockCast.start()"); pg.wait_for_timeout(400)
+    pg.evaluate("()=>__mockCast.reply({type:'state',configured:false})"); pg.wait_for_timeout(100)  # probe reply: a fresh TV
     msgs = sent(pg)
     dbgs = [m for m in msgs if m["type"] == "debug"]
     check("session start sends debug on:true over the namespace", dbgs and dbgs[-1].get("on") is True and all(m["ns"] == NS for m in pg.evaluate("()=>__mockCast.sent")))
     check("setup order kept: first message is still not the debug command", msgs and msgs[0]["type"] != "debug")
     check("panel moves into the remote while casting", pg.evaluate("()=>!!document.querySelector('#remote #debug-panel')") and pg.is_visible("#debug-panel"))
-    pg.evaluate("()=>__mockCast.reply({type:'state',build:'2026-11-17.16',camId:'5B4LmH4JbnY',mixId:'nCtOCLv6eFY',debug:{caf:'ready',readyNs:'yes',rx:7,tx:9,appState:'ok',strip:true}})")
+    pg.evaluate("()=>__mockCast.reply({type:'state',build:'2026-11-17.17',camId:'5B4LmH4JbnY',mixId:'nCtOCLv6eFY',debug:{caf:'ready',readyNs:'yes',rx:7,tx:9,appState:'ok',strip:true}})")
     pg.wait_for_timeout(1200)
     expand(pg)
     cast_txt = pg.text_content("[data-section=cast]")
@@ -119,7 +120,7 @@ with sync_playwright() as p:
     check("panel mirrors TV CAF, ready-ns, appstate, rx/tx", "CAF ready" in cast_txt and "ready-ns yes" in cast_txt and "appstate ok" in cast_txt and "TV rx 7 tx 9" in cast_txt)
     check("panel shows phone and TV builds", f"{BUILD} · TV {BUILD}" in pg.text_content("[data-section=app]"))
     check("panel NOW shows the TV cam and mix ids", "5B4LmH4JbnY" in pg.text_content("[data-section=now]") and "nCtOCLv6eFY" in pg.text_content("[data-section=now]"))
-    check("#remote-debug line still there", "Phone build 2026-11-17.16 | TV build 2026-11-17.16" in pg.text_content("#remote-debug"))
+    check("#remote-debug line still there", "Phone build 2026-11-17.17 | TV build 2026-11-17.17" in pg.text_content("#remote-debug"))
     # toggling while connected
     pg.evaluate("()=>__mockCast.sent.length=0")
     pg.evaluate("()=>{const t=document.querySelector('#debug-toggle'); t.checked=false; t.dispatchEvent(new Event('change'))}"); pg.wait_for_timeout(200)
@@ -136,10 +137,11 @@ with sync_playwright() as p:
     ev = pg.text_content("#debug-events")
     check("event log shows a successful debug send", "tx debug ok" in ev)
     check("event log shows the failed send with its code", "tx next FAILED session_error" in ev)
-    check("event log shows session and rx events", "session SESSION_STARTED" in ev and "rx state" in ev)
+    # The log keeps 20 lines; the new-session probe adds a few, so SESSION_STARTED may have scrolled out by now.
+    check("event log shows session and rx events", ("session SESSION_STARTED" in ev or "new TV session: sending this phone's choices" in ev) and "rx state" in ev)
     pg.click("#debug-copy"); pg.wait_for_timeout(200)
     copied = pg.evaluate("()=>window.__copied") or ""
-    check("Copy details includes the failure and TV build", "tx next FAILED session_error" in copied and "TV 2026-11-17.16" in copied)
+    check("Copy details includes the failure and TV build", "tx next FAILED session_error" in copied and "TV 2026-11-17.17" in copied)
     print("pill:", repr(pg.text_content("#debug-pill")))
     check("error turns the pill red: DEBUG  error", "DEBUG  error" in pg.text_content("#debug-pill") and pg.evaluate("()=>document.querySelector('#debug-panel').classList.contains('has-error')"))
     # session ends: panel goes back to the page

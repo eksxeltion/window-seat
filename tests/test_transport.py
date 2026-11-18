@@ -280,6 +280,9 @@ with sync_playwright() as p:
     pg.goto(base + "/index.html")
     pg.wait_for_timeout(800)
     pg.evaluate("()=>__mockCast.start()")
+    # Reply only after the probe getState goes out: a state that arrives before __wsProbe is set is ignored.
+    check("cast: new session asks the TV first", wait_until(pg, "()=>__mockCast.sent.some(m=>{try{return JSON.parse(m.data).type==='getState'}catch(e){return false}})", 2000))
+    pg.evaluate("()=>__mockCast.reply({type:'state',configured:false})")  # probe reply: a fresh TV (taps are held until it settles)
     pg.wait_for_timeout(400)
     connect = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     check("cast: connect sends no pause command", not any(m["type"] in ("pause", "playMusic") for m in connect))

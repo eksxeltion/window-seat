@@ -13,7 +13,7 @@ if base.endswith(".html"):
 here = os.path.dirname(os.path.abspath(__file__))
 FAKE_YT = open(os.path.join(here, "fake_youtube.js")).read()
 MOCK = open(os.path.join(here, "mock_cast_sender.js")).read()
-BUILD = "2026-11-17.16"
+BUILD = "2026-11-17.17"
 TAGLINE = "Live windows onto the world, with soft music, made for your TV."
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 # Every page denies the Fullscreen API: the player must stay full bleed and keep playing anyway.
@@ -49,6 +49,13 @@ def wait_until(pg, js, ms=4000):
     except Exception:
         return False
 
+
+# Matches js/localtime.js placeLine: drop a repeated city/country (Singapore, Singapore).
+def place_line(cam):
+    city, country = (cam.get("city") or "").strip(), (cam.get("country") or "").strip()
+    if city and country and city != country:
+        return f"{city}, {country}"
+    return city or country
 
 def box(pg, sel):
     return pg.locator(sel).first.bounding_box()
@@ -173,7 +180,7 @@ with sync_playwright() as p:
     check("player: bottom glass visible", pg.is_visible("#bar"))
     cam = pg.evaluate("async()=>{const {CAMS}=await import('/js/data.js'); return CAMS.find(c=>c.id===__windowSeat.currentCamId())}")
     check("player: glass shows the cam name", pg.text_content(".cap-title") == cam["title"])
-    check(f"player: meta is '{{city}}, {{country}} · {{local time}}' ({pg.text_content('.cap-meta')})", re.fullmatch(re.escape(f"{cam['city']}, {cam['country']}") + r" · \d{1,2}:\d\d (AM|PM)", pg.text_content(".cap-meta")) is not None)
+    check(f"player: meta is '{{place}} · {{local time}}' ({pg.text_content('.cap-meta')})", re.fullmatch(re.escape(place_line(cam)) + r" · \d{1,2}:\d\d (AM|PM)", pg.text_content(".cap-meta")) is not None)
     check("player: meta has no channel or type", cam["channel"] not in pg.text_content(".cap-meta"))
     check(f"player: rotation status 'Next cam in M:SS' ({pg.text_content('#lp-status-text')})", re.fullmatch(r"Next cam in \d:\d\d", pg.text_content("#lp-status-text")) is not None)
     sizes = {s: box(pg, f"#bar [data-action={s}]") for s in ("prev", "play-pause", "next")}
@@ -335,6 +342,10 @@ with sync_playwright() as p:
     pg.evaluate("()=>__mockCast.start()")
     pg.wait_for_timeout(500)
     check("cast: remote shown, no local iframes, no player chrome", pg.is_visible("#remote") and pg.evaluate("()=>document.querySelectorAll('iframe[src*=youtube]').length") == 0 and not pg.is_visible("#bar") and not pg.is_visible("#chrome-toggle"))
+    # A new session holds taps until it knows whether to join or push; answer as a fresh TV.
+    check("cast: new session asks the TV first", wait_until(pg, "()=>__mockCast.sent.some(m=>{try{return JSON.parse(m.data).type==='getState'}catch(e){return false}})", 2000))
+    pg.evaluate("()=>__mockCast.reply({type:'state',configured:false})")
+    pg.wait_for_timeout(400)
     check("cast: remote uses the bright canvas", pg.evaluate("()=>getComputedStyle(document.querySelector('#remote')).backgroundColor") == "rgb(243, 245, 247)")
     check("cast: 'Casting to {room}' pill with accent-soft fill", pg.text_content(".remote-pill").startswith("Casting to") and pg.evaluate("()=>getComputedStyle(document.querySelector('.remote-pill')).backgroundColor") == "rgb(228, 240, 245)")
     check("cast: Cast controls switch to the connected label", pg.evaluate("()=>[...document.querySelectorAll('[data-cast]')].every(b=>b.dataset.state==='connected')") and pg.text_content(".cast-start .cast-label").startswith("Casting to"))
@@ -357,7 +368,7 @@ with sync_playwright() as p:
     meta = rx.text_content("#cap-meta")
     check("tv: lower third visible after the cam loads", cap_opacity() == 1 and rx.is_visible("#caption"))
     check(f"tv: title is the cam name ({rx.text_content('#cap-title')})", rx.text_content("#cap-title") == tcam["title"])
-    check(f"tv: meta is city and country, then the built-in local time ({meta})", re.fullmatch(re.escape(f"{tcam['city']}, {tcam['country']}") + r" · \d{1,2}:\d\d (AM|PM)", meta) is not None)
+    check(f"tv: meta is place and the built-in local time ({meta})", re.fullmatch(re.escape(place_line(tcam)) + r" · \d{1,2}:\d\d (AM|PM)", meta) is not None)
     check("tv: no type tag and no channel in the lower third", tcam["channel"] not in rx.text_content("#caption") and (not tcam["type"] or tcam["type"] not in meta.lower()))
     cb = rx.locator("#caption").bounding_box()
     check(f"tv: lower third bottom left of the 5% safe area, at most ~46% wide ({cb})", abs(cb["x"] - 96) <= 1 and abs(cb["y"] + cb["height"] - (1080 - 54)) <= 1 and cb["width"] <= 0.46 * 1920 + 1)

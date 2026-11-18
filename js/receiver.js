@@ -10,7 +10,7 @@ import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-17.16"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-17.17"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -102,6 +102,7 @@ function stopWithTelemetry(reason, stop) {
 
 /* ---------------------------------------------------------------- state and log */
 
+let configured = false; // see CONFIGURES and snapshot()
 const s = {
   camId: null,
   pinned: false,
@@ -137,6 +138,8 @@ function snapshot() {
     mixId: s.mixId,
     mixTitle: mix ? mix.en : "",
     pinned: s.pinned,
+    // True once any sender set up or changed playback: a new phone session then joins instead of pushing its choices.
+    configured,
     interval: s.interval,
     volume: s.volume,
     muted: s.muted,
@@ -779,6 +782,9 @@ export function parseCommand(raw) {
   return cmd && typeof cmd === "object" && typeof cmd.type === "string" ? cmd : null;
 }
 
+// Commands that set up or change playback. The first one applied marks the receiver configured for the page's life.
+const CONFIGURES = new Set(["next", "prev", "pin", "mix", "nextMix", "prevMix", "cam", "cams", "pause", "playMusic", "interval", "volume", "mute"]);
+
 const RESTARTS_PAUSE_TIMER = new Set(["next", "prev", "pin", "mix", "nextMix", "prevMix", "volume", "mute", "cam", "cams", "interval", "shuffle", "keepPaused"]);
 
 function handle(raw, senderId) {
@@ -902,6 +908,7 @@ function handle(raw, senderId) {
     default:
       return;
   }
+  if (CONFIGURES.has(cmd.type) && !(cmd.type === "mix" && !mixById(cmd.id)) && !(cmd.type === "cam" && !camById(cmd.id))) configured = true;
   broadcast();
 }
 
