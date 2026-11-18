@@ -262,7 +262,9 @@ with sync_playwright() as p:
     pg.evaluate("()=>{__windowSeat.state.volume = 35}")
     link = Link(pg, rx)
     pg.evaluate("()=>__mockCast.start()")
-    pg.evaluate("()=>document.querySelector('#remote [data-cmd=\"vol-up\"]').click()")  # before the TV's reply
+    # Before the TV's reply: the Mix sheet slider, released at 70.
+    pg.evaluate("""()=>{document.querySelector('#remote [data-action=open-music]').click();
+      const r=document.querySelector('#mix-volume'); r.value='70'; r.dispatchEvent(new Event('input',{bubbles:true})); r.dispatchEvent(new Event('change',{bubbles:true}))}""")
     link.pump(1200)
     vols = [(m["value"], m.get("silent") is True) for m in sent(pg) if m["type"] == "volume"]
     print("(g) sent:", [m["type"] for m in sent(pg)], vols)
