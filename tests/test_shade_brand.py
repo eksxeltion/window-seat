@@ -104,9 +104,12 @@ with sync_playwright() as p:
     pg.wait_for_timeout(200)
 
     links = pg.evaluate("()=>[...document.querySelectorAll('link[rel~=icon], link[rel=apple-touch-icon]')].map(l=>[l.rel, l.getAttribute('href'), l.type, l.sizes.value])")
-    check(f"home: favicon links are svg, png 32 and ico, plus apple-touch ({links})",
-          ["icon", "/favicon.svg", "image/svg+xml", ""] in links and ["icon", "/favicon-32.png", "image/png", "32x32"] in links
-          and ["icon", "/favicon.ico", "", "any"] in links and ["apple-touch-icon", "/icons/apple-touch-icon.png", "", ""] in links)
+    check(f"home: favicon links are ico, png 32, then svg any, plus apple-touch ({links})",
+          ["icon", "/favicon.ico", "", "16x16 32x32 48x48"] in links and ["icon", "/favicon-32.png", "image/png", "32x32"] in links
+          and ["icon", "/favicon.svg", "image/svg+xml", "any"] in links and ["apple-touch-icon", "/icons/apple-touch-icon.png", "", ""] in links)
+    hrefs = [l[1] for l in links if l[0] == "icon"]
+    check(f"home: favicon order is ico, png, then svg so browsers pick the adaptive SVG ({hrefs})",
+          hrefs[:3] == ["/favicon.ico", "/favicon-32.png", "/favicon.svg"])
 
     mark = pg.evaluate("""()=>{const s=document.querySelector('.wordmark-mark'); const r=s.getBoundingClientRect();
         return {fills:[...s.querySelectorAll('path')].map(p=>p.getAttribute('fill')), d:s.querySelector('path').getAttribute('d'), h:r.height, w:r.width}}""")
