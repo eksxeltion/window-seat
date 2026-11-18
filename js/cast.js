@@ -5,6 +5,7 @@ import { listInfo, currentConfig } from "./config.js";
 import { BUILD } from "./build.js";
 import { logEvent, isDebugOn, refreshDebug } from "./debug.js";
 import { capture, telemetryMessage, onTelemetryChange } from "./telemetry.js";
+import { camLocalTime, placeLine } from "./localtime.js";
 
 const SDK_URL = "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
 export const castConfigured = CAST_APP_ID !== "REPLACE_WITH_APP_ID";
@@ -214,50 +215,80 @@ function runCmd(name) {
   }
 }
 
+const icon = (id) => `<svg class="icon" aria-hidden="true"><use href="#${id}"></use></svg>`;
+
+/* The v2 remote: what is on the TV at the top (still, title, place and time, pin), the controls at the bottom
+   (transport, music volume, Cams and Mix), then the footer. Status, debug and Stop casting sit under the footer. */
 function buildRemote() {
   const root = document.createElement("section");
   root.id = "remote";
   root.hidden = true;
   root.innerHTML = `
-    <h2 class="remote-pill"><svg class="icon" aria-hidden="true"><use href="#i-cast-connected"></use></svg><span>Casting to <span id="remote-device"></span></span></h2>
-    <div class="remote-card">
-      <p class="remote-now"><span class="remote-label">Cam</span> <strong id="remote-cam">...</strong></p>
-      <p class="remote-now"><span class="remote-label">Music</span> <strong id="remote-mix">...</strong></p>
+    <div class="remote-top">
+      <h2 class="remote-pill">${icon("i-cast-connected")}<span>Casting to <span id="remote-device"></span></span></h2>
+      <div class="remote-still"><img id="remote-still" alt="" decoding="async" referrerpolicy="no-referrer" hidden></div>
+      <p class="remote-cam" id="remote-cam">Tuning in...</p>
+      <p class="remote-meta" id="remote-meta" hidden></p>
+      <button class="remote-pin" type="button" data-cmd="pin" id="remote-pin" aria-pressed="false">${icon("i-pin")}<span id="remote-pin-label">Pin cam</span></button>
+      <p class="remote-pinned-note" id="remote-pinned-note" hidden>Pinned. Rotation off.</p>
+      <p class="visually-hidden">Music: <span id="remote-mix">...</span></p>
+    </div>
+    <div class="remote-bottom">
       <p class="remote-hairline" id="remote-hairline" hidden>${PAUSE_HAIRLINE}</p>
-    </div>
-    <div class="remote-pause-warn" id="remote-pause-warn" role="alert" hidden>
-      <p id="remote-pause-warn-text">${PAUSE_WARNING}</p>
-      <button class="btn" type="button" data-cmd="keep-paused" id="remote-keep-paused">Keep paused</button>
-    </div>
-    <div class="remote-row">
-      <button class="btn" type="button" data-cmd="prev">Prev cam</button>
-      <button class="btn" type="button" data-cmd="play" id="remote-play">Pause</button>
-      <button class="btn" type="button" data-cmd="next">Next cam</button>
-      <button class="btn" type="button" data-cmd="pin" id="remote-pin" aria-pressed="false">Pin cam</button>
-    </div>
-    <div class="remote-menus">
-      <button class="btn remote-cams-btn" type="button" data-action="open-cams" aria-haspopup="dialog">Cams and time of day</button>
-      <button class="btn remote-cams-btn" type="button" data-action="open-music" aria-haspopup="dialog">Mix, shuffle and volume</button>
-    </div>
-    <p class="remote-status" id="remote-status" role="status">Waiting for the TV...</p>
-    <p class="remote-debug" id="remote-debug"></p>
-    <button class="btn btn-primary remote-stop" type="button" data-cmd="stop">Stop casting</button>`;
+      <div class="remote-pause-warn" id="remote-pause-warn" role="alert" hidden>
+        <p id="remote-pause-warn-text">${PAUSE_WARNING}</p>
+        <button class="btn" type="button" data-cmd="keep-paused" id="remote-keep-paused">Keep paused</button>
+      </div>
+      <div class="remote-transport">
+        <button class="remote-skip" type="button" data-cmd="prev">${icon("i-prev")}<span class="visually-hidden">Previous cam</span></button>
+        <button class="remote-play" type="button" data-cmd="play" id="remote-play">${icon("i-pause")}<span class="visually-hidden">Pause</span></button>
+        <button class="remote-skip" type="button" data-cmd="next">${icon("i-next")}<span class="visually-hidden">Next cam</span></button>
+      </div>
+      <label class="remote-music">${icon("i-music")}<input id="remote-volume" type="range" min="0" max="100" step="5" value="60" aria-label="Music volume"><span aria-hidden="true">Music</span></label>
+      <div class="remote-menus">
+        <button class="btn remote-menu" type="button" data-action="open-cams" aria-haspopup="dialog">Cams</button>
+        <button class="btn remote-menu" type="button" data-action="open-music" aria-haspopup="dialog">Mix</button>
+      </div>
+      <p class="remote-foot">Phone is a remote. Video and music play on the TV.</p>
+      <p class="remote-status" id="remote-status" role="status">Waiting for the TV...</p>
+      <p class="remote-debug" id="remote-debug"></p>
+      <button class="btn btn-ghost remote-stop" type="button" data-cmd="stop">Stop casting</button>
+    </div>`;
   document.body.append(root);
   ui.root = root;
   ui.cam = $("#remote-cam");
+  ui.meta = $("#remote-meta");
+  ui.still = $("#remote-still");
   ui.mix = $("#remote-mix");
   ui.pin = $("#remote-pin");
+  ui.pinLabel = $("#remote-pin-label");
+  ui.pinnedNote = $("#remote-pinned-note");
   ui.device = $("#remote-device");
   ui.play = $("#remote-play");
+  ui.volume = $("#remote-volume");
   ui.status = $("#remote-status");
   ui.debug = $("#remote-debug");
   ui.hairline = $("#remote-hairline");
   ui.pauseWarn = $("#remote-pause-warn");
+  // The still shows once it loads; a failed still leaves the navy panel.
+  ui.still.addEventListener("load", () => (ui.still.hidden = false));
+  ui.still.addEventListener("error", () => (ui.still.hidden = true));
+  // Music volume: the track follows the finger; one absolute volume goes to the TV on release (as in the Mix sheet).
+  // Do not treat lingering focus as a drag: after release, later TV state must still move the thumb.
+  const setVolCss = () => ui.volume.style.setProperty("--vol", `${ui.volume.value}%`);
+  ui.volume.addEventListener("pointerdown", () => { ui.volumeDragging = true; });
+  const endVolDrag = () => { ui.volumeDragging = false; };
+  ui.volume.addEventListener("pointerup", endVolDrag);
+  ui.volume.addEventListener("pointercancel", endVolDrag);
+  ui.volume.addEventListener("input", setVolCss);
+  ui.volume.addEventListener("change", () => { endVolDrag(); remoteVolume(ui.volume.value); });
   // The Cams and Mix buttons carry data-action: js/app.js opens the same sheets as on the local player.
   root.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-cmd]");
     if (b) runCmd(b.dataset.cmd);
   });
+  // The cam's local time moves on while nothing else changes.
+  setInterval(() => remoteOn && renderCamMeta(), 30000);
 }
 
 /** Route a phone control to the TV: prev, next, pin, interval, vol-up, vol-down, mute, play, next-mix. */
@@ -323,13 +354,36 @@ function renderDebug() {
   ui.debug.textContent = `Phone build ${BUILD} | TV build ${dbg.tvBuild} | cast ${liveCastState()} | session ${dbg.sessionState} | last: ${dbg.last}${nsText}${errPart}${lastAttempt ? ` | ${lastAttempt}` : ""}`;
 }
 
+/* Still, place and local time of the cam on the TV ("Tokyo, Japan · 9:51 AM", or the place alone). */
+function renderCamMeta() {
+  const cam = remote.camId ? CAMS.find((c) => c.id === remote.camId) : null;
+  const place = placeLine(cam);
+  const time = camLocalTime(cam);
+  ui.meta.textContent = place && time ? `${place} · ${time}` : place;
+  ui.meta.hidden = !place;
+  const id = remote.camId || "";
+  if (ui.still.dataset.id !== id) {
+    ui.still.dataset.id = id;
+    ui.still.hidden = true;
+    if (id) ui.still.src = `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+    else ui.still.removeAttribute("src");
+  }
+  ui.still.alt = remote.camTitle ? `Live cam: ${remote.camTitle}` : "";
+}
+
 function renderRemote() {
   renderDebug();
   ui.cam.textContent = remote.camTitle || "Tuning in...";
+  renderCamMeta();
   ui.mix.textContent = remote.mixTitle || "...";
   ui.pin.setAttribute("aria-pressed", String(remote.pinned));
-  ui.pin.textContent = remote.pinned ? "Pinned" : "Pin cam";
-  ui.play.textContent = remote.paused ? "Play" : "Pause";
+  ui.pinLabel.textContent = remote.pinned ? "Pinned" : "Pin cam";
+  ui.pinnedNote.hidden = !remote.pinned;
+  ui.play.querySelector("use").setAttribute("href", remote.paused ? "#i-play" : "#i-pause");
+  ui.play.lastElementChild.textContent = remote.paused ? "Play" : "Pause";
+  const vol = Number.isFinite(Number(remote.volume)) ? Math.min(100, Math.max(0, Math.round(Number(remote.volume)))) : 60;
+  if (!ui.volumeDragging) ui.volume.value = String(vol);
+  ui.volume.style.setProperty("--vol", `${ui.volume.value}%`);
   ui.hairline.hidden = !remote.paused;
   ui.pauseWarn.hidden = !(remote.paused && remote.pauseWarning);
   // The phone's own views of the TV (the Cams sheet "Now showing") follow every confirmed or optimistic change.

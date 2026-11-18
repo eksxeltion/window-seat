@@ -16,7 +16,7 @@ FAKE_YT = open(os.path.join(HERE, "fake_youtube.js")).read()
 SENDER = open(os.path.join(HERE, "mock_cast_sender.js")).read()
 # The fake YouTube API, held until the test calls window.__ytGo(): the receiver stays on its launch splash until then.
 HELD_YT = "window.__ytGo = function () {\n" + FAKE_YT + "\n};"
-BUILD = "2026-11-17.25"
+BUILD = "2026-11-17.26"
 fails, logs = [], []
 
 
@@ -128,7 +128,7 @@ with sync_playwright() as p:
     check(f"tokens: --radius-xl computes to 28px ({tok['rx']})", tok["rx"] == "28px")
     check("tokens: a caption in ink-tertiary renders rgb(90, 107, 118)", pg.evaluate("()=>getComputedStyle(document.querySelector('.panel-foot, .fineprint, .hero-cam')).color") == "rgb(90, 107, 118)")
 
-    weights = pg.evaluate("""()=>Object.fromEntries(['.panel-head h2', '.cap-title', '.tv-url', '.prose h3:not(.this-copy-title)', '.remote-now strong', '#start h1']
+    weights = pg.evaluate("""()=>Object.fromEntries(['.panel-head h2', '.cap-title', '.tv-url', '.prose h3:not(.this-copy-title)', '#remote-cam', '#start h1']
         .map(s=>[s, (document.querySelector(s) ? getComputedStyle(document.querySelector(s)).fontWeight : 'missing')]))""")
     check(f"type: titles are 600, none 650 ({weights})", all(w == "600" for w in weights.values()))
     sheet_650 = pg.evaluate("""()=>[...document.styleSheets].flatMap(s=>{try{return [...s.cssRules]}catch(e){return []}})

@@ -214,7 +214,7 @@ with sync_playwright() as p:
     check("remote: shown", pg.is_visible("#remote"))
     sent = lambda: [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]
     clear = lambda: pg.evaluate("()=>__mockCast.sent.length=0")
-    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.25', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
+    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.26', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
     state()
     check("remote: no hairline or warning while playing", not pg.is_visible("#remote-hairline") and not pg.is_visible("#remote-pause-warn"))
     pg.locator('#remote [data-cmd="play"]').tap()
@@ -258,7 +258,7 @@ with sync_playwright() as p:
     pg = phone()
     pg.evaluate("()=>__mockCast.start()")
     pg.wait_for_timeout(400)
-    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.25', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
+    state = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.26', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
     state()  # probe reply (no configured field): the phone pushes its choices now, not 2.5 s later
     state(paused=True, pauseWarning=True)
     pg.evaluate("()=>__mockCast.reply({type:'pauseTimeout'})")
@@ -276,7 +276,7 @@ with sync_playwright() as p:
         pg = phone(not_bot=True)
         pg.evaluate("()=>__mockCast.start()")
         pg.wait_for_timeout(400)
-        st = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.25', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
+        st = lambda **kw: pg.evaluate("(o)=>__mockCast.reply(Object.assign({type:'state', build:'2026-11-17.26', camId:'5B4LmH4JbnY', mixId:'nCtOCLv6eFY', paused:false, pauseWarning:false}, o))", kw)
         st()  # probe reply (no configured field): the phone pushes its choices now, not 2.5 s later
         setup(pg, st)
         if tv_ends:

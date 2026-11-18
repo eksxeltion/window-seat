@@ -351,7 +351,7 @@ These decisions are locked for the v2 and v3 mocks.
 2. **Pin stops auto rotation only.** The current cam stays on screen and music keeps playing. Pin and pause are visually distinct and can combine.
 3. **Volume is for the mix only.** Cam audio is always muted, with no control for it.
 4. **Inclusion from the full list, plus shortcuts.** The 44 in-rotation cams start checked. Users uncheck from that list, or use All / None / country / type shortcuts. Skip sleeping cams (midnight to 6 AM local) is on by default and resets each session. Only daytime is optional.
-5. **While casting, the phone is a remote.** No live cam on the phone. Same transport and menus, plus a persistent casting pill with the official connected Cast icon. The remote opens the same Cams and Mix sheets as the local player, from two buttons right under the transport, with no second cam or mix list on the remote itself. The rotation interval lives in the Cams sheet; volume, mute, shuffle and next mix live in the Mix sheet.
+5. **While casting, the phone is a remote.** No live cam on the phone. On a light canvas, top to bottom: the casting pill with the official connected Cast icon, a 160x90 still of the current cam (navy panel until it loads), the cam title (Title, 22/28 600), the place and local time ("Tokyo, Japan · 9:51 AM", place only when the time is unknown), and a 36px pin chip ("Pin cam", or "Pinned" in accent-soft with "Pinned. Rotation off." under it). At the bottom: previous, a 72px filled play or pause circle, next; a music line (note icon, 8px volume track, "Music"); two equal 48px buttons, "Cams" and "Mix", that open the same sheets as the local player; and the footer "Phone is a remote. Video and music play on the TV." Status, the debug line and a quiet Stop casting sit under the footer. There is no second cam or mix list on the remote itself. The rotation interval lives in the Cams sheet; mute, shuffle and next mix live in the Mix sheet.
 6. **Local play is full screen.** Controls overlay the cam, with a floating toggle and an exit.
 
 7. **Debug mode is opt-in.** Off by default, toggled in About, resets every session (sessionStorage or in-memory, not localStorage), and synced to the TV while casting.
@@ -384,7 +384,7 @@ Required fields:
 | Messages | rx and tx, mirrored from the TV | rx and tx |
 | Now | Cam name and id, mix English and Japanese name and id | Cam id, mix id |
 
-**Phone overlay.** A collapsed pill (`DEBUG  {build}`, with a status dot that turns danger red and reads `DEBUG  error` when there is an error). On the local player it sits centered in the top scrim. It stays visible at 70% opacity when the chrome auto-hides, and expands into a night-glass panel that drops from the top and never covers the bottom panel or the floating button. On the casting remote it is a slim row under the casting pill and expands as a white card over the now-playing panel, never over transport or volume. Labels use Caption. Values and ids use Roboto Mono 500 13/18 (debug surfaces only). "Copy details" copies one plain line.
+**Phone overlay.** A collapsed pill (`DEBUG  {build}`, with a status dot that turns danger red and reads `DEBUG  error` when there is an error). On the local player it sits centered in the top scrim. It stays visible at 70% opacity when the chrome auto-hides, and expands into a night-glass panel that drops from the top and never covers the bottom panel or the floating button. On the casting remote it is a slim row under the casting pill and expands as a white card under it, never over transport or volume. Labels use Caption. Values and ids use Roboto Mono 500 13/18 (debug surfaces only). "Copy details" copies one plain line.
 
 **TV strip.** Bottom right in the 5% safe area, right-aligned, max 38% width. Overlay glass, 24/32 type, overlay-dim text, error text `#E8A3A3`. No auto-fade. It coexists with the lower third (bottom left, 960px max at 1080p) with a 2% gutter. The pin toast is top center and the Paused pill is top right, so there is no overlap. If space is ever contested, the strip moves; guest-facing elements do not. Hidden by default. The strip turns off when the Cast session ends.
 
@@ -392,7 +392,7 @@ Required fields:
 
 A Cast session that stays paused for 30 minutes ends so the TV can return to its ambient screen. The receiver owns the timer, so it still works if the phone sleeps. The timer starts when the feed pauses during a live session. Any phone command while paused (next, previous, pin, mix pick, volume) restarts it. Resume, stop casting, or an explicit disconnect from the phone cancels it. A phone that drops off or sleeps does not. Local play has no timeout.
 
-- Remote hairline while paused: "Paused. The TV rests after 30 minutes paused."
+- Remote hairline while paused, above the transport: "Paused. The TV rests after 30 minutes paused."
 - At 25 minutes, the TV Paused pill adds "Closing in 5 minutes". Phone toast: "The TV will go back to its home screen in 5 minutes. Tap play to keep watching." A "Keep paused" button on the remote restarts the 30-minute timer without resuming.
 - At 30 minutes, the phone Cast pill returns to idle. Toast: "Paused for 30 minutes, so the TV went back to its home screen. Cast again whenever you like."
 

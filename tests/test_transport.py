@@ -175,8 +175,8 @@ with sync_playwright() as p:
     pg.wait_for_timeout(150)
     check("phone: slider sets the music volume", pg.evaluate("()=>__yt.music().getVolume()") == 30)
     check("phone: slider never touches the cam volume", "setVolume" not in calls(pg, "cam")[cam_calls_before:] or pg.evaluate("()=>__yt.cam().getVolume()") == 0)
-    # The Mix sheet has its own Music slider (same volume); every range control is the music volume, none is a cam volume.
-    check("phone: every range control is the music volume (no cam volume)", pg.evaluate("()=>[...document.querySelectorAll('input[type=range]')].every(r=>r.getAttribute('aria-label')==='Music volume')") and pg.locator("input[type=range]").count() == 2)
+    # The Mix sheet and the casting remote have their own Music slider (same volume); every range control is the music volume, none is a cam volume.
+    check("phone: every range control is the music volume (no cam volume)", pg.evaluate("()=>[...document.querySelectorAll('input[type=range]')].every(r=>r.getAttribute('aria-label')==='Music volume')") and pg.locator("input[type=range]").count() == 3)
     check("phone: no cam mute or cam volume control in the DOM", pg.evaluate("()=>!/cam (volume|mute|sound)/i.test([...document.querySelectorAll('button,input,label')].map(n=>n.textContent+' '+(n.getAttribute('aria-label')||'')).join('|'))"))
     pg.click("#panel-music [data-action=close-panel]")
     pg.wait_for_timeout(150)

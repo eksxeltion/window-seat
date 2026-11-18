@@ -152,9 +152,11 @@ function setExpanded(v) {
 function place() {
   const remote = document.getElementById("remote");
   const casting = document.body.classList.contains("casting") && remote && !remote.hidden;
-  const target = casting ? remote : document.body;
+  const pill = casting ? remote.querySelector("h2") : null;
+  const target = casting ? (pill ? pill.parentNode : remote) : document.body;
   if (ui.root.parentNode !== target) {
-    if (casting) remote.insertBefore(ui.root, remote.querySelector("h2") ? remote.querySelector("h2").nextSibling : remote.firstChild);
+    if (pill) pill.after(ui.root);
+    else if (casting) remote.prepend(ui.root);
     else document.body.append(ui.root);
   }
   ui.root.classList.toggle("in-remote", !!casting);
