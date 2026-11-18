@@ -119,10 +119,20 @@ const s = {
   failed: new Set(),
 };
 const log = [];
+/* Never throws: callers such as failCam rely on it to reach the skip and the retry timer. */
 function note(type, detail) {
-  log.push({ t: Date.now(), type, detail });
-  if (log.length > 500) log.shift();
-  if (DEBUG) console.log("[receiver]", type, detail === undefined ? "" : JSON.stringify(detail));
+  try {
+    log.push({ t: Date.now(), type, detail });
+    if (log.length > 500) log.shift();
+  } catch {
+    // logging never blocks the caller
+  }
+  if (!DEBUG) return;
+  try {
+    console.log("[receiver]", type, detail === undefined ? "" : JSON.stringify(detail));
+  } catch {
+    // logging never blocks the caller
+  }
 }
 
 const camById = (id) => CAMS.find((c) => c.id === id) || null;
@@ -423,22 +433,35 @@ let pausedRemaining = 0; // ms left on the rotation clock when the feed was paus
 
 /* Load diagnostics: what the cam player did between loadVideoById and commit or failure, so a cam that times
    out on the TV says why (cam_failed and the camDiag log entry). Reset on every beginLoad; never throws.
-   Every SDK value is reduced to a bounded primitive first: finite numbers, clipped strings, integer state codes.
-   No author or channel names (docs/telemetry.md, privacy rules). */
+   Every SDK value is reduced to an allowlisted primitive first: finite numbers, 11-char video ids, known quality
+   names, integer state codes, short numeric error codes. No free text, no author or channel names
+   (docs/telemetry.md, privacy rules). */
 let trace = null; // { at (null until loadVideoById), states: [], ignoredPlaying, otherVid, errors: [] }
-const clip = (v, n) => (typeof v === "string" ? v.slice(0, n) : undefined);
+const VID_RE = /^[A-Za-z0-9_-]{11}$/;
+const QUALITIES = new Set(["tiny", "small", "medium", "large", "hd720", "hd1080", "hd1440", "hd2160", "highres", "auto", "default", "unknown"]);
+const vidOr = (v) => (typeof v === "string" && VID_RE.test(v) ? v : undefined);
+const qualityOr = (v) => (typeof v === "string" && QUALITIES.has(v) ? v : undefined);
 const fin = (v) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+const roundTo = (v, k) => (v === undefined ? undefined : fin(Math.round(v * k) / k));
 const intOr = (v, other) => (Number.isInteger(v) ? v : other);
-const errCode = (v) => (typeof v === "number" || typeof v === "string" ? String(v).slice(0, 8) : "?");
+const errCode = (v) => {
+  try {
+    const str = String(v);
+    return /^\d{1,4}$/.test(str) ? str : "?";
+  } catch {
+    return "?";
+  }
+};
 const sinceLoad = () => (trace && trace.at !== null ? fin(Date.now() - trace.at) : undefined);
 /* scope "load": the failure is the pending load of this cam, so the load trace belongs to it.
    scope "snapshot": only the live player state (for example a committed cam that stalled later). */
 function camDiag(camId, scope) {
   const data = quietly(() => camPlayer.getVideoData()) || {};
-  const vid = clip(quietly(() => data.video_id), 16);
+  const vid = vidOr(quietly(() => data.video_id));
   const isLive = quietly(() => data.isLive);
   const t = fin(quietly(() => camPlayer.getCurrentTime()));
-  const loaded = fin(quietly(() => camPlayer.getVideoLoadedFraction()));
+  const loadedRaw = fin(quietly(() => camPlayer.getVideoLoadedFraction()));
+  const loaded = loadedRaw === undefined ? undefined : Math.min(1, Math.max(0, loadedRaw));
   const muted = quietly(() => camPlayer.isMuted());
   const diag = {
     diag_v: 1,
@@ -447,9 +470,9 @@ function camDiag(camId, scope) {
     vid,
     vid_match: vid !== undefined && vid === camId,
     is_live: typeof isLive === "boolean" ? isLive : undefined,
-    t: t === undefined ? undefined : Math.round(t * 10) / 10,
-    loaded: loaded === undefined ? undefined : Math.round(loaded * 100) / 100,
-    quality: clip(quietly(() => camPlayer.getPlaybackQuality()), 16),
+    t: roundTo(t, 10),
+    loaded: roundTo(loaded, 100),
+    quality: qualityOr(quietly(() => camPlayer.getPlaybackQuality())),
     levels: intOr(quietly(() => camPlayer.getAvailableQualityLevels().length), undefined),
     muted: typeof muted === "boolean" ? muted : undefined,
     music_state: intOr(quietly(() => musicPlayer.getPlayerState()), undefined),
@@ -458,7 +481,7 @@ function camDiag(camId, scope) {
     diag.ms = sinceLoad();
     diag.states = trace.states.join(",");
     diag.ignored_playing = intOr(trace.ignoredPlaying, 0);
-    diag.other_vid = clip(trace.otherVid, 16);
+    diag.other_vid = vidOr(trace.otherVid);
     diag.errors = trace.errors.length ? trace.errors.join(",") : undefined;
   }
   return diag;
@@ -674,7 +697,7 @@ function onCamState(e) {
     if (!vid || vid === pending.camId) commitPending();
     else if (trace) {
       trace.ignoredPlaying++;
-      trace.otherVid = clip(vid, 16);
+      trace.otherVid = vidOr(vid);
     }
   }
 }

@@ -8,6 +8,7 @@ the page; telemetry_guard stubs the real hosts anyway.
 Usage: test_receiver_diag.py BASE_URL"""
 import json
 import os
+import re
 import sys
 from playwright.sync_api import sync_playwright
 
@@ -146,6 +147,34 @@ with sync_playwright() as p:
     check("(e) cam_failed why=stalled, trace_scope snapshot", f.get("why") == "stalled" and f.get("trace_scope") == "snapshot")
     check("(e) no load-trace fields", not any(k in f for k in LOAD_ONLY))
     check("(e) live snapshot: last_state BUFFERING, vid matches", f.get("last_state") == 3 and f.get("vid") == ok and f.get("vid_match") is True and f.get("diag_v") == 1)
+
+    # (f) note() never throws: with JSON.stringify throwing (debug logging), a failing cam still advances
+    pg.wait_for_timeout(1500)
+    pg.wait_for_function("()=>__receiver.state.camId", timeout=5000)
+    victim = pg.evaluate("()=>__receiver.state.camId")
+    n_calls = pg.evaluate("()=>__yt.cam().calls.length")
+    res = pg.evaluate("""(id)=>{
+      const orig = JSON.stringify;
+      JSON.stringify = () => { throw new Error("stringify blocked"); };
+      let err = null;
+      try {
+        const c = __yt.cam(); c.vid = id; c.opts.events.onError({data:150, target:c});
+      } catch (e) { err = String(e); } finally { JSON.stringify = orig; }
+      return err;
+    }""", victim)
+    try:  # the next load starts after the fade
+        pg.wait_for_function("([n,id])=>__yt.cam().calls.slice(n).some(c=>c[0]==='loadVideoById' && c[1]!==id)", arg=[n_calls, victim], timeout=5000)
+        adv = True
+    except Exception:
+        adv = False
+    check(f"(f) failing cam still advances while JSON.stringify throws (err={res})", res is None and adv)
+    check("(f) camError for it is in the log", pg.evaluate("(id)=>__receiver.log.some(e=>e.type==='camError' && e.detail.camId===id)", victim))
+
+    vid_re = re.compile(r"^[A-Za-z0-9_-]{11}$")
+    qualities = {"tiny", "small", "medium", "large", "hd720", "hd1080", "hd1440", "hd2160", "highres", "auto", "default", "unknown"}
+    failed = queued(pg, "cam_failed")
+    check("vid/other_vid are 11-char ids where present", all(vid_re.match(e[k]) for e in failed for k in ("vid", "other_vid") if e.get(k) is not None))
+    check("quality, if present, is allowlisted", all(e["quality"] in qualities for e in failed if e.get("quality") is not None))
 
     events = pg.evaluate("()=>__telemetry.queue()")
     logged = pg.evaluate("()=>__receiver.log")
