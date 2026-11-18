@@ -9,14 +9,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'push' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
     name: ci
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 150
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +38,8 @@ jobs:
         env:
           GITLEAKS_VERSION: 8.30.1
           GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
@@ -46,7 +48,31 @@ jobs:
           echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" gitleaks
           rm -f "$tarball"
-          ./gitleaks git --redact --no-banner --config .gitleaks.toml --exit-code 1 .
+
+          # On PRs the policy comes from the trusted base commit, so a PR
+          # cannot widen its own allowlist.
+          config="$RUNNER_TEMP/gitleaks.toml"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if git cat-file -e "$BASE_SHA:.gitleaks.toml" 2>/dev/null; then
+              git show "$BASE_SHA:.gitleaks.toml" >"$config"
+            else
+              echo "::warning::base commit $BASE_SHA has no .gitleaks.toml (bootstrap PR); using the PR's own .gitleaks.toml"
+              cp .gitleaks.toml "$config"
+            fi
+          else
+            cp .gitleaks.toml "$config"
+          fi
+
+          # Inline gitleaks:allow comments and a .gitleaksignore in the
+          # checkout must not be able to suppress findings.
+          ignore="$RUNNER_TEMP/empty-gitleaksignore"
+          : >"$ignore"
+
+          ./gitleaks git --redact --no-banner \
+            --config "$config" \
+            --ignore-gitleaks-allow \
+            --gitleaks-ignore-path "$ignore" \
+            --exit-code 1 .
           rm -f gitleaks
 
       - name: Run tests

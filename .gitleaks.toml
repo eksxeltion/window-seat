@@ -13,9 +13,9 @@ useDefault = true
 [[allowlists]]
 description = "PostHog public project key in js/telemetry-config.js"
 condition = "AND"
-regexTarget = "match"
+regexTarget = "secret"
 regexes = [
-  '''phc_[A-Za-z0-9]+''',
+  '''^phc_[A-Za-z0-9]{20,64}$''',
 ]
 paths = [
   '''^js/telemetry-config\.js$''',
