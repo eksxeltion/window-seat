@@ -1395,32 +1395,37 @@ function buildCamsPanel() {
     const title = document.createElement("span");
     title.className = "cam-title";
     title.textContent = cam.title;
-    const badge = document.createElement("span");
-    badge.className = "badge";
-    badge.hidden = true;
-    title.append(badge);
     const sub = document.createElement("span");
     sub.className = "cam-sub";
     const where = document.createElement("span");
     where.className = "cam-where";
     where.textContent = [cam.country, capital(cam.type)].filter(Boolean).join(" · ");
+    // Now showing is spoken only (the row's soft highlight shows it); Unavailable right now is a short line.
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.hidden = true;
+    sub.append(where, badge);
+    info.append(title, sub);
+    // Right-hand time stack: local time, with Sleeping under it.
+    const time = document.createElement("span");
+    time.className = "cam-time";
     const clock = document.createElement("span");
     clock.className = "cam-clock";
     const sleep = document.createElement("span");
     sleep.className = "sleep-mark";
     sleep.textContent = "Sleeping";
     sleep.hidden = true;
-    sub.append(where, clock, sleep);
-    info.append(title, sub);
-    check.append(box, info);
+    time.append(clock, sleep);
+    check.append(box, info, time);
 
+    // A 32px play circle (icon only) inside a 44px tap target. It plays the cam now and never changes the check.
     const play = document.createElement("button");
     play.type = "button";
-    play.className = "btn btn-play";
+    play.className = "cam-play";
     play.dataset.action = "watch";
     play.dataset.id = cam.id;
-    play.textContent = "Play now";
     play.setAttribute("aria-label", `Play ${cam.title} now`);
+    play.innerHTML = '<span class="cam-play-dot" aria-hidden="true"><svg class="icon"><use href="#i-play"></use></svg></span>';
 
     li.append(check, play);
     frag.append(li);
@@ -1667,12 +1672,15 @@ function openPanel(name, opener) {
   showChrome(); // a sheet keeps the chrome up
   render();
   let target = null;
-  if (name === "cams") target = $(`.cam-row[data-id="${showingCamId()}"] [data-action="watch"]`, panel);
   if (name === "music") target = $(`.mix-btn[data-id="${shownMusic().mixId}"]`, panel);
   if (name === "tv") renderTvQr();
   if (name === "phone") renderPhoneQr();
   if (!target) target = $(FOCUSABLE, panel);
-  if (target) {
+  if (name === "cams") {
+    // The Cams sheet opens at the top so Time of day and Quick picks show: focus Done, no scroll to the current cam.
+    $(".panel-body", panel).scrollTop = 0;
+    if (target) target.focus({ preventScroll: true });
+  } else if (target) {
     target.focus();
     quietly(() => target.scrollIntoView({ block: "center" }));
   }

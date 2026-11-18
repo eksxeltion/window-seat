@@ -18,8 +18,8 @@
   <!-- Web fonts (Fraunces, Plus Jakarta Sans, Noto Sans JP) are added by js/app.js after load, so a failed or slow
        font request never blocks the page. The CSS stacks fall back to Source Serif 4 and system-ui. Roboto Mono is
        requested only when Debug is turned on. -->
-  <link rel="stylesheet" href="css/style.css?v=2026-11-17.26">
-  <script type="module" src="js/app.js?v=2026-11-17.26"></script>
+  <link rel="stylesheet" href="css/style.css?v=2026-11-17.27">
+  <script type="module" src="js/app.js?v=2026-11-17.27"></script>
 </head>
 <body class="is-starting kbd">
   <!-- Icon sprite: 24px line icons, 2px stroke, round caps and joins. The Cast glyphs are the official Material
@@ -123,11 +123,8 @@
     <div class="panel-body cams-body">
       <section class="cams-section" aria-labelledby="cams-time-title">
         <h3 class="cams-label" id="cams-time-title">Time of day</h3>
-        <div class="cams-switches">
-          <button class="switch" type="button" data-action="skip-sleeping" id="cams-skip-sleeping" aria-pressed="true"><span class="switch-track"><span class="switch-thumb"></span></span><span>Skip sleeping cams</span></button>
-          <button class="switch" type="button" data-action="only-daytime" id="cams-only-daytime" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Only daytime</span></button>
-        </div>
-        <p class="cams-hint">Sleeping is midnight to 6 AM where the cam is. Daytime is 7 AM to 7 PM. Both reset each visit. Play now and Pin still work on any cam.</p>
+        <button class="switch cam-switch" type="button" data-action="skip-sleeping" id="cams-skip-sleeping" aria-pressed="true" aria-labelledby="cams-skip-title" aria-describedby="cams-skip-caption"><span class="cam-switch-text"><span class="cam-switch-title" id="cams-skip-title">Skip sleeping cams</span><span class="cam-switch-caption" id="cams-skip-caption">Cams where it is midnight to 6 AM local time sit out until morning.</span></span><span class="switch-track"><span class="switch-thumb"></span></span></button>
+        <button class="switch cam-switch" type="button" data-action="only-daytime" id="cams-only-daytime" aria-pressed="false" aria-labelledby="cams-daytime-title" aria-describedby="cams-daytime-caption"><span class="cam-switch-text"><span class="cam-switch-title" id="cams-daytime-title">Only daytime</span><span class="cam-switch-caption" id="cams-daytime-caption">Rotate only cams where it is 7 AM to 7 PM local time.</span></span><span class="switch-track"><span class="switch-thumb"></span></span></button>
       </section>
       <section class="cams-section" aria-labelledby="cams-quick-title">
         <h3 class="cams-label" id="cams-quick-title">Quick picks</h3>
