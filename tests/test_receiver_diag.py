@@ -1,9 +1,12 @@
-"""Receiver load-failure diagnostics: cam_failed (load timeout) carries the per-load trace, a PLAYING event for another
-video id is counted, and cam_shown for cast carries load_ms.
+"""Receiver load-failure diagnostics: cam_failed (load timeout) carries the per-load trace (trace_scope "load"), a
+PLAYING event or an error for another video id is recorded without failing the cam early, a cam that stalls after it
+was committed reports only the live player snapshot (trace_scope "snapshot"), cam_shown for cast carries load_ms, and
+no event carries an author or channel name.
 Runs against receiver.html?debug=1&telemetry=1 with the stubbed YouTube API (tests/fake_youtube.js). No telemetry
 message is sent, so events stay in the receiver buffer (read through window.__telemetry.queue()) and nothing leaves
 the page; telemetry_guard stubs the real hosts anyway.
 Usage: test_receiver_diag.py BASE_URL"""
+import json
 import os
 import sys
 from playwright.sync_api import sync_playwright
@@ -72,8 +75,9 @@ with sync_playwright() as p:
 
     ids = pg.evaluate("async()=>(await import('./js/data.js')).CAMS.map(c=>c.id)")
     cur = pg.evaluate("()=>__receiver.state.camId")
-    stuck, ad = [i for i in ids if i != cur][:2]
-    pg.evaluate("([s,a])=>{window.__ytStuck=[s]; window.__ytAd=[a];}", [stuck, ad])
+    stuck, ad, errd = [i for i in ids if i != cur][:3]
+    pg.evaluate("([s,a,e])=>{window.__ytStuck=[s]; window.__ytAd=[a,e];}", [stuck, ad, errd])
+    LOAD_ONLY = ("ms", "states", "ignored_playing", "other_vid", "errors")
 
     # (a) a cam that never reaches PLAYING: load_timeout with the trace
     pg.evaluate("(id)=>__receiver.send({type:'cam', id})", stuck)
@@ -81,6 +85,7 @@ with sync_playwright() as p:
     print("stuck cam_failed:", f)
     check("(a) cam_failed why=load_timeout", bool(f) and f.get("why") == "load_timeout")
     f = f or {}
+    check("(a) trace_scope load", f.get("trace_scope") == "load")
     check("(a) diag_v 1, ms over CAM_LOAD_MS", f.get("diag_v") == 1 and isinstance(f.get("ms"), int) and f["ms"] >= 12000)
     check(f"(a) states string starts with BUFFERING ({f.get('states')})", isinstance(f.get("states"), str) and f["states"].startswith("3@"))
     check("(a) last_state BUFFERING, vid is the cam, vid_match true", f.get("last_state") == 3 and f.get("vid") == stuck and f.get("vid_match") is True)
@@ -94,20 +99,57 @@ with sync_playwright() as p:
     pg.evaluate("(id)=>__receiver.send({type:'cam', id})", ad)
     f = wait_for(pg, "cam_failed", ad, 18000) or {}
     print("ad cam_failed:", f)
-    check("(b) cam_failed why=load_timeout", f.get("why") == "load_timeout")
+    check("(b) cam_failed why=load_timeout, trace_scope load", f.get("why") == "load_timeout" and f.get("trace_scope") == "load")
     check("(b) ignored_playing counted, other_vid is the ad id", f.get("ignored_playing", 0) >= 1 and f.get("other_vid") == "AdVideo0001")
     check("(b) vid is the ad, vid_match false, last_state PLAYING", f.get("vid") == "AdVideo0001" and f.get("vid_match") is False and f.get("last_state") == 1)
-    check(f"(b) states has BUFFERING then PLAYING ({f.get('states')})", "3@" in f.get("states", "") and "1@" in f.get("states", ""))
+    states = f.get("states", "").split(",")
+    i_buf = next((i for i, x in enumerate(states) if x.startswith("3@")), -1)
+    i_play = next((i for i, x in enumerate(states) if x.startswith("1@")), -1)
+    check(f"(b) states has BUFFERING before PLAYING ({f.get('states')})", 0 <= i_buf < i_play)
 
-    # (c) a normal pick: cam_shown for cast carries load_ms
+    # (c) an error for another video id during the pending load: kept for the trace, the cam is not failed early
+    pg.wait_for_timeout(1500)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", errd)
+    pg.wait_for_function("(id)=>__yt.cam().calls.some(c=>c[0]==='loadVideoById' && c[1]===id)", arg=errd, timeout=5000)
+    pg.wait_for_timeout(400)
+    pg.evaluate("()=>{const c=__yt.cam(); c.opts.events.onError({data:150, target:c});}")
+    pg.wait_for_timeout(1000)
+    check("(c) not failed early: no cam_failed and no player_error yet", not queued(pg, "cam_failed", errd) and not queued(pg, "player_error", errd))
+    check("(c) no camError logged for it yet", not pg.evaluate("(id)=>__receiver.log.some(e=>e.type==='camError' && e.detail.camId===id)", errd))
+    f = wait_for(pg, "cam_failed", errd, 18000) or {}
+    print("error cam_failed:", f)
+    check("(c) cam_failed why=load_timeout, trace_scope load", f.get("why") == "load_timeout" and f.get("trace_scope") == "load")
+    check("(c) errors carries the other video's code", f.get("errors") == "150")
+    check("(c) ms over CAM_LOAD_MS", isinstance(f.get("ms"), int) and f["ms"] >= 12000)
+
+    # (d) a normal pick: a fresh cam_shown (reason pick) for cast carries load_ms
     pg.wait_for_timeout(1500)
     now = pg.evaluate("()=>__receiver.state.camId")
-    ok = [i for i in ids if i not in (stuck, ad, now)][-1]
+    ok = [i for i in ids if i not in (stuck, ad, errd, now)][-1]
+    before = len(queued(pg, "cam_shown", ok))
     pg.evaluate("(id)=>__receiver.send({type:'cam', id})", ok)
-    sh = wait_for(pg, "cam_shown", ok, 6000) or {}
+    sh = {}
+    for _ in range(24):
+        got = [e for e in queued(pg, "cam_shown", ok)[before:] if e.get("reason") == "pick"]
+        if got:
+            sh = got[-1]
+            break
+        pg.wait_for_timeout(250)
     print("cam_shown:", sh)
-    check("(c) cam_shown mode cast with load_ms and ignored_playing 0", sh.get("mode") == "cast" and isinstance(sh.get("load_ms"), int) and 0 <= sh["load_ms"] < 5000 and sh.get("ignored_playing") == 0)
-    check("(c) cam was committed", pg.evaluate("()=>__receiver.state.camId") == ok)
+    check("(d) fresh cam_shown reason pick, mode cast, load_ms and ignored_playing 0", sh.get("reason") == "pick" and sh.get("mode") == "cast" and isinstance(sh.get("load_ms"), int) and 0 <= sh["load_ms"] < 5000 and sh.get("ignored_playing") == 0)
+    check("(d) cam was committed", pg.evaluate("()=>__receiver.state.camId") == ok)
+
+    # (e) the committed cam stalls (stays BUFFERING, the nudge does not help): snapshot fields only
+    pg.evaluate("()=>{const c=__yt.cam(); c.playVideo=function(){this._rec('playVideo', arguments);}; c._set(3);}")
+    f = wait_for(pg, "cam_failed", ok, 45000) or {}
+    print("stalled cam_failed:", f)
+    check("(e) cam_failed why=stalled, trace_scope snapshot", f.get("why") == "stalled" and f.get("trace_scope") == "snapshot")
+    check("(e) no load-trace fields", not any(k in f for k in LOAD_ONLY))
+    check("(e) live snapshot: last_state BUFFERING, vid matches", f.get("last_state") == 3 and f.get("vid") == ok and f.get("vid_match") is True and f.get("diag_v") == 1)
+
+    events = pg.evaluate("()=>__telemetry.queue()")
+    logged = pg.evaluate("()=>__receiver.log")
+    check("no author key in any captured event or log entry", "author" not in json.dumps(events) and '"author"' not in json.dumps(logged))
     check("nothing left the page", not telemetry_guard.hits)
     b.close()
 
