@@ -16,7 +16,7 @@ FAKE_YT = open(os.path.join(HERE, "fake_youtube.js")).read()
 SENDER = open(os.path.join(HERE, "mock_cast_sender.js")).read()
 # The fake YouTube API, held until the test calls window.__ytGo(): the receiver stays on its launch splash until then.
 HELD_YT = "window.__ytGo = function () {\n" + FAKE_YT + "\n};"
-BUILD = "2026-11-17.27"
+BUILD = "2026-11-17.28"
 fails, logs = [], []
 
 

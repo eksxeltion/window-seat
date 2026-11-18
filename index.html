@@ -18,8 +18,8 @@
   <!-- Web fonts (Fraunces, Plus Jakarta Sans, Noto Sans JP) are added by js/app.js after load, so a failed or slow
        font request never blocks the page. The CSS stacks fall back to Source Serif 4 and system-ui. Roboto Mono is
        requested only when Debug is turned on. -->
-  <link rel="stylesheet" href="css/style.css?v=2026-11-17.27">
-  <script type="module" src="js/app.js?v=2026-11-17.27"></script>
+  <link rel="stylesheet" href="css/style.css?v=2026-11-17.28">
+  <script type="module" src="js/app.js?v=2026-11-17.28"></script>
 </head>
 <body class="is-starting kbd">
   <!-- Icon sprite: 24px line icons, 2px stroke, round caps and joins. The Cast glyphs are the official Material
@@ -142,7 +142,8 @@
     <p class="panel-foot"><span class="list-status" role="status"></span></p>
   </section>
 
-  <!-- Mix sheet: Shuffle, Mute, Pause, Next mix, the music volume, and every mix. While casting it drives the TV. -->
+  <!-- Mix sheet (v2 / Mix picker): header, Shuffle with its caption, the music volume, a quiet row with Mute, Pause
+       and Next mix, then every mix as a typographic row. While casting it drives the TV. -->
   <section id="panel-music" class="panel panel-mix" role="dialog" aria-modal="true" aria-labelledby="music-title" aria-describedby="music-sub" hidden>
     <header class="panel-head">
       <div>
@@ -152,21 +153,19 @@
       <button class="btn btn-ghost btn-done" type="button" data-action="close-panel">Done</button>
     </header>
     <div class="panel-body mix-body">
-      <section class="cams-section mix-controls" aria-label="Playback">
-        <div class="cams-switches">
-          <button class="switch" type="button" data-action="shuffle" id="music-shuffle" aria-pressed="true" aria-describedby="shuffle-hint"><span class="switch-track"><span class="switch-thumb"></span></span><span>Shuffle</span></button>
-          <button class="switch" type="button" data-action="mute" id="music-mute" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Mute</span></button>
-          <button class="btn mix-play" type="button" data-action="play-pause" id="music-play" title="Pauses or plays the cam and the music">Pause</button>
-          <button class="btn mix-next" type="button" data-action="next-mix" id="music-next">Next mix</button>
-        </div>
-        <p class="cams-hint" id="shuffle-hint">Shuffle plays a random mix from the beginning. Off, mixes play in list order. It turns on again each visit.</p>
+      <section class="mix-controls" aria-label="Playback">
+        <button class="switch cam-switch mix-shuffle" type="button" data-action="shuffle" id="music-shuffle" aria-pressed="true" aria-labelledby="shuffle-title" aria-describedby="shuffle-hint"><span class="cam-switch-text"><span class="cam-switch-title" id="shuffle-title">Shuffle</span><span class="cam-switch-caption" id="shuffle-hint">On for every session, so it starts somewhere new.</span></span><span class="switch-track"><span class="switch-thumb"></span></span></button>
         <label class="volume mix-volume">
           <svg class="icon" aria-hidden="true"><use href="#i-music"></use></svg>
-          <span>Music</span>
           <input id="mix-volume" type="range" min="0" max="100" step="5" value="60" aria-label="Music volume" aria-describedby="mix-volume-help">
           <output id="mix-volume-out">60</output>
         </label>
-        <p class="cams-hint" id="mix-volume-help">Cam sound is always off.</p>
+        <p class="mix-caption" id="mix-volume-help">Cam sound is always off.</p>
+        <div class="mix-extras">
+          <button class="switch mix-mute" type="button" data-action="mute" id="music-mute" aria-pressed="false"><span class="switch-track"><span class="switch-thumb"></span></span><span>Mute</span></button>
+          <button class="btn btn-ghost mix-play" type="button" data-action="play-pause" id="music-play" title="Pauses or plays the cam and the music">Pause</button>
+          <button class="btn btn-ghost mix-next" type="button" data-action="next-mix" id="music-next">Next mix</button>
+        </div>
       </section>
       <ol class="mix-list" id="mix-list" aria-label="All mixes"></ol>
       <p class="fineprint">Mixes by <a id="music-credit" target="_blank" rel="noopener"></a>.</p>

@@ -1273,7 +1273,7 @@ function showVolume(input, out, value) {
   input.style.setProperty("--vol", `${input.value}%`);
 }
 
-/* Mix sheet: Shuffle, the music volume, and every mix with one Playing row (the TV's mix while casting). */
+/* Mix sheet: Shuffle, the music volume, Mute, Pause, Next mix, and every mix with one Playing row (the TV's mix while casting). */
 function renderMusicPanel() {
   const shown = shownMusic();
   $("#music-mute").setAttribute("aria-pressed", String(shown.muted));
@@ -1671,13 +1671,12 @@ function openPanel(name, opener) {
   setBackgroundInert(true);
   showChrome(); // a sheet keeps the chrome up
   render();
-  let target = null;
-  if (name === "music") target = $(`.mix-btn[data-id="${shownMusic().mixId}"]`, panel);
   if (name === "tv") renderTvQr();
   if (name === "phone") renderPhoneQr();
-  if (!target) target = $(FOCUSABLE, panel);
-  if (name === "cams") {
-    // The Cams sheet opens at the top so Time of day and Quick picks show: focus Done, no scroll to the current cam.
+  const target = $(FOCUSABLE, panel);
+  if (name === "cams" || name === "music") {
+    // The Cams and Mix sheets open at the top so Time of day and Quick picks, or Shuffle and the volume, show:
+    // focus Done, no scroll to the current cam or the Playing mix.
     $(".panel-body", panel).scrollTop = 0;
     if (target) target.focus({ preventScroll: true });
   } else if (target) {
