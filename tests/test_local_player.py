@@ -433,6 +433,42 @@ with sync_playwright() as p:
     rx.wait_for_timeout(1500)
     check("tv: no debug strip unless Debug mode is on", rx.evaluate("()=>document.querySelector('#debug-strip').hidden"))
     rx.context.close()
+
+    # ------------------------------------------------------------ Short landscape phone and Lite mode readability
+    def landscape(lite=False):
+        ctx = b.new_context(viewport={"width": 844, "height": 390}, has_touch=True, is_mobile=True)
+        ctx.add_init_script(DENY_FS)
+        if lite:
+            ctx.add_init_script("localStorage.setItem('windowSeat.lite', 'true')")
+        pg = ctx.new_page()
+        route(pg)
+        pg.goto(base + "/index.html")
+        pg.wait_for_timeout(1000)
+        pg.click("#start-btn")
+        wait_until(pg, "()=>__windowSeat.currentCamId() && __yt.cam() && __yt.cam().state===1", 6000)
+        pg.wait_for_timeout(500)
+        return pg
+
+    GEOM = """()=>{const r=s=>document.querySelector(s).getBoundingClientRect(); const bar=r('#bar'), top=r('#player-top'), c=r('#player-top [data-cast]');
+      const hit=document.elementFromPoint(c.left+c.width/2, c.top+c.height/2);
+      return {barTop: bar.top, barBottom: bar.bottom, topBottom: top.bottom, castHit: !!(hit && hit.closest('#player-top [data-cast]'))}}"""
+    pg = landscape()
+    g = pg.evaluate(GEOM)
+    check(f"landscape 844x390: glass top is on screen and below the top bar ({g})", g["barTop"] >= 0 and g["barTop"] >= g["topBottom"] and g["barBottom"] <= 390.5)
+    check("landscape 844x390: Cast is the element at its own center", g["castHit"])
+    check("landscape 844x390: glass does not cover the collapse control", not overlaps(box(pg, "#bar"), box(pg, ".lp-fab")))
+    pg.context.close()
+
+    pg = landscape(lite=True)
+    check("lite: body has the lite class", pg.evaluate("()=>document.body.classList.contains('lite')"))
+    lite = pg.evaluate("""()=>{const scrim=document.querySelector('.scrim'), cs=getComputedStyle(scrim);
+      const scrimOn = cs.display!=='none' && parseFloat(cs.opacity)>0 && cs.backgroundImage!=='none';
+      const alpha = c => { const m=c.match(/rgba?\\(([^)]+)\\)/); if(!m) return 0; const p=m[1].split(',').map(Number); return p.length<4?1:p[3]; };
+      const btns=['#lp-home','#player-top [data-cast]','#lp-fullscreen'].map(s=>getComputedStyle(document.querySelector(s)));
+      return {scrimOn, backed: btns.map(b=>alpha(b.backgroundColor)), blur: btns.map(b=>b.backdropFilter||'none'), anim: btns.map(b=>b.animationName)}}""")
+    check(f"lite: top bar buttons have a night-glass backing or a visible scrim ({lite})", lite["scrimOn"] or all(a >= 0.5 for a in lite["backed"]))
+    check("lite: no blur or animation on the top bar buttons", all(x == "none" for x in lite["blur"]) and all(x == "none" for x in lite["anim"]))
+    pg.context.close()
     b.close()
 
 print("page errors:", logs)

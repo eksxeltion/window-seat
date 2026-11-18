@@ -852,6 +852,10 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 .lite *, .lite *::before, .lite *::after { animation: none !important; transition: none !important; }
 .lite .scrim { display: none; }
 .lite .lp-glass, .lite .lp-fab, .lite .notice { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(10, 26, 38, 0.9); }
+/* With the scrim gone, the top bar buttons get their own static night-glass backing so they stay readable on
+   bright video (no blur, no animation). */
+.lite .lp-home, .lite .lp-icon-btn { background: rgba(10, 26, 38, 0.72); }
+.lite .lp-home:hover, .lite .lp-icon-btn:hover { background: rgba(10, 26, 38, 0.9); }
 
 /* ---------- Send to TV panel ---------- */
 .tv-send { display: flex; flex-direction: column; align-items: center; gap: var(--space-16); text-align: center; }
@@ -951,6 +955,20 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 /* Short screens: tighter glass so the picture still shows. */
 @media (max-height: 640px) {
   .lp-glass { gap: var(--space-8); padding-top: var(--space-12); padding-bottom: calc(var(--safe-bottom) + 5rem); }
+}
+/* Short landscape phones (844x390, 740x360): the glass stays below the 72px top bar so Home, Cast and full
+   screen keep their clicks. It moves left of the 52px collapse control instead of padding over it, uses a smaller
+   title, and scrolls inside itself if it is still too tall. */
+@media (max-height: 480px) {
+  .lp-glass {
+    right: calc(var(--safe-right) + 5rem);
+    max-height: calc(100vh - var(--safe-top) - 5rem);
+    max-height: calc(100dvh - var(--safe-top) - 5rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: calc(var(--safe-bottom) + var(--space-12));
+  }
+  .cap-title { font-size: 1.125rem; line-height: 1.5rem; }
 }
 
 /* ================================================================ Google Cast: official icon and states */
