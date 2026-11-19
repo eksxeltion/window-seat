@@ -316,6 +316,26 @@ with sync_playwright() as p:
     pg.evaluate("()=>__receiver.send({type:'next'})")
     pg.close()
 
+    # ---- k: no current time reported (undefined) with loaded fraction 0: not proof of a frozen stream, no fast fail.
+    #      l: an ad flashes PLAYING between two watchdog ticks, then the cam's own id buffers with nothing loaded:
+    #         the ad counts as media, so no fast fail either (Codex review).
+    pg = new_page(b)
+    nt, flash = targets(pg, 2)
+    pg.evaluate("([a,f])=>{window.__ytStuck={[a]:{state:3, until:0}, [f]:{state:3, until:0}}; window.__ytMedia={[a]:{loaded:0, time:null}, [f]:{loaded:0}};}", [nt, flash])
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", nt)
+    pg.wait_for_timeout(11000)
+    check(f"(k) current time unknown: at 11s still waiting, not failed ({vis(pg)})", not queued(pg, "cam_failed", nt) and vis(pg) == [False, True])
+    pg.evaluate("()=>__receiver.send({type:'next'})")
+    settle(pg)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", flash)
+    pg.wait_for_function("(id)=>__yt.cam().vid===id", arg=flash, timeout=4000)
+    pg.wait_for_timeout(1500)
+    # A 150ms ad blip (another id PLAYING), back to the cam's own id BUFFERING before the next 1s tick.
+    pg.evaluate("""(id)=>{const c=__yt.cam(); c.vid='AdVideo0001'; c._set(1); setTimeout(()=>{c.vid=id; c._set(3);},150);}""", flash)
+    pg.wait_for_timeout(10000)
+    check(f"(l) an ad seen between ticks: at 11.5s still waiting, not fast-failed ({vis(pg)})", not queued(pg, "cam_failed", flash) and vis(pg) == [False, True])
+    pg.close()
+
     # ---- j: error 5 at 6s, then the reload loads nothing: the 8s clock restarts at the reload (fail at about 16s)
     pg = new_page(b)
     e5, = targets(pg, 1)

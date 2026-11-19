@@ -808,6 +808,7 @@ function onCamState(e) {
       trace.ignoredPlaying++;
       trace.otherVid = vidOr(vid);
       pending.adSeen = true;
+      pending.mediaSeen = true; // an ad seen between watchdog ticks still counts: no no-media fast fail
     }
   }
 }
@@ -887,17 +888,20 @@ function pendingOtherVideo() {
    would restart the ad and the buffering; the only reload is the single error 5 one in onCamError. */
 /* Sample whether the pending cam shows any media (only called while it is UNSTARTED or BUFFERING on its own id).
    Loaded fraction above 0, or current time moving past its first sample, marks mediaSeen for the rest of the load.
-   noMedia is true only when the player positively reports a loaded fraction of exactly 0: a player without the call
-   (or one that throws) never fast-fails, it keeps the 60s ceiling. */
+   noMedia is true only when the player positively reports a loaded fraction of exactly 0 AND a current time that has
+   been sampled at least twice without moving: a player without either call (or one that throws) never fast-fails, it
+   keeps the 60s ceiling. */
 function sampleMedia(mine) {
   const loaded = fin(quietly(() => camPlayer.getVideoLoadedFraction()));
   const t = fin(quietly(() => camPlayer.getCurrentTime()));
+  let timeFrozen = false;
   if (t !== undefined) {
     if (mine.t0 === undefined) mine.t0 = t;
     else if (t > mine.t0 + 0.05) mine.mediaSeen = true;
+    else timeFrozen = true;
   }
   if (loaded !== undefined && loaded > 0) mine.mediaSeen = true;
-  mine.noMedia = loaded === 0;
+  mine.noMedia = loaded === 0 && timeFrozen;
 }
 
 function pendingTick(now) {
@@ -905,7 +909,7 @@ function pendingTick(now) {
   const age = now - pending.startedAt;
   const ad = pendingOtherVideo();
   if (ad) pending.adSeen = true;
-  if (ad) pending.mediaSeen = true; // an ad is media: wait it out under the patient ceiling
+  if (ad || pending.adSeen) pending.mediaSeen = true; // an ad is media: wait it out under the patient ceiling
   const stalled = !ad && pendingStalled();
   if (stalled) sampleMedia(pending);
   // A scheduled error 5 reload has priority over the state cutoff (it must get to run); the total cap still applies.
@@ -1162,7 +1166,8 @@ function handle(raw, senderId) {
   const quiet = cmd.silent === true; // setup messages sent on connect: no on-TV flash
   // A phone command while paused restarts the pause timeout (setup messages sent on connect do not,
   // so a phone reconnecting during the warning still sees it). Commands that resume cancel it instead.
-  if (s.paused && (RESTARTS_PAUSE_TIMER.has(cmd.type) && (!quiet || cmd.type === "cams"))) startPauseTimer(cmd.type);
+  const ignoredWebOnly = cmd.type === "cam" && !!camById(cmd.id) && !castableById(cmd.id); // ignored below: no timer restart
+  if (s.paused && !ignoredWebOnly && (RESTARTS_PAUSE_TIMER.has(cmd.type) && (!quiet || cmd.type === "cams"))) startPauseTimer(cmd.type);
   switch (cmd.type) {
     case "next":
     case "prev": {
@@ -1177,7 +1182,8 @@ function handle(raw, senderId) {
       s.pinned = !!cmd.value;
       // Pin holds the cam on screen: drop an automatic rotation (or its fallback) still loading. If the player still
       // has the cam (load call not made yet), just lift the fade; otherwise reload it. A cam the list dropped is left.
-      if (s.pinned && pending && rotateOrigin === "rotate" && camById(s.camId)) {
+      // castableById, not camById: a cam the sheet marked web-only while it was on screen is never revealed and held.
+      if (s.pinned && pending && rotateOrigin === "rotate" && castableById(s.camId)) {
         if (pending.loading || quietly(() => camPlayer.getVideoData().video_id) !== s.camId) beginLoad(s.camId, "retry");
         else {
           token++;

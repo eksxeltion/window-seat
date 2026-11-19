@@ -6,7 +6,8 @@
 // window.__ytMedia[id] = { loaded, advance } (set by a test) shapes what a cam reports while it is not PLAYING:
 // getVideoLoadedFraction returns `loaded` (default 0, as before) and getCurrentTime moves forward `advance` seconds
 // per real second since its last load (default 0, frozen). Simulates a slow cam that is loading versus an SSDAI cam
-// that loads nothing. `loaded: null` makes getVideoLoadedFraction return undefined (an API that reports nothing).
+// that loads nothing. `loaded: null` makes getVideoLoadedFraction return undefined (an API that reports nothing), and
+// `time: null` does the same for getCurrentTime.
 (function () {
   const players = [];
   const S = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
@@ -78,6 +79,7 @@
   };
   P.getCurrentTime = function () {
     const m = this._media();
+    if (m && m.time === null && this.state !== S.PLAYING) return undefined;
     if (m && m.advance && this.state !== S.PLAYING) return this.time + (m.advance * (Date.now() - (this.loadAt || Date.now()))) / 1000;
     return this.time;
   };

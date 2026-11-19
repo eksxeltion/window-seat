@@ -153,6 +153,33 @@ with sync_playwright() as p:
           and rx.evaluate("()=>__receiver.state.camId") == before and not rx.evaluate("()=>document.querySelector('#blackout').classList.contains('on')"))
     check("(2) ... with a castSkip dbg note and no 'closed' message", rx.evaluate("(id)=>__receiver.log.some(e=>e.type==='castSkip' && e.detail.camId===id && e.detail.why==='web-only')", web[0])
           and rx.evaluate("()=>__receiverDebug.unavailable") is False)
+    # Paused: an ignored web-only request does not restart the pause timer (Codex review note).
+    rx.evaluate("()=>__receiver.send({type:'pause', value:true})")
+    rx.wait_for_timeout(300)
+    r0 = rx.evaluate("()=>__receiver.pauseTimer().restarts")
+    rx.evaluate("(id)=>__receiver.send({type:'cam', id})", web[1])
+    rx.wait_for_timeout(300)
+    check("(2) paused: an ignored web-only request leaves the pause timer alone", rx.evaluate("()=>__receiver.pauseTimer().restarts") == r0)
+    rx.evaluate("()=>__receiver.send({type:'pause', value:false})")
+    rx.wait_for_timeout(800)
+    # Pin during an automatic swap away from a cam the sheet just marked web-only: the swap goes on, the web-only cam
+    # is never revealed and held (Codex review blocker).
+    rx.evaluate("(ids)=>__receiver.send({type:'cams', ids, skipSleeping:false, onlyDaytime:false})", ok_ids)
+    rx.wait_for_timeout(300)
+    a = rx.evaluate("()=>__receiver.state.camId")
+    flip = {"type": "config", "cams": [dict(c, castable=(c["id"] in ok_ids and c["id"] != a)) for c in cfg["cams"]], "mixes": cfg["mixes"]}
+    rx.evaluate("""(flip)=>new Promise(res=>{__receiver.expireRotation();
+      const iv=setInterval(()=>{ if(document.querySelector('#blackout').classList.contains('on')){ clearInterval(iv);
+        __receiver.send(flip); __receiver.send({type:'pin', value:true}); res(true);} },10);
+      setTimeout(()=>{clearInterval(iv); res(false);},3000);})""", flip)
+    rx.wait_for_timeout(2500)
+    pinned = rx.evaluate("()=>({cam:__receiver.state.camId, pinned:__receiver.state.pinned, field:document.querySelector('#blackout').classList.contains('on')})")
+    print("pin during swap:", a, pinned)
+    check(f"(2) pin during a swap away from a cam just marked web-only: the castable cam is on screen, pinned ({pinned})",
+          pinned["cam"] != a and pinned["cam"] in ok_ids and pinned["pinned"] is True and pinned["field"] is False)
+    rx.evaluate("()=>__receiver.send({type:'pin', value:false})")
+    rx.evaluate("(c)=>__receiver.send(c)", {"type": "config", "cams": cfg["cams"], "mixes": cfg["mixes"]})
+    rx.wait_for_timeout(800)
     # A list where every cam is web-only (sent by the phone over the Cast channel): rests, no tight loop.
     all_web = {"type": "config", "cams": [dict(c, castable=False) for c in cfg["cams"]], "mixes": cfg["mixes"]}
     n0 = rx.evaluate("()=>__yt.cam().calls.length")
@@ -226,6 +253,20 @@ with sync_playwright() as p:
     toast = pg.text_content("#toast") or ""
     check(f"(3) casting: tapping its play circle sends nothing to the TV ({msgs})", not any(m.get("type") == "cam" for m in msgs))
     check(f"(3) casting: a calm toast explains it and the sheet stays open ({toast!r})", "Phone only" in toast and pg.is_visible("#panel-cams"))
+    # Only the web-only cam checked: the TV falls back to castable cams, and the remote's count says so (Codex review).
+    pg.click('#cams-quick [data-group="none"]')
+    pg.click(f"{row} [data-action=toggle-cam]")
+    pg.wait_for_timeout(200)
+    count = pg.text_content("#cams-count") or ""
+    print("count with only the web-only cam checked:", count)
+    check(f"(3) casting: only a Phone only cam checked, the count shows the TV's castable fallback, not 0 ({count!r})",
+          count.endswith("in rotation now.") and not count.startswith("0 ") and int(count.split()[0]) > 0)
+    pg.click('#cams-quick [data-group="all"]')
+    pg.wait_for_timeout(200)
+    pg.evaluate("()=>__mockCast.sent.length=0")
+    if not pg.is_visible("#panel-cams"):
+        pg.click("#remote [data-action=open-cams]")
+        pg.wait_for_selector("#panel-cams:not([hidden])")
     pg.click(f'#cams-list .cam-row[data-id="{cams_all[2]}"] [data-action=watch]')
     pg.wait_for_timeout(300)
     msgs = [json.loads(m["data"]) for m in pg.evaluate("()=>__mockCast.sent")]

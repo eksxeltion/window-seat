@@ -239,6 +239,17 @@ function tvCamIds() {
   return (checked.length ? checked : CAMS).map((c) => c.id);
 }
 
+/** The pool a casting TV actually rotates, mirroring the receiver's pool(): the ids sent by tvCamIds minus web-only
+ *  cams; if none is castable, the castable default cams, then any castable cam; then the time-of-day rules. */
+function tvRotationCams(now = new Date()) {
+  const ids = new Set(tvCamIds());
+  const castable = (c) => c.castable !== false;
+  let chosen = CAMS.filter((c) => ids.has(c.id) && castable(c));
+  if (!chosen.length) chosen = CAMS.filter((c) => c.default && castable(c));
+  if (!chosen.length) chosen = CAMS.filter(castable);
+  return rotationPool(chosen, timeRules(), now);
+}
+
 function formatLength(minutes) {
   return `${minutes} min`;
 }
@@ -1313,8 +1324,8 @@ function renderCamsPanel(now = new Date()) {
   const showing = showingCamId();
   const checked = checkedCams();
   // The real pool, including the fallback to the checked cams when every one of them is asleep.
-  // While casting, web-only cams are not in the TV's rotation.
-  const pool = new Set(rotationCams(now).filter((c) => !casting || c.castable !== false).map((c) => c.id));
+  // While casting, the count and the in-pool marks follow the TV's own pool (web-only cams never rotate there).
+  const pool = new Set((casting ? tvRotationCams(now) : rotationCams(now)).map((c) => c.id));
   const inRotation = pool.size;
   const sleeping = checked.filter((c) => isSleeping(c, now)).length;
   let count;
