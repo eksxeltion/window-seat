@@ -23,6 +23,8 @@ if base.endswith(".html"):
 # The fake player, plus two test behaviours on the cam player:
 #   window.__ytStuck: ids that stay BUFFERING forever (never reach PLAYING, never fire onError), even when
 #     reloaded. The page runs with ?camPatientMs=15000 (test-only override of the 60s patience) to keep this short.
+#     The stuck cam reports a small loaded fraction (window.__ytMedia, slow but loading), so it is waited out to the
+#     patience limit instead of the 8s no-media fast fail (covered by test_receiver_stall_retry.py).
 #   window.__ytAd: ids that report PLAYING while getVideoData().video_id is another id (an ad), and stay there.
 PATCH = """
 (function () {
@@ -82,7 +84,7 @@ with sync_playwright() as p:
     ids = pg.evaluate("async()=>(await import('./js/data.js')).CAMS.map(c=>c.id)")
     cur = pg.evaluate("()=>__receiver.state.camId")
     stuck, ad, errd = [i for i in ids if i != cur][:3]
-    pg.evaluate("([s,a,e])=>{window.__ytStuck=[s]; window.__ytAd=[a,e];}", [stuck, ad, errd])
+    pg.evaluate("([s,a,e])=>{window.__ytStuck=[s]; window.__ytAd=[a,e]; window.__ytMedia={[s]:{loaded:0.02}};}", [stuck, ad, errd])
     # Controlled rotation pool without the three targets: the automatic skip after a failure never loads the next
     # target, so each one is loaded only by its own explicit pick.
     pg.evaluate("(ids)=>__receiver.send({type:'cams', ids, skipSleeping:false, onlyDaytime:false})", [i for i in ids if i not in (stuck, ad, errd)])

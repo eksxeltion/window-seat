@@ -61,6 +61,16 @@ const truthy = (v, dflt) => {
   return ["true", "yes", "y", "1", "x", "on"].includes(t);
 };
 
+/** The Cams tab's `cast` column: only a web-only value (any case or spacing: "web-only", "web only", "webonly",
+ *  "web_only", or "no") means the cam is not castable. Blank, missing or anything else means castable, so an older
+ *  sheet without the column keeps every cam on the TV. Server-stitched ad (SSDAI) live cams never play in the IFrame
+ *  player on Cast, so the sheet marks them web-only (docs/cast-ssdai.md). */
+export function parseCastable(v) {
+  if (typeof v === "boolean") return v;
+  const t = String(v ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  return !(t === "webonly" || t === "no");
+}
+
 /** Split a tags cell on commas or pipes: trimmed, lowercase, no empties. */
 const parseTags = (v) => (Array.isArray(v) ? v : String(v || "").split(/[,|]/)).map((t) => String(t).trim().toLowerCase().slice(0, 40)).filter(Boolean).slice(0, 12);
 
@@ -93,6 +103,7 @@ export function buildConfig(camsCsv, mixesCsv) {
       channelUrl: r.channel_url || base.channelUrl || `https://www.youtube.com/watch?v=${id}`,
       default: truthy(r.in_rotation, true),
       timezone: String(r.timezone || base.timezone || "").trim().slice(0, 64),
+      castable: parseCastable(r.cast), // blank or missing column: castable
     });
   }
   const mixes = [];
@@ -148,6 +159,8 @@ export function sanitize(cfg) {
       channelUrl: /^https:\/\//.test(c.channelUrl || "") ? c.channelUrl : `https://www.youtube.com/watch?v=${c.id}`,
       default: c.default !== false,
       timezone: String(c.timezone || "").trim().slice(0, 64),
+      // Only an explicit false (or a web-only string) keeps a cam off the TV; older copies without the field stay castable.
+      castable: parseCastable(c.castable === undefined || c.castable === null ? "" : c.castable),
     });
   }
   const mixes = [];

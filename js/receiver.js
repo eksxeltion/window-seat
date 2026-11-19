@@ -10,7 +10,7 @@ import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-18.32"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-19.33"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
@@ -19,6 +19,11 @@ const YS = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED:
 const FADE_MS = 400;
 const CAM_LOAD_MS = 12000; // pending cam in a state that is not a wait (not UNSTARTED, BUFFERING or an ad) this long: skipped
 const CAM_PATIENT_MS_DEFAULT = 60000; // pending cam still UNSTARTED or BUFFERING on its own id (or playing an ad): wait this long in total
+// Pending cam that has loaded nothing at all (getVideoLoadedFraction exactly 0, current time not advancing, no ad) while
+// UNSTARTED or BUFFERING on its own id: fail it after this long and go straight to the next cam. Seen on Cast for every
+// server-stitched ad (SSDAI) live cam, which never plays in the IFrame player there (docs/cast-ssdai.md). Anything that
+// shows media is moving (loaded fraction above 0, current time advancing, an ad) keeps the CAM_PATIENT_MS ceiling.
+const CAM_NO_MEDIA_MS_DEFAULT = 8000;
 const LOADING_CARD_MS = 3000; // pending this long: the "Loading cam..." card replaces the black field
 const ERR5_RETRY_MS = 2000; // error 5 while pending: reload the same id once after this delay
 const STALL_NUDGE_MS = 20000; // visible cam not PLAYING this long: nudge playVideo
@@ -44,6 +49,8 @@ function msParam(name, fallback) {
 /* Test override for the pending-load patience: ?camPatientMs=... Only a URL that carries the parameter changes it
    (the registered receiver URL never does), same pattern as the pause timeout above. */
 const CAM_PATIENT_MS = msParam("camPatientMs", CAM_PATIENT_MS_DEFAULT);
+/* Same pattern for the no-media fast fail: ?camNoMediaMs=... (tests only). */
+const CAM_NO_MEDIA_MS = msParam("camNoMediaMs", CAM_NO_MEDIA_MS_DEFAULT);
 const $ = (id) => document.getElementById(id);
 const quietly = (fn) => {
   try {
@@ -142,6 +149,10 @@ function note(type, detail) {
 }
 
 const camById = (id) => CAMS.find((c) => c.id === id) || null;
+/* A web-only cam (the sheet's cast column, js/config.js parseCastable) never loads on the TV: not in rotation, not as
+   the start cam, and a phone request for one is ignored. It still plays on the phone. */
+const isCastable = (c) => !!c && c.castable !== false;
+const castableById = (id) => isCastable(camById(id));
 const mixById = (id) => MIXES.find((m) => m.id === id) || null;
 
 function snapshot() {
@@ -427,7 +438,8 @@ function isExplicitDisconnect(event) {
 let camPlayer = null;
 let camReady = false;
 let token = 0; // bumps on every load so stale events are ignored
-let pending = null; // { camId, startedAt, loading, err5 (0 none, 1 retry waiting, 2 reloaded), adSeen, lastPatientAt, cardShown }
+let pending = null; // { camId, startedAt, loading, err5 (0 none, 1 retry waiting, 2 reloaded), adSeen, lastPatientAt, cardShown,
+//                     mediaAt (no-media clock start), mediaSeen (something loaded: the 60s ceiling applies), noMedia, t0 }
 let nextSwapAt = 0;
 let stall = null; // { at, nudged } while the visible cam is not PLAYING
 let retryTimer = 0;
@@ -435,6 +447,7 @@ let rotateReason = "start";
 let rotateOrigin = "start"; // what started the current swap; a failed candidate's fallback keeps it
 let wantedCam = null; // camera requested before the YouTube player was ready
 let awaitingRetry = false; // all cams failed: camTick stays idle until the retry timer fires
+let noCastableIdle = false; // resting because no cam in the list is castable (a new list looks again at once)
 let pausedRemaining = 0; // ms left on the rotation clock when the feed was paused (frozen while paused)
 
 /* Load diagnostics: what the cam player did between loadVideoById and commit or failure, so a cam that times
@@ -593,8 +606,37 @@ function camToLiveEdge() {
    non-daytime cams when Only daytime is on). If the rules leave nothing, the checked cams are used anyway.
    A cam that falls asleep while on screen is left at the next scheduled swap; a pinned cam never rotates. */
 function pool() {
-  const chosen = s.poolIds && s.poolIds.length ? CAMS.filter((c) => s.poolIds.includes(c.id)) : CAMS.filter((c) => c.default);
+  const picked = s.poolIds && s.poolIds.length ? CAMS.filter((c) => s.poolIds.includes(c.id)) : CAMS.filter((c) => c.default);
+  // Web-only cams never rotate on the TV (shuffle start, in-order, time-of-day fallback alike). If every chosen cam is
+  // web-only, the castable default cams stand in, then any castable cam; with none at all the pool is empty.
+  let chosen = picked.filter(isCastable);
+  if (!chosen.length) chosen = CAMS.filter((c) => c.default && isCastable(c));
+  if (!chosen.length) chosen = CAMS.filter(isCastable);
   return rotationPool(chosen.filter((c) => !s.failed.has(c.id)), { skipSleeping: s.skipSleeping, onlyDaytime: s.onlyDaytime });
+}
+
+/* No castable cam to show (every cam in the list is web-only): the night field with the calm closed message, and one
+   new look a minute later (a newer list may have arrived). Never a tight loop: camTick stays idle meanwhile. */
+function idleNoCastable() {
+  note("noCastableCams", { cams: CAMS.length });
+  noCastableIdle = true;
+  castEvent("no castable cams");
+  token++;
+  pending = null;
+  stall = null;
+  awaitingRetry = true;
+  clearTimeout(retryTimer);
+  fadeTo(true);
+  showLoading(false);
+  showUnavailable(true, ALL_UNAVAILABLE_TEXT);
+  retryTimer = setTimeout(() => loadNextCastable("retry", s.camId), RETRY_ALL_FAILED_MS);
+}
+
+/** Load the next castable cam after fromId, or rest on the night field when there is none. */
+function loadNextCastable(reason, fromId) {
+  const next = pick(fromId, 1);
+  if (next) beginLoad(next, reason);
+  else idleNoCastable();
 }
 
 /** Next usable cam after fromId in the given direction (1 or -1), in list order. */
@@ -616,18 +658,24 @@ function pick(fromId, dir) {
 
 function beginLoad(camId, reason = "rotate", origin = reason) {
   if (!camById(camId)) return;
+  if (!castableById(camId)) {
+    // Every caller picks from pool() or checks first; this is the last guard so a web-only cam is never even tried.
+    note("castSkip", { camId, why: "web-only", reason });
+    return;
+  }
   if (!camReady) {
     wantedCam = camId; // YouTube not ready yet: onReady loads this instead of a random cam
     return;
   }
   wantedCam = null;
   awaitingRetry = false;
+  noCastableIdle = false;
   clearTimeout(retryTimer);
   const my = ++token;
   rotateReason = reason;
   rotateOrigin = origin;
   shownReason = reason === "cam" ? "pick" : reason;
-  pending = { camId, startedAt: Date.now(), loading: false, err5: 0, adSeen: false, lastPatientAt: Date.now(), cardShown: false };
+  pending = { camId, startedAt: Date.now(), loading: false, err5: 0, adSeen: false, lastPatientAt: Date.now(), cardShown: false, mediaAt: Date.now(), mediaSeen: false, noMedia: false, t0: undefined };
   trace = { at: null, states: [], ignoredPlaying: 0, otherVid: undefined, errors: [] };
   stall = null;
   showLoading(false);
@@ -637,6 +685,7 @@ function beginLoad(camId, reason = "rotate", origin = reason) {
     pending.loading = true;
     pending.startedAt = Date.now();
     pending.lastPatientAt = pending.startedAt;
+    pending.mediaAt = pending.startedAt;
     camMute();
     trace.at = Date.now();
     quietly(() => camPlayer.loadVideoById(camId));
@@ -694,12 +743,16 @@ function commitPending() {
   broadcast();
 }
 
+/* why: "error", "load timeout", "stalled" or "no_media_fast_fail". The fast fail goes straight to the next cam: no
+   "window closed" message (the Loading card stays up when it already was, else the black field or the splash). */
 function failCam(camId, why) {
   note("camError", { camId, why });
+  const fast = why === "no_media_fast_fail";
   const mine = pending && pending.camId === camId ? pending : null;
   const recovery = mine && mine.loading ? quietly(() => loadFields(mine)) : { nudged: 0, retried: 0 };
-  const scope = why === "load timeout" && pending && pending.camId === camId ? "load" : "snapshot";
-  const diag = why === "load timeout" || why === "stalled" ? quietly(() => camDiag(camId, scope)) : undefined;
+  const isLoadWait = why === "load timeout" || fast;
+  const scope = isLoadWait && pending && pending.camId === camId ? "load" : "snapshot";
+  const diag = isLoadWait || why === "stalled" ? quietly(() => camDiag(camId, scope)) : undefined;
   if (diag) {
     try {
       note("camDiag", { camId, why, ...diag });
@@ -719,10 +772,17 @@ function failCam(camId, why) {
   pending = null;
   stall = null;
   const next = pick(camId, 1);
+  const cardWasUp = !!(mine && mine.cardShown);
   showLoading(false);
-  showUnavailable(true, next ? UNAVAILABLE_TEXT : ALL_UNAVAILABLE_TEXT);
+  if (fast && next) showUnavailable(false);
+  else showUnavailable(true, next ? UNAVAILABLE_TEXT : ALL_UNAVAILABLE_TEXT);
   if (next) {
     beginLoad(next, "skip", from);
+    if (fast && cardWasUp && pending && pending.camId === next) {
+      // Keep the calm Loading card on screen through the swap instead of flashing back to black.
+      pending.cardShown = true;
+      showLoading(true);
+    }
   } else {
     // Every default cam failed: black screen, forget the failures and try again in a minute.
     note("allFailed");
@@ -731,7 +791,7 @@ function failCam(camId, why) {
     token++;
     awaitingRetry = true;
     fadeTo(true);
-    retryTimer = setTimeout(() => beginLoad(pick(s.camId, 1) || CAMS[0].id, "retry"), RETRY_ALL_FAILED_MS);
+    retryTimer = setTimeout(() => loadNextCastable("retry", s.camId), RETRY_ALL_FAILED_MS);
   }
   broadcast();
 }
@@ -781,6 +841,11 @@ function onCamError(e) {
         setTimeout(() => {
           if (pending !== mine || mine.err5 !== 1) return;
           mine.err5 = 2;
+          // The reload is a fresh attempt: it gets its own CAM_NO_MEDIA_MS no-media clock (the 60s cap still counts
+          // from the first load). mediaSeen stays: a stream that already showed media keeps the patient ceiling.
+          mine.mediaAt = Date.now();
+          mine.noMedia = false;
+          mine.t0 = undefined;
           camMute();
           quietly(() => camPlayer.loadVideoById(camId));
           camMute();
@@ -820,13 +885,36 @@ function pendingOtherVideo() {
    the first loadVideoById (the trace clock). A load in any other state (PAUSED, ENDED, CUED, PLAYING on its own id
    is a commit already) for CAM_LOAD_MS in a row is not going to recover and fails at once. No timeout reload: it
    would restart the ad and the buffering; the only reload is the single error 5 one in onCamError. */
+/* Sample whether the pending cam shows any media (only called while it is UNSTARTED or BUFFERING on its own id).
+   Loaded fraction above 0, or current time moving past its first sample, marks mediaSeen for the rest of the load.
+   noMedia is true only when the player positively reports a loaded fraction of exactly 0: a player without the call
+   (or one that throws) never fast-fails, it keeps the 60s ceiling. */
+function sampleMedia(mine) {
+  const loaded = fin(quietly(() => camPlayer.getVideoLoadedFraction()));
+  const t = fin(quietly(() => camPlayer.getCurrentTime()));
+  if (t !== undefined) {
+    if (mine.t0 === undefined) mine.t0 = t;
+    else if (t > mine.t0 + 0.05) mine.mediaSeen = true;
+  }
+  if (loaded !== undefined && loaded > 0) mine.mediaSeen = true;
+  mine.noMedia = loaded === 0;
+}
+
 function pendingTick(now) {
   if (!pending.loading) return;
   const age = now - pending.startedAt;
   const ad = pendingOtherVideo();
   if (ad) pending.adSeen = true;
+  if (ad) pending.mediaSeen = true; // an ad is media: wait it out under the patient ceiling
+  const stalled = !ad && pendingStalled();
+  if (stalled) sampleMedia(pending);
   // A scheduled error 5 reload has priority over the state cutoff (it must get to run); the total cap still applies.
-  if (ad || pending.err5 === 1 || pendingStalled()) pending.lastPatientAt = now;
+  if (ad || pending.err5 === 1 || stalled) pending.lastPatientAt = now;
+  // Nothing at all after CAM_NO_MEDIA_MS (never while an error 5 reload waits): fail fast, next cam at once.
+  if (stalled && !pending.mediaSeen && pending.noMedia && pending.err5 !== 1 && now - pending.mediaAt >= CAM_NO_MEDIA_MS) {
+    failCam(pending.camId, "no_media_fast_fail");
+    return;
+  }
   if (age > CAM_PATIENT_MS || now - pending.lastPatientAt > Math.min(CAM_LOAD_MS, CAM_PATIENT_MS)) {
     failCam(pending.camId, "load timeout");
     return;
@@ -880,8 +968,10 @@ function createCamPlayer() {
         camReady = true;
         camMute();
         const list = pool();
-        const first = wantedCam && camById(wantedCam) ? wantedCam : (list[Math.floor(Math.random() * list.length)] || CAMS[0]).id;
-        beginLoad(first, wantedCam ? "cam" : "start");
+        const wanted = wantedCam && castableById(wantedCam) ? wantedCam : null;
+        const first = wanted || (list[Math.floor(Math.random() * list.length)] || {}).id;
+        if (first) beginLoad(first, wanted ? "cam" : "start");
+        else idleNoCastable();
       },
       onStateChange: onCamState,
       onError: onCamError,
@@ -1156,6 +1246,12 @@ function handle(raw, senderId) {
       break;
     }
     case "cam":
+      if (camById(cmd.id) && !castableById(cmd.id)) {
+        // Web-only: the TV cannot play it (the phone shows it as Phone only and should not send it). Quietly ignored.
+        note("castSkip", { camId: cmd.id, why: "web-only", reason: "phone" });
+        castEvent("cam web-only: ignored");
+        break;
+      }
       if (camById(cmd.id)) {
         s.failed.delete(cmd.id);
         if (cmd.id !== s.camId || pending) beginLoad(cmd.id, "cam");
@@ -1190,7 +1286,7 @@ function handle(raw, senderId) {
     default:
       return;
   }
-  if (CONFIGURES.has(cmd.type) && !(cmd.type === "mix" && !mixById(cmd.id)) && !(cmd.type === "cam" && !camById(cmd.id))) configured = true;
+  if (CONFIGURES.has(cmd.type) && !(cmd.type === "mix" && !mixById(cmd.id)) && !(cmd.type === "cam" && !castableById(cmd.id))) configured = true;
   broadcast();
 }
 
@@ -1440,7 +1536,8 @@ function afterListChange() {
       showMixTitle();
     } else playMix(MIXES[0].id);
   } else showMixTitle();
-  const gone = pending ? !camById(pending.camId) : s.camId && !camById(s.camId);
+  // A cam that left the list, or that the sheet now marks web-only, is replaced like a cam that is gone.
+  const gone = pending ? !castableById(pending.camId) : s.camId && !castableById(s.camId);
   if (gone) {
     token++; // drop callbacks of a load for a cam that no longer exists
     pending = null;
@@ -1448,9 +1545,12 @@ function afterListChange() {
     if (!next) {
       // Only failed cams are left: forget the failures and try again now rather than stay black.
       s.failed.clear();
-      next = pick(null, 1) || CAMS[0].id;
+      next = pick(null, 1);
     }
-    beginLoad(next, "list");
+    if (next) beginLoad(next, "list");
+    else idleNoCastable();
+  } else if (noCastableIdle && camReady) {
+    loadNextCastable("list", s.camId); // a new list while resting with nothing castable: look again now
   } else if (s.camId && !pending) {
     setCaption(camById(s.camId)); // same cam, maybe renamed in the sheet (the lower third is not shown again)
   }

@@ -3,6 +3,10 @@
 // Cams look live by default (getVideoData().isLive === true). Video ids listed in window.__ytArchive
 // (an array set by a test) behave as recordings: isLive is false, and seeking one to its duration
 // lands on the end and fires ENDED, like the real player.
+// window.__ytMedia[id] = { loaded, advance } (set by a test) shapes what a cam reports while it is not PLAYING:
+// getVideoLoadedFraction returns `loaded` (default 0, as before) and getCurrentTime moves forward `advance` seconds
+// per real second since its last load (default 0, frozen). Simulates a slow cam that is loading versus an SSDAI cam
+// that loads nothing. `loaded: null` makes getVideoLoadedFraction return undefined (an API that reports nothing).
 (function () {
   const players = [];
   const S = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
@@ -25,6 +29,7 @@
   const P = Player.prototype;
   P._rec = function (name, args) {
     this.calls.push([name].concat(Array.from(args)));
+    if (name === "loadVideoById") this.loadAt = Date.now(); // the current-time clock for __ytMedia (test patches too)
   };
   P._set = function (st) {
     this.state = st;
@@ -68,11 +73,19 @@
   P.getDuration = function () {
     return this.kind === "cam" ? 5000 : 3600;
   };
+  P._media = function () {
+    return this.kind === "cam" && this.vid && window.__ytMedia ? window.__ytMedia[this.vid] || null : null;
+  };
   P.getCurrentTime = function () {
+    const m = this._media();
+    if (m && m.advance && this.state !== S.PLAYING) return this.time + (m.advance * (Date.now() - (this.loadAt || Date.now()))) / 1000;
     return this.time;
   };
   P.getVideoLoadedFraction = function () {
-    return this.state === S.PLAYING ? 1 : 0;
+    if (this.state === S.PLAYING) return 1;
+    const m = this._media();
+    if (m && "loaded" in m) return m.loaded === null ? undefined : m.loaded;
+    return 0;
   };
   P.mute = function () {
     this._rec("mute", arguments);

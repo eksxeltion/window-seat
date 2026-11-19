@@ -43,7 +43,8 @@ def px(v):
 
 
 # The next load on the cam player fails: with a YouTube error code, or (code None) it buffers and never plays, even
-# when nudged with playVideo or reloaded.
+# when nudged with playVideo or reloaded. The buffering one reports a small loaded fraction (slow but loading), so it gets
+# the 60s patience rather than the 8s no-media fast fail (that one is covered by test_receiver_stall_retry.py).
 FAIL_NEXT = """(code) => {
   const yt = __yt.cam();
   const cam = __receiver.state.camId;
@@ -55,7 +56,7 @@ FAIL_NEXT = """(code) => {
     window.__failTarget = v;
     this._rec('loadVideoById', arguments);
     this.vid = v;
-    if (code === null) { this._set(3); return; }
+    if (code === null) { (window.__ytMedia = window.__ytMedia || {})[v] = { loaded: 0.02 }; this._set(3); return; }
     this.state = -1;
     setTimeout(() => { delete yt.loadVideoById; this.opts.events.onError({ data: code }); }, 0);
   };
@@ -243,7 +244,7 @@ with sync_playwright() as p:
               wait_until(rx, "()=>__receiver.state.camId && __receiver.state.camId!==window.__failTarget && __yt.cam().state===1 && document.querySelector('#unavailable').hidden", 6000)
               and not rx.is_visible("#unavailable") and rx.evaluate("()=>__receiverDebug.unavailable") is False)
 
-    # ------------------------------------------------------------ a load that never reaches PLAYING (CAM_PATIENT_MS, 60s)
+    # ------------------------------------------------------------ a slow load that never reaches PLAYING (CAM_PATIENT_MS, 60s)
     # Waited out with no playVideo, no reload and no message; after 3s the "Loading cam..." card replaces the black field.
     # (The 60s failure itself is covered by test_receiver_stall_retry.py.)
     rx.evaluate(FAIL_NEXT, None)

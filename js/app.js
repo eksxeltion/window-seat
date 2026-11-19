@@ -671,6 +671,12 @@ function skip(dir = 1) {
 
 function watchNow(camId) {
   if (!camById(camId)) return;
+  if (isCasting() && camById(camId).castable === false) {
+    // Web-only (server-stitched ads, never plays on Cast): calm note, nothing goes to the TV.
+    syncRemoteMode();
+    toast("Phone only. This cam does not play on the TV.");
+    return;
+  }
   state.failed.delete(camId);
   setAllFailed(false);
   if (viaTv(() => remoteCam(camId))) return;
@@ -1307,7 +1313,8 @@ function renderCamsPanel(now = new Date()) {
   const showing = showingCamId();
   const checked = checkedCams();
   // The real pool, including the fallback to the checked cams when every one of them is asleep.
-  const pool = new Set(rotationIds(now));
+  // While casting, web-only cams are not in the TV's rotation.
+  const pool = new Set(rotationCams(now).filter((c) => !casting || c.castable !== false).map((c) => c.id));
   const inRotation = pool.size;
   const sleeping = checked.filter((c) => isSleeping(c, now)).length;
   let count;
@@ -1333,6 +1340,14 @@ function renderCamsPanel(now = new Date()) {
     row.classList.toggle("is-sleeping", asleep);
     row.classList.toggle("is-off", !on);
     row.dataset.inPool = String(pool.has(id));
+    // Web-only cams while casting: dimmed, "Phone only", and the play circle does not send them to the TV.
+    const phoneOnly = casting && !!cam && cam.castable === false;
+    row.classList.toggle("is-phone-only", phoneOnly);
+    $(".phone-mark", row).hidden = !phoneOnly;
+    const play = $('[data-action="watch"]', row);
+    if (phoneOnly) play.setAttribute("aria-disabled", "true");
+    else play.removeAttribute("aria-disabled");
+    play.setAttribute("aria-label", phoneOnly ? `${cam.title} plays on the phone only` : `Play ${cam ? cam.title : id} now`);
     $('[data-action="toggle-cam"]', row).setAttribute("aria-checked", String(on));
     setText($(".cam-clock", row), camLocalTime(cam, now));
     $(".sleep-mark", row).hidden = !asleep;
@@ -1405,7 +1420,12 @@ function buildCamsPanel() {
     const badge = document.createElement("span");
     badge.className = "badge";
     badge.hidden = true;
-    sub.append(where, badge);
+    // Web-only cams while casting (set in renderCamsPanel): a calm label, the TV cannot play them.
+    const phone = document.createElement("span");
+    phone.className = "phone-mark";
+    phone.textContent = "Phone only";
+    phone.hidden = true;
+    sub.append(where, badge, phone);
     info.append(title, sub);
     // Right-hand time stack: local time, with Sleeping under it.
     const time = document.createElement("span");
@@ -2432,7 +2452,8 @@ function handleAction(action, btn) {
     case "toggle-cam":
       return setEnabled(id, !isEnabled(id));
     case "watch":
-      closePanel();
+      // A Phone only cam while casting keeps the sheet open: nothing changes on the TV.
+      if (!(isCasting() && (camById(id) || {}).castable === false)) closePanel();
       return watchNow(id);
     case "skip-sleeping":
       return toggleTimeRule("skipSleeping");
