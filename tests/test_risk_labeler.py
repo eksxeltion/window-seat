@@ -112,6 +112,7 @@ FIXTURES = [
     ("whole word token in js", RED, [{"filename": "js/h.js", "patch": patch("+send({ token: t });")}]),
     ("whole word delete in js", RED, [{"filename": "js/i.js", "patch": patch("+delete cams[id];")}]),
     ("whole word KEY and secrets", RED, [{"filename": "js/j.js", "patch": patch("+const KEY = 1; // secrets")}]),
+    ("whole word secrets alone", RED, [{"filename": "js/j2.js", "patch": patch("+// rotate the secrets")}]),
     ("whole word stripe and payment", RED, [{"filename": "js/k.js", "patch": patch("+import stripe from 'x'; // payment")}]),
     ("x-api-key header", RED, [{"filename": "js/l.js", "patch": patch("+h['x-api-key'] = v;")}]),
     ("one red file among clean ones", RED, [
@@ -161,9 +162,14 @@ FIXTURES = [
     ("P3 sh without patch", RED, [{"filename": "scripts/build.sh", "changes": 4000}]),
     ("P3 txt without patch", RED, [{"filename": "docs/a.txt", "changes": 4000}]),
     ("P3 extensionless without patch", RED, [{"filename": "scripts/build", "changes": 4000}]),
+    ("P3 unknown extension Containerfile.dev without patch", RED, [{"filename": "Containerfile.dev", "changes": 4000}]),
+    ("P3 unknown extension .properties without patch", RED, [
+        {"filename": "config/service.properties", "changes": 4000}]),
     ("P3 missing patch and unknown changes", RED, [{"filename": "js/sender.js"}]),
     ("P3 binary under assets/ with no patch", NOT_RED, [{"filename": "assets/hero.png", "changes": 0}]),
     ("P3 binary jpg with changes and no patch", NOT_RED, [{"filename": "assets/photo.jpg", "changes": 120}]),
+    ("P3 png and woff2 with changes and no patch", NOT_RED, [
+        {"filename": "icons/icon-512.png", "changes": 300}, {"filename": "assets/font.woff2", "changes": 80}]),
     ("P3 tests/ text file with no patch", NOT_RED, [{"filename": "tests/snapshot_cams.csv", "changes": 9000}]),
     ("P3 tests/ js file with no patch", NOT_RED, [{"filename": "tests/fake_youtube.js", "changes": 9000}]),
     ("P3 pure rename (changes 0, no patch)", NOT_RED, [
@@ -248,13 +254,17 @@ process.stdin.on('end', async () => {
   const helperPath = realPath.join(WS, 'trusted-base', '.github', 'scripts', 'risk_match.js');
   const results = {};
   for (const sc of scenarios) {
+    process.env.CHECKOUT_OUTCOME = sc.checkout || 'success';
     const calls = [];
     const fail = (status, msg) => { const e = new Error(msg); e.status = status; return e; };
     const rec = (name, fn) => async (params) => { calls.push([name, params]); return fn ? fn(params) : { data: {} }; };
     const github = {
       rest: {
         pulls: {
-          get: rec('pulls.get', () => ({ data: { changed_files: sc.files.length } })),
+          get: rec('pulls.get', () => {
+            if (sc.pullsGetFails) throw fail(503, 'pulls.get 503');
+            return { data: { changed_files: sc.files.length } };
+          }),
           listFiles: rec('pulls.listFiles'),
         },
         issues: {
@@ -319,6 +329,8 @@ process.stdin.on('end', async () => {
 """
 
 SCENARIOS = [
+    {"name": "trusted checkout failed", "checkout": "failure", "files": [], "labels": ["risk:green"]},
+    {"name": "pulls.get fails", "pullsGetFails": True, "files": [], "labels": ["risk:green"]},
     {"name": "helper require fails", "helper": "throw", "files": [], "labels": ["risk:green"]},
     {"name": "helper exports nothing", "helper": "empty", "files": [], "labels": []},
     {"name": "listFiles 5xx", "listFilesFails": True, "files": [], "labels": ["risk:green"]},
@@ -373,15 +385,24 @@ def labels_removed(r):
 
 def check_workflow_behavior(wf):
     res = run_workflow_script(wf)
-    for name in ("helper require fails", "helper exports nothing", "listFiles 5xx"):
+    for name in ("trusted checkout failed", "pulls.get fails", "helper require fails", "helper exports nothing",
+                 "listFiles 5xx"):
         r = res[name]
         check(f"fail closed [{name}]: adds risk:red", "risk:red" in labels_added(r), str(labels_added(r)))
-        check(f"fail closed [{name}]: checks hold exists then adds it",
-              any(n == "issues.getLabel" and p["name"] == "hold" for n, p in r["calls"]) and "hold" in labels_added(r))
+        names = [n if n != "issues.addLabels" else "add:" + ",".join(p["labels"]) for n, p in r["calls"]]
+        check(f"fail closed [{name}]: checks hold exists, then adds it",
+              "issues.getLabel" in names and "add:hold" in names
+              and names.index("issues.getLabel") < names.index("add:hold")
+              and all(p["name"] == "hold" for n, p in r["calls"] if n == "issues.getLabel"), str(names))
         check(f"fail closed [{name}]: rethrows", r["threw"] is not None, str(r["threw"]))
         check(f"fail closed [{name}]: red added before hold",
               "risk:red" in labels_added(r) and "hold" in labels_added(r)
               and labels_added(r).index("risk:red") < labels_added(r).index("hold"))
+    r = res["trusted checkout failed"]
+    check("checkout failed: rethrows an outcome error", "checkout outcome is failure" in (r["threw"] or ""), r["threw"])
+    check("checkout failed: never lists files", not any(n == "paginate.listFiles" for n, _ in r["calls"]))
+    r = res["pulls.get fails"]
+    check("pulls.get fails: rethrows the original error", r["threw"] == "pulls.get 503", r["threw"])
     r = res["helper require fails"]
     check("fail closed: rethrows the original require error", "Cannot find module" in (r["threw"] or ""), r["threw"])
     r = res["listFiles 5xx"]
@@ -418,7 +439,7 @@ def strip_comment(value):
 
 
 def workflow_steps(text):
-    """Minimal parser for the single job's steps: returns dicts with step keys, a 'with' dict and the raw text.
+    """Minimal parser for the single job's steps: returns dicts with step keys, 'with' and 'env' dicts and the raw text.
     Comment lines are ignored, so a commented-out key can not satisfy a check."""
     lines = [l for l in text.splitlines() if not l.strip().startswith("#")]
     try:
@@ -426,7 +447,7 @@ def workflow_steps(text):
     except StopIteration:
         return []
     indent = len(lines[start]) - len(lines[start].lstrip()) + 2
-    steps, cur, in_with = [], None, False
+    steps, cur, section = [], None, None
     for l in lines[start + 1:]:
         if not l.strip():
             continue
@@ -434,7 +455,7 @@ def workflow_steps(text):
         if ind < indent:
             break
         if ind == indent and l.lstrip().startswith("- "):
-            cur = {"with": {}, "raw": ""}
+            cur = {"with": {}, "env": {}, "raw": ""}
             steps.append(cur)
             l = " " * (indent + 2) + l.lstrip()[2:]
             ind = indent + 2
@@ -444,12 +465,13 @@ def workflow_steps(text):
         body = l.strip()
         if ind == indent + 2 and ":" in body:
             key, _, val = body.partition(":")
-            in_with = key == "with"
-            if not in_with:
-                cur[key.strip()] = strip_comment(val)
-        elif in_with and ind == indent + 4 and ":" in body:
+            key = key.strip()
+            section = key if key in ("with", "env") else None
+            if section is None:
+                cur[key] = strip_comment(val)
+        elif section and ind == indent + 4 and ":" in body:
             key, _, val = body.partition(":")
-            cur["with"][key.strip()] = strip_comment(val)
+            cur[section][key.strip()] = strip_comment(val)
     return steps
 
 
@@ -502,6 +524,12 @@ def main():
         check("checkout does not persist credentials", w.get("persist-credentials") == "false")
         check("checkout path is trusted-base", w.get("path") == "trusted-base", str(w.get("path")))
         check("checkout is sparse to .github/scripts", w.get("sparse-checkout") == ".github/scripts")
+        check("checkout has id trusted and continue-on-error true",
+              checkouts[0].get("id") == "trusted" and checkouts[0].get("continue-on-error") == "true")
+        scripts = [st for st in steps if st.get("uses", "").startswith("actions/github-script@")]
+        check("labeler script gets CHECKOUT_OUTCOME from the trusted checkout",
+              len(scripts) == 1 and scripts[0]["env"].get("CHECKOUT_OUTCOME") == "${{ steps.trusted.outcome }}"
+              and "if" not in scripts[0], str(scripts[0]["env"]) if scripts else "no script step")
         check("checkout runs before the labeler script", steps.index(checkouts[0]) < next(
             (i for i, st in enumerate(steps) if st.get("uses", "").startswith("actions/github-script@")), -1))
     check("no step writes into trusted-base other than the checkout",

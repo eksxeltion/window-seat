@@ -30,7 +30,11 @@ jobs:
     timeout-minutes: 5
     steps:
       # Trusted ref only. Do not change this to the PR head ref or sha.
+      # continue-on-error so a failed checkout still reaches the labeler step,
+      # which sees CHECKOUT_OUTCOME != success and fails closed.
       - name: Check out matching rules from the trusted base ref
+        id: trusted
+        continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -40,6 +44,8 @@ jobs:
 
       - name: Apply risk:red when sensitive files or content change
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.trusted.outcome }}
         with:
           script: |
             const RED = 'risk:red';
@@ -51,9 +57,9 @@ jobs:
             const pr = context.payload.pull_request;
             const pull_number = pr.number;
 
-            // Local log sanitizer: used until the trusted helper is loaded, and
-            // always in the failure path so it cannot depend on the helper.
-            // Escapes untrusted text so it cannot inject workflow commands via logs.
+            // Local log sanitizer for errors, so the failure path does not depend
+            // on the helper. Escapes untrusted text so it cannot inject workflow
+            // commands via logs. Reasons from fileReason are already sanitized.
             const localSanitize = (text) =>
               String(text).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
             const describe = (e) => {
@@ -63,12 +69,15 @@ jobs:
                 return 'unprintable error';
               }
             };
-            let sanitize = localSanitize;
 
-            // Fail closed: any error below (helper missing, API 5xx, ...) adds
-            // risk:red, adds hold if that label exists, then rethrows so the job
-            // fails. Nothing here ever removes risk:red or hold.
+            // Fail closed: any error below (checkout failed, helper missing, API
+            // error or 5xx, ...) adds risk:red, adds hold if that label exists,
+            // then rethrows so the job fails. Nothing here ever removes risk:red
+            // or hold.
             try {
+              if (process.env.CHECKOUT_OUTCOME !== 'success') {
+                throw new Error(`trusted checkout outcome is ${localSanitize(process.env.CHECKOUT_OUTCOME)}`);
+              }
               const path = require('path');
               const helper = require(
                 path.join(process.env.GITHUB_WORKSPACE, 'trusted-base', '.github', 'scripts', 'risk_match.js'),
@@ -77,25 +86,21 @@ jobs:
               if (typeof fileReason !== 'function') {
                 throw new Error('risk_match.js does not export fileReason');
               }
-              if (typeof helper.sanitizeLog === 'function') sanitize = helper.sanitizeLog;
 
               // Decide whether the PR matches.
               let reason = null;
 
-              // Prefer a fresh changed_files count from the API over the event payload.
+              // Prefer a fresh changed_files count from the API over the event
+              // payload. An API error here goes to the fail-closed handler.
               let changedFiles =
                 typeof pr.changed_files === 'number' ? pr.changed_files : null;
-              try {
-                const { data: freshPr } = await github.rest.pulls.get({
-                  owner,
-                  repo,
-                  pull_number,
-                });
-                if (typeof freshPr.changed_files === 'number') {
-                  changedFiles = freshPr.changed_files;
-                }
-              } catch (err) {
-                core.warning(`Could not refresh changed_files: ${sanitize(err.message || err)}`);
+              const { data: freshPr } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number,
+              });
+              if (typeof freshPr.changed_files === 'number') {
+                changedFiles = freshPr.changed_files;
               }
 
               // Force red only when the PR is known to exceed the list-files cap.

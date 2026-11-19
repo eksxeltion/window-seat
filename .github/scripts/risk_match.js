@@ -13,10 +13,10 @@
 //   2. Keyword rules on paths, skipped when the path is under tests/ (see
 //      scanText; the same rules as for patches, see 4).
 //   3. Missing patch: the API omits "patch" for binaries and for diffs it
-//      considers too large. A file outside tests/ with a text extension (or no
-//      extension) that changed but has no patch forces red, so a large rewrite
-//      of js/receiver.js cannot slip through unread. Binaries (png, ico...)
-//      fall back to the path rules only.
+//      considers too large. A file outside tests/ that is not a known binary
+//      (see BINARY_EXTENSIONS) and changed but has no patch forces red, so a
+//      large rewrite of js/receiver.js cannot slip through unread. Binaries
+//      (png, ico...) fall back to the path rules only.
 //   4. Patch rules, skipped when every path of the file is under tests/. Only
 //      added and removed lines are scanned (not context lines or hunk
 //      headers). Text is split into identifiers ([A-Za-z0-9_$] runs) and each
@@ -68,11 +68,14 @@ const WHOLE_WORD_KEYWORDS = DELETE_MATCHES_PARTS ? ['key', 'token'] : ['key', 't
 // An identifier whose last part is one of these is red (JWT_SECRET, myPassword).
 const TRAILING_CREDENTIAL_NOUNS = new Set(['secret', 'password', 'passwd']);
 
-// Extensions whose files are text. A text file with no patch forces red.
-const TEXT_EXTENSIONS = new Set([
-  'cjs', 'conf', 'cfg', 'css', 'csv', 'gitignore', 'htm', 'html', 'ini', 'js', 'json',
-  'jsx', 'map', 'md', 'mjs', 'py', 'sh', 'sql', 'svg', 'toml', 'ts', 'tsx', 'txt',
-  'webmanifest', 'xml', 'yaml', 'yml',
+// Extensions of binary files. The API never has a patch for these, so a
+// missing patch on them is expected and only the path rules apply. Any other
+// file (text, unknown extension, or no extension) that changed but has no
+// patch forces red.
+const BINARY_EXTENSIONS = new Set([
+  'avif', 'bin', 'bmp', 'dll', 'dylib', 'eot', 'exe', 'gif', 'gz', 'ico', 'jar',
+  'jpeg', 'jpg', 'lockb', 'mov', 'mp3', 'mp4', 'ogg', 'otf', 'pdf', 'png', 'so',
+  'tgz', 'tif', 'tiff', 'ttf', 'wasm', 'wav', 'webm', 'webp', 'woff', 'woff2', 'zip',
 ]);
 
 const LOCKFILES = new Set([
@@ -265,11 +268,8 @@ const extension = (p) => {
   return i < 0 ? '' : base.slice(i + 1).toLowerCase();
 };
 
-// Text (or extensionless, so unknown) files are expected to have a patch.
-const isTextPath = (p) => {
-  const ext = extension(p);
-  return ext === '' || TEXT_EXTENSIONS.has(ext);
-};
+// Anything not known to be binary is expected to have a patch.
+const isTextPath = (p) => !BINARY_EXTENSIONS.has(extension(p));
 
 // Returns a short reason string if the patch matches a rule, else null.
 // A missing patch is handled by fileReason.
@@ -305,7 +305,7 @@ module.exports = {
   KEYWORDS,
   DELETE_MATCHES_PARTS,
   WHOLE_WORD_KEYWORDS,
-  TEXT_EXTENSIONS,
+  BINARY_EXTENSIONS,
   LOCKFILES,
   CREDENTIAL_QUALIFIERS,
   CREDENTIAL_NOUNS,
