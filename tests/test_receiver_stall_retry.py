@@ -25,7 +25,8 @@ if base.endswith(".html"):
 # Test behaviours on the cam player, on top of the fake:
 #   window.__ytStuck[id] = { state, until }: loads of id stay in `state` (-1 or 3) until Date.now() >= until (then PLAYING).
 #     playVideo does nothing while stuck. until 0 means forever.
-#   window.__ytErr[id] = { code, times }: the first `times` loads of id fire onError(code) after 200 ms, later loads play.
+#   window.__ytErr[id] = { code, times, state, delay }: the first `times` loads of id go to `state` (default -1) and fire
+#     onError(code) after `delay` ms (default 200), later loads play.
 PATCH = """
 (function () {
   const P = window.YT.Player.prototype, load = P.loadVideoById, play = P.playVideo;
@@ -37,8 +38,8 @@ PATCH = """
       err.times--;
       this._rec("loadVideoById", arguments);
       this.vid = id;
-      this._set(-1);
-      setTimeout(() => this.vid === id && this.opts.events.onError({ data: err.code, target: this }), 200);
+      this._set(err.state === undefined ? -1 : err.state);
+      setTimeout(() => this.vid === id && this.opts.events.onError({ data: err.code, target: this }), err.delay || 200);
       return;
     }
     if (!st) return load.apply(this, arguments);
@@ -147,7 +148,8 @@ with sync_playwright() as p:
     n0 = mark(pg)
     t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", long_id)
     pg.wait_for_timeout(2000)
-    check("(e) at 2s: black field, no Loading card yet, no message", vis(pg) == [False, False])
+    check("(e) at 2s: black field (blackout opaque), no Loading card yet, no message",
+          vis(pg) == [False, False] and pg.evaluate("()=>getComputedStyle(document.querySelector('#blackout')).opacity") == "1")
     pg.wait_for_timeout(3000)
     check(f"(e) at about 5s: the Loading card shows, no 'window closed' ({vis(pg)})", vis(pg) == [False, True])
     lc = pg.evaluate("""()=>{const m=document.querySelector('#loading-msg'), cs=getComputedStyle(m), r=document.querySelector('#loading').getBoundingClientRect();
@@ -192,8 +194,8 @@ with sync_playwright() as p:
 
     # ---- c: error 5 during pending: one reload of the same id after about 2s
     pg = new_page(b)
-    ok5, bad5 = targets(pg, 2)
-    pg.evaluate("([a,c])=>{window.__ytErr={[a]:{code:5,times:1}, [c]:{code:5,times:99}};}", [ok5, bad5])
+    ok5, bad5, sw5, late5 = targets(pg, 4)
+    pg.evaluate("([a,c,d,l])=>{window.__ytErr={[a]:{code:5,times:1}, [c]:{code:5,times:99}, [d]:{code:5,times:99}, [l]:{code:5,times:1,state:2,delay:11000}};}", [ok5, bad5, sw5, late5])
     n0 = mark(pg)
     t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", ok5)
     pg.wait_for_function("(id)=>__receiver.log.some(e=>e.type==='err5Retry' && e.detail.camId===id)", arg=ok5, timeout=4000)
@@ -218,6 +220,24 @@ with sync_playwright() as p:
     pg.wait_for_timeout(5000)
     check("(c) no third load (cannot loop), failed once, the next cam plays",
           loads(pg, bad5, n0) == 2 and len(queued(pg, "cam_failed", bad5)) == 1 and pg.evaluate("(id)=>__receiver.state.camId!==id", bad5))
+
+    # switching cams during the retry delay: the old cam's reload timer never loads it again
+    settle(pg)
+    n0 = mark(pg)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", sw5)
+    pg.wait_for_function("(id)=>__receiver.log.some(e=>e.type==='err5Retry' && e.detail.camId===id)", arg=sw5, timeout=4000)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", ok5)
+    pg.wait_for_timeout(4000)
+    check(f"(c) a pick during the retry delay: the old cam is not reloaded ({loads(pg, sw5, n0)} loads)", loads(pg, sw5, n0) == 1)
+    settle(pg)
+
+    # an error 5 at 11s while PAUSED: the 12s state cutoff must not cancel the scheduled reload
+    n0 = mark(pg)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", late5)
+    shown = wait_for(pg, "cam_shown", late5, 20000) or {}
+    print("late err5 cam_shown:", shown)
+    check(f"(c) error 5 at 11s in PAUSED: still reloaded once and plays, not failed ({loads(pg, late5, n0)} loads)",
+          loads(pg, late5, n0) == 2 and shown.get("err5_retried") == 1 and not queued(pg, "cam_failed", late5))
     pg.close()
 
     # ---- f: a cam stuck forever fails at about 60s (real wait, no override), with the new fields
@@ -239,6 +259,7 @@ with sync_playwright() as p:
     check("(f) one load, no playVideo, then the message on the night field and the card gone",
           loads(pg, dead, n0) == 1 and plays(pg, n0) == 0 and pg.evaluate("(id)=>__receiver.state.failedCams.includes(id)", dead))
     u = pg.evaluate("()=>document.querySelector('#unavailable-msg').textContent")
+    check(f"(f) the failure swaps the card for the message: message visible, Loading card cleared ({vis(pg)})", vis(pg)[0] is True and vis(pg)[1] is False)
     check(f"(f) 'window closed' text only appears on this real failure ({u!r})", u == MSG)
     pg.close()
 

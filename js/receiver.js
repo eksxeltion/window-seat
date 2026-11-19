@@ -526,6 +526,15 @@ function showUnavailable(on, text = UNAVAILABLE_TEXT) {
    real failure. The player itself stays hidden: no YouTube spinner, ad or error card ever shows. */
 function showLoading(on) {
   const el = $("loading");
+  if (on) {
+    // The previous cam's lower third sits above the card (same z-index, later in the DOM): fade it out now.
+    clearTimeout(lowerThirdTimer);
+    const cap = $("caption");
+    if (cap) {
+      cap.classList.add("quiet");
+      cap.setAttribute("aria-hidden", "true");
+    }
+  }
   if (el) el.hidden = !on;
 }
 
@@ -646,9 +655,9 @@ function loadFields(mine) {
     loaded_frac: roundTo(loaded, 100),
     states: trace ? trace.states.join(",") : undefined,
     ad_suspected: mine && (mine.adSeen || (trace && trace.ignoredPlaying > 0)) ? 1 : 0,
-    err5_retried: mine && mine.err5 > 0 ? 1 : 0,
+    err5_retried: mine && mine.err5 === 2 ? 1 : 0, // 2 = the reload was actually made
     nudged: 0, // no playVideo while pending any more; the field stays for continuity
-    retried: mine && mine.err5 > 0 ? 1 : 0, // the only reload is the error 5 one (same as err5_retried)
+    retried: mine && mine.err5 === 2 ? 1 : 0, // the only reload is the error 5 one (same as err5_retried)
   };
 }
 
@@ -816,7 +825,8 @@ function pendingTick(now) {
   const age = now - pending.startedAt;
   const ad = pendingOtherVideo();
   if (ad) pending.adSeen = true;
-  if (ad || pendingStalled()) pending.lastPatientAt = now;
+  // A scheduled error 5 reload has priority over the state cutoff (it must get to run); the total cap still applies.
+  if (ad || pending.err5 === 1 || pendingStalled()) pending.lastPatientAt = now;
   if (age > CAM_PATIENT_MS || now - pending.lastPatientAt > Math.min(CAM_LOAD_MS, CAM_PATIENT_MS)) {
     failCam(pending.camId, "load timeout");
     return;
