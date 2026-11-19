@@ -21,8 +21,8 @@ if base.endswith(".html"):
     base = base.rsplit("/", 1)[0]
 
 # The fake player, plus two test behaviours on the cam player:
-#   window.__ytStuck: ids that stay BUFFERING forever (never reach PLAYING, never fire onError), even when nudged
-#     with playVideo or reloaded, so the receiver's one retry also times out.
+#   window.__ytStuck: ids that stay BUFFERING forever (never reach PLAYING, never fire onError), even when
+#     reloaded. The page runs with ?camPatientMs=15000 (test-only override of the 60s patience) to keep this short.
 #   window.__ytAd: ids that report PLAYING while getVideoData().video_id is another id (an ad), and stay there.
 PATCH = """
 (function () {
@@ -75,7 +75,7 @@ with sync_playwright() as p:
     pg.route("https://fonts.googleapis.com/**", lambda r: r.abort())
     pg.route("**/gviz/tq*", lambda r: r.abort())
     pg.on("pageerror", lambda e: logs.append(f"PAGEERROR: {e}"))
-    pg.goto(base + "/receiver.html?debug=1&telemetry=1")
+    pg.goto(base + "/receiver.html?debug=1&telemetry=1&camPatientMs=15000")
     pg.wait_for_function("()=>window.__receiver && __receiver.state.camId", timeout=15000)
     check("telemetry buffers (off, no phone message yet)", pg.evaluate("()=>__telemetry.state().on===false && __telemetry.state().receiver.bufferOpen"))
 
@@ -90,41 +90,40 @@ with sync_playwright() as p:
     mark = lambda: pg.evaluate("()=>__yt.cam().calls.length")
     LOAD_ONLY = ("ms", "states", "ignored_playing", "other_vid", "errors")
 
-    # (a) a cam that never reaches PLAYING (stuck BUFFERING on its own id, no error): nudged, reloaded once at
-    # CAM_LOAD_MS, then load_timeout with the trace after the retry window
+    # (a) a cam that never reaches PLAYING (stuck BUFFERING on its own id, no error): waited out with no nudge and no
+    # reload, then load_timeout with the trace at the patience limit (15s here, 60s in production)
     n0 = mark()
     pg.evaluate("(id)=>__receiver.send({type:'cam', id})", stuck)
     pg.wait_for_timeout(13500)
-    check("(a) not failed at CAM_LOAD_MS: retried instead", not queued(pg, "cam_failed", stuck)
-          and pg.evaluate(LOADS, [stuck, n0]) == 2)
-    f = wait_for(pg, "cam_failed", stuck, 18000)
+    check("(a) not failed at the old 12s cutoff, no reload, no nudge", not queued(pg, "cam_failed", stuck)
+          and pg.evaluate(LOADS, [stuck, n0]) == 1 and pg.evaluate("(n)=>!__yt.cam().calls.slice(n).some(c=>c[0]==='playVideo')", n0))
+    f = wait_for(pg, "cam_failed", stuck, 8000)
     print("stuck cam_failed:", f)
     check("(a) cam_failed why=load_timeout", bool(f) and f.get("why") == "load_timeout")
     f = f or {}
     check("(a) trace_scope load", f.get("trace_scope") == "load")
-    check("(a) diag_v 1, ms over CAM_LOAD_MS", f.get("diag_v") == 1 and isinstance(f.get("ms"), int) and f["ms"] >= 12000)
-    check(f"(a) ms is the total over both windows ({f.get('ms')})", isinstance(f.get("ms"), int) and f["ms"] >= 24000)
-    check("(a) retried=1 and nudged=1", f.get("retried") == 1 and f.get("nudged") == 1)
-    check("(a) playVideo nudged the stuck load in both windows", pg.evaluate("(id)=>__receiver.log.filter(e=>e.type==='loadNudge' && e.detail.camId===id).length", stuck) == 2
-          and pg.evaluate("()=>__yt.cam().calls.some(c=>c[0]==='playVideo')"))
-    check("(a) only one retry: two loadVideoById calls for it", pg.evaluate(LOADS, [stuck, n0]) == 2)
+    check(f"(a) diag_v 1, ms and load_ms at the patience limit ({f.get('ms')}, {f.get('load_ms')})",
+          f.get("diag_v") == 1 and isinstance(f.get("ms"), int) and 15000 <= f["ms"] < 18000 and isinstance(f.get("load_ms"), int) and 15000 <= f["load_ms"] < 18000)
+    check("(a) nudged=0 retried=0 err5_retried=0 ad_suspected=0", f.get("retried") == 0 and f.get("nudged") == 0 and f.get("err5_retried") == 0 and f.get("ad_suspected") == 0)
+    check("(a) cur_time and loaded_frac present, states string", isinstance(f.get("cur_time"), (int, float)) and isinstance(f.get("loaded_frac"), (int, float)) and isinstance(f.get("states"), str))
+    check("(a) no playVideo, one loadVideoById for it", pg.evaluate(LOADS, [stuck, n0]) == 1 and pg.evaluate("(n)=>!__yt.cam().calls.slice(n).some(c=>c[0]==='playVideo')", n0))
     check(f"(a) states string starts with BUFFERING ({f.get('states')})", isinstance(f.get("states"), str) and f["states"].startswith("3@"))
     check("(a) last_state BUFFERING, vid is the cam, vid_match true", f.get("last_state") == 3 and f.get("vid") == stuck and f.get("vid_match") is True)
     check("(a) is_live, muted, music_state present; ignored_playing 0", f.get("is_live") is True and f.get("muted") is True and "music_state" in f and f.get("ignored_playing") == 0)
-    check("(a) no undefined-valued keys", all(v is not None for v in f.values()))
     diag_log = pg.evaluate("(id)=>__receiver.log.filter(e=>e.type==='camDiag' && e.detail.camId===id).map(e=>e.detail)", stuck)
     check("(a) camDiag in the debug log", len(diag_log) == 1 and diag_log[0].get("diag_v") == 1 and diag_log[0].get("why") == "load timeout")
 
-    # (b) PLAYING for another video id: counted, and the cam still times out as before
+    # (b) an ad: PLAYING for another video id is waited out too, flagged ad_suspected, and times out at the patience limit
     pg.wait_for_timeout(1500)  # the automatic skip after (a) settles
     n0 = mark()
     pg.evaluate("(id)=>__receiver.send({type:'cam', id})", ad)
-    f = wait_for(pg, "cam_failed", ad, 18000) or {}
+    f = wait_for(pg, "cam_failed", ad, 22000) or {}
     print("ad cam_failed:", f)
     check("(b) cam_failed why=load_timeout, trace_scope load", f.get("why") == "load_timeout" and f.get("trace_scope") == "load")
-    check(f"(b) not recoverable: failed at CAM_LOAD_MS with no nudge and no retry ({f.get('ms')})",
-          isinstance(f.get("ms"), int) and 12000 <= f["ms"] < 16000 and f.get("retried") == 0 and f.get("nudged") == 0
+    check(f"(b) waited out like a stuck load: failed at the patience limit with no nudge and no retry ({f.get('ms')})",
+          isinstance(f.get("ms"), int) and 15000 <= f["ms"] < 18000 and f.get("retried") == 0 and f.get("nudged") == 0
           and pg.evaluate(LOADS, [ad, n0]) == 1)
+    check("(b) ad_suspected=1", f.get("ad_suspected") == 1)
     check("(b) ignored_playing counted, other_vid is the ad id", f.get("ignored_playing", 0) >= 1 and f.get("other_vid") == "AdVideo0001")
     check("(b) vid is the ad, vid_match false, last_state PLAYING", f.get("vid") == "AdVideo0001" and f.get("vid_match") is False and f.get("last_state") == 1)
     states = f.get("states", "").split(",")
@@ -142,13 +141,12 @@ with sync_playwright() as p:
     pg.wait_for_timeout(1000)
     check("(c) not failed early: no cam_failed and no player_error yet", not queued(pg, "cam_failed", errd) and not queued(pg, "player_error", errd))
     check("(c) no camError logged for it yet", not pg.evaluate("(id)=>__receiver.log.some(e=>e.type==='camError' && e.detail.camId===id)", errd))
-    f = wait_for(pg, "cam_failed", errd, 18000) or {}
+    f = wait_for(pg, "cam_failed", errd, 22000) or {}
     print("error cam_failed:", f)
     check("(c) cam_failed why=load_timeout, trace_scope load", f.get("why") == "load_timeout" and f.get("trace_scope") == "load")
     check("(c) errors carries the other video's code", f.get("errors") == "150")
-    check("(c) ms over CAM_LOAD_MS", isinstance(f.get("ms"), int) and f["ms"] >= 12000)
-    check(f"(c) not recoverable: no retry ({f.get('ms')}, retried={f.get('retried')})", f.get("retried") == 0 and f["ms"] < 16000
-          and pg.evaluate(LOADS, [errd, n0]) == 1)
+    check("(c) ms at the patience limit", isinstance(f.get("ms"), int) and 15000 <= f["ms"] < 18000)
+    check(f"(c) no retry, no reload ({f.get('ms')}, retried={f.get('retried')})", f.get("retried") == 0 and pg.evaluate(LOADS, [errd, n0]) == 1)
 
     # (d) a normal pick: a fresh cam_shown (reason pick) for cast carries load_ms
     pg.wait_for_timeout(1500)
@@ -165,7 +163,9 @@ with sync_playwright() as p:
         pg.wait_for_timeout(250)
     print("cam_shown:", sh)
     check("(d) fresh cam_shown reason pick, mode cast, load_ms and ignored_playing 0", sh.get("reason") == "pick" and sh.get("mode") == "cast" and isinstance(sh.get("load_ms"), int) and 0 <= sh["load_ms"] < 5000 and sh.get("ignored_playing") == 0)
-    check("(d) a normal load is neither nudged nor retried", sh.get("nudged") == 0 and sh.get("retried") == 0)
+    check("(d) a normal load is neither nudged nor retried, new fields present",
+          sh.get("nudged") == 0 and sh.get("retried") == 0 and sh.get("err5_retried") == 0 and sh.get("ad_suspected") == 0
+          and isinstance(sh.get("cur_time"), (int, float)) and isinstance(sh.get("loaded_frac"), (int, float)) and isinstance(sh.get("states"), str))
     check("(d) cam was committed", pg.evaluate("()=>__receiver.state.camId") == ok)
 
     # (e) the committed cam stalls (stays BUFFERING, the nudge does not help): snapshot fields only

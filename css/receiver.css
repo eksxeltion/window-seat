@@ -44,6 +44,14 @@ html, body { margin: 0; height: 100%; background: var(--color-field); overflow: 
   font-family: var(--font-ui); font-size: max(32px, 1.667vw); line-height: 1.25; font-weight: 500; color: var(--color-overlay-ink);
 }
 
+/* Loading card: same night field and type as the unavailable message, shown after 3s of a pending cam load. */
+#loading { position: fixed; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center; background: var(--color-field); pointer-events: none; }
+#loading[hidden] { display: none; }
+#loading-msg {
+  margin: 0; max-width: 90%; box-sizing: border-box; padding: 0 5%; text-align: center;
+  font-family: var(--font-ui); font-size: max(32px, 1.667vw); line-height: 1.25; font-weight: 500; color: var(--color-overlay-ink);
+}
+
 /* Launch splash: our own full-screen layer on the night field, above the cam and the blackout (same z-index, later
    in the DOM), below the lower third, toasts and the Debug strip. Fades out once over 1200ms when the first cam plays. */
 #splash { position: fixed; inset: 0; z-index: 2; background: var(--color-field); opacity: 1; transition: opacity 1200ms ease; pointer-events: none; }
