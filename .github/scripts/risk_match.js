@@ -10,31 +10,70 @@
 // Rules, in order, for each changed file (both filename and previous_filename):
 //   1. Path rules (always applied, including under tests/):
 //      vercel.json, anything under .github/, package.json, lockfiles, env files.
-//   2. Keyword rules, skipped when the path is under tests/:
-//      a. keyword-in-path: a keyword appears as a whole word in the path, where
-//         path words are separated by any non-alphanumeric character
-//         ("secret-config.js", "api_key.json" match; "monkey.js",
-//         "keyframes.css", "fooToken.js" do not).
-//      b. credential identifier in the path (see below).
-//   3. Patch rules, skipped when every path of the file is under tests/:
-//      only added and removed lines are scanned (not context lines or hunk
-//      headers).
-//      a. whole-word keyword: an identifier equal to a keyword, optionally
-//         plural ("token", "KEY", "secrets", "delete"). Identifiers are runs of
-//         [A-Za-z0-9_$], so "fooToken", "monkey", "keyframe" and "foo_token"
-//         do not match.
-//      b. credential identifier: an identifier whose camelCase / snake_case
-//         parts contain a credential qualifier immediately followed
-//         by a credential noun ("apiKey", "api_key", "access_token",
-//         "AUTH_TOKEN", "clientSecret", "GITHUB_TOKEN"), also when glued or
+//   2. Keyword rules on paths, skipped when the path is under tests/ (see
+//      scanText; the same rules as for patches, see 4).
+//   3. Missing patch: the API omits "patch" for binaries and for diffs it
+//      considers too large. A file outside tests/ with a text extension (or no
+//      extension) that changed but has no patch forces red, so a large rewrite
+//      of js/receiver.js cannot slip through unread. Binaries (png, ico...)
+//      fall back to the path rules only.
+//   4. Patch rules, skipped when every path of the file is under tests/. Only
+//      added and removed lines are scanned (not context lines or hunk
+//      headers). Text is split into identifiers ([A-Za-z0-9_$] runs) and each
+//      identifier into camelCase / snake_case parts (identifierParts):
+//      a. Part keywords: a part equal to payment(s), stripe or secret(s), or a
+//         part starting with auth or oauth (createPaymentIntent, loadStripe,
+//         JWT_SECRET, isAuthenticated, Authorization, authMiddleware, oauth).
+//      b. Whole-word keywords, only for the noisy words key, token (and
+//         delete, see DELETE_MATCHES_PARTS): the whole identifier (or path
+//         word) must equal the word, optionally plural. "fooToken", "monkey",
+//         "keyframe", "keyFrame" and "tokenizer" do not match.
+//      c. Trailing credential noun: an identifier whose last part is secret,
+//         password or passwd (JWT_SECRET, myPassword, db_passwd).
+//      d. Credential pair: a credential qualifier immediately followed by a
+//         credential noun ("apiKey", "api_key", "access_token", "AUTH_TOKEN",
+//         "supabaseKey", "sessionToken", "private_key"), also when glued or
 //         split oddly ("apikey", "APIkey", "GitHubToken"; see credentialIn).
-//         Generic names such as "fooToken", "playerToken" or "keyFrame" have
-//         no qualifier and do not match. The reason names only the matched
-//         qualifier+noun pair, never the text from the patch.
+//         Generic names such as "fooToken", "playerToken" or "csrfToken" have
+//         no qualifier and do not match.
+//   Reasons name only fixed vocabulary (the keyword, the qualifier+noun pair),
+//   never text copied from the patch, because they end up in workflow logs.
 
 'use strict';
 
 const KEYWORDS = ['auth', 'key', 'secret', 'token', 'payment', 'stripe', 'delete'];
+
+// Pending a decision by Stephane: should "delete" also match identifier parts
+// (deleteCam, onDelete)? Currently false: "delete" is a whole word only, like
+// key and token. Flip to true to match it as an exact part instead.
+const DELETE_MATCHES_PARTS = false;
+
+// Matched against single identifier parts.
+const PART_PREFIX_KEYWORDS = ['auth', 'oauth'];
+const PART_EXACT_KEYWORDS = new Map([
+  ['payment', 'payment'],
+  ['payments', 'payment'],
+  ['stripe', 'stripe'],
+  ['secret', 'secret'],
+  ['secrets', 'secret'],
+]);
+if (DELETE_MATCHES_PARTS) {
+  PART_EXACT_KEYWORDS.set('delete', 'delete');
+  PART_EXACT_KEYWORDS.set('deletes', 'delete');
+}
+
+// Matched only against a whole identifier or path word (noisy as parts).
+const WHOLE_WORD_KEYWORDS = DELETE_MATCHES_PARTS ? ['key', 'token'] : ['key', 'token', 'delete'];
+
+// An identifier whose last part is one of these is red (JWT_SECRET, myPassword).
+const TRAILING_CREDENTIAL_NOUNS = new Set(['secret', 'password', 'passwd']);
+
+// Extensions whose files are text. A text file with no patch forces red.
+const TEXT_EXTENSIONS = new Set([
+  'cjs', 'conf', 'cfg', 'css', 'csv', 'gitignore', 'htm', 'html', 'ini', 'js', 'json',
+  'jsx', 'map', 'md', 'mjs', 'py', 'sh', 'sql', 'svg', 'toml', 'ts', 'tsx', 'txt',
+  'webmanifest', 'xml', 'yaml', 'yml',
+]);
 
 const LOCKFILES = new Set([
   'package-lock.json',
@@ -70,6 +109,7 @@ const CREDENTIAL_QUALIFIERS = [
   'session',
   'signing',
   'stripe',
+  'supabase',
   'vercel',
   'webhook',
 ];
@@ -100,10 +140,10 @@ for (const q of CREDENTIAL_QUALIFIERS) {
 // qualifier + noun pair ("GitHubToken" -> git, hub, token).
 const MAX_WINDOW = 4;
 
-const KEYWORD_FORMS = new Map();
-for (const k of KEYWORDS) {
-  KEYWORD_FORMS.set(k, k);
-  KEYWORD_FORMS.set(`${k}s`, k);
+const WHOLE_WORD_FORMS = new Map();
+for (const k of WHOLE_WORD_KEYWORDS) {
+  WHOLE_WORD_FORMS.set(k, k);
+  WHOLE_WORD_FORMS.set(`${k}s`, k);
 }
 
 const TESTS_PREFIX = 'tests/';
@@ -153,25 +193,42 @@ const credentialIn = (ident) => {
   return null;
 };
 
-// Scan text for whole-word keywords and credential identifiers.
+// In code, identifiers are runs of [A-Za-z0-9_$].
+const CODE_WORDS = /[A-Za-z0-9_$]+/g;
+// In paths, any non-alphanumeric character separates whole words.
+const PATH_WORDS = /[A-Za-z0-9]+/g;
+
+// Returns a fixed-vocabulary reason if one identifier matches a part rule.
+const identifierHit = (ident) => {
+  const parts = identifierParts(ident);
+  for (const part of parts) {
+    const k = PART_EXACT_KEYWORDS.get(part);
+    if (k) return `keyword "${k}" in identifier part`;
+    const prefix = PART_PREFIX_KEYWORDS.find((pre) => part.startsWith(pre));
+    if (prefix) return `keyword "${prefix}" in identifier part`;
+  }
+  if (parts.length > 0 && TRAILING_CREDENTIAL_NOUNS.has(parts[parts.length - 1])) {
+    return `identifier ending in "${parts[parts.length - 1]}"`;
+  }
+  const pair = credentialIn(ident);
+  if (pair) return `credential-like identifier (${pair})`;
+  return null;
+};
+
+// Scan text for keywords and credential identifiers.
 // wordSplit: regex whose matches are the "words" for the whole-word rule.
 const scanText = (text, wordSplit) => {
   const s = String(text);
   for (const w of s.match(wordSplit) || []) {
-    const k = KEYWORD_FORMS.get(w.toLowerCase());
+    const k = WHOLE_WORD_FORMS.get(w.toLowerCase());
     if (k) return `keyword "${k}"`;
   }
-  for (const ident of s.match(/[A-Za-z0-9_$]+/g) || []) {
-    const pair = credentialIn(ident);
-    if (pair) return `credential-like identifier (${pair})`;
+  for (const ident of s.match(CODE_WORDS) || []) {
+    const hit = identifierHit(ident);
+    if (hit) return hit;
   }
   return null;
 };
-
-// In code, identifiers are runs of [A-Za-z0-9_$].
-const CODE_WORDS = /[A-Za-z0-9_$]+/g;
-// In paths, any non-alphanumeric character separates words.
-const PATH_WORDS = /[A-Za-z0-9]+/g;
 
 // Only added and removed lines carry the change; skip context lines, hunk
 // headers and "\ No newline at end of file" markers. The API patch has no
@@ -201,7 +258,21 @@ const checkPath = (p) => {
   return null;
 };
 
+// Lowercase extension of the basename ("" if none); ".gitignore" -> "gitignore".
+const extension = (p) => {
+  const base = basename(p);
+  const i = base.lastIndexOf('.');
+  return i < 0 ? '' : base.slice(i + 1).toLowerCase();
+};
+
+// Text (or extensionless, so unknown) files are expected to have a patch.
+const isTextPath = (p) => {
+  const ext = extension(p);
+  return ext === '' || TEXT_EXTENSIONS.has(ext);
+};
+
 // Returns a short reason string if the patch matches a rule, else null.
+// A missing patch is handled by fileReason.
 const checkPatch = (patch) => {
   if (!patch) return null;
   const hit = scanText(changedLines(patch), CODE_WORDS);
@@ -220,6 +291,11 @@ const fileReason = (f) => {
   // Patch keywords are ignored only when every path of the file is under tests/,
   // so moving a file into tests/ does not hide its content.
   if (paths.length > 0 && paths.every(isTestsPath)) return null;
+  // No patch on a changed text file: the content was not seen, so fail closed.
+  // changes === 0 (a pure rename, an empty new file) legitimately has no patch.
+  if (!f.patch && f.changes !== 0 && paths.some(isTextPath)) {
+    return sanitizeLog(`text file changed but the API returned no patch: ${f.filename}`);
+  }
   const r = checkPatch(f.patch);
   if (r) return sanitizeLog(`${r} of ${f.filename}`);
   return null;
@@ -227,6 +303,9 @@ const fileReason = (f) => {
 
 module.exports = {
   KEYWORDS,
+  DELETE_MATCHES_PARTS,
+  WHOLE_WORD_KEYWORDS,
+  TEXT_EXTENSIONS,
   LOCKFILES,
   CREDENTIAL_QUALIFIERS,
   CREDENTIAL_NOUNS,

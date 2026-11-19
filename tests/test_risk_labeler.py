@@ -60,7 +60,9 @@ FIXTURES = [
     ("context lines are not scanned", NOT_RED, [
         {"filename": "js/cams.js", "patch": "@@ -10,3 +10,3 @@ function deleteKey(token) {\n  delete cams[key];\n-  x = 1;\n+  x = 2;\n  return token;"},
     ]),
-    ("deleteCam and tokenizer identifiers", NOT_RED, [
+    # CURRENT CHOICE, not an oversight: DELETE_MATCHES_PARTS = false in risk_match.js keeps "delete" whole-word only,
+    # so deleteCam is not red. Stephane decides whether that changes; if the constant is flipped, flip this fixture.
+    ("deleteCam (DELETE_MATCHES_PARTS = false) and tokenizer identifiers", NOT_RED, [
         {"filename": "js/menu.js", "patch": patch("+function deleteCam(id) { return tokenizer(id); }")},
     ]),
     ("plain js and docs changes", NOT_RED, [
@@ -117,6 +119,56 @@ FIXTURES = [
         {"filename": "tests/test_x.py", "patch": patch("+token = 1")},
         {"filename": "js/auth.js", "patch": patch("+x()")},
     ]),
+
+    # Kent P1: part matching for auth, oauth, payment(s), stripe, secret(s); credential pairs; trailing nouns.
+    ("P1 app.use(authMiddleware)", RED, [{"filename": "js/server.js", "patch": patch("+app.use(authMiddleware);")}]),
+    ("P1 headers.Authorization bearer", RED, [
+        {"filename": "js/api.js", "patch": patch("+headers.Authorization = 'Bearer ' + t;")}]),
+    ("P1 isAuthenticated", RED, [{"filename": "js/session.js", "patch": patch("+if (!isAuthenticated()) return;")}]),
+    ("P1 import from ./oauth.js", RED, [{"filename": "js/app.js", "patch": patch("+import { login } from './oauth.js';")}]),
+    ("P1 createPaymentIntent(amount)", RED, [{"filename": "js/shop.js", "patch": patch("+await createPaymentIntent(amount);")}]),
+    ("P1 loadStripe(pk)", RED, [{"filename": "js/shop.js", "patch": patch("+const s = await loadStripe(pk);")}]),
+    ("P1 jwt.sign(payload, JWT_SECRET)", RED, [{"filename": "js/jwt.js", "patch": patch("+jwt.sign(payload, JWT_SECRET);")}]),
+    ("P1 supabaseKey", RED, [{"filename": "js/db.js", "patch": patch("+createClient(url, supabaseKey);")}]),
+    ("P1 sessionToken", RED, [{"filename": "js/s.js", "patch": patch("+let sessionToken;")}]),
+    ("P1 private_key", RED, [{"filename": "tools/sign.py", "patch": patch("+private_key = load()")}]),
+    ("P1 myPassword", RED, [{"filename": "js/p.js", "patch": patch("+const myPassword = v;")}]),
+    ("P1 db_passwd", RED, [{"filename": "tools/db.py", "patch": patch("+db_passwd = v")}]),
+    ("P1 payments part", RED, [{"filename": "js/q.js", "patch": patch("+listPayments();")}]),
+    ("P1 path js/authMiddleware.js", RED, [{"filename": "js/authMiddleware.js", "patch": patch("+x()")}]),
+    ("P1 path js/oauth.js", RED, [{"filename": "js/oauth.js", "patch": patch("+x()")}]),
+    ("P1 path js/stripeCheckout.js", RED, [{"filename": "js/stripeCheckout.js", "patch": patch("+x()")}]),
+    ("P1 tests/ patch with auth, stripe, payment, secret parts", NOT_RED, [
+        {"filename": "tests/test_shop.py", "patch": patch(
+            "+    loadStripe = 1", "+    createPaymentIntent = 2", "+    isAuthenticated = True", "+    JWT_SECRET = 'x'")}]),
+    ("P1 tests/ filenames with auth and stripe parts", NOT_RED, [
+        {"filename": "tests/test_authMiddleware.py", "patch": patch("+x = 1")},
+        {"filename": "tests/fake_stripeCheckout.js", "patch": patch("+x()")},
+    ]),
+
+    # Kent P3: a changed text file without a patch fails closed.
+    ("P3 large rewrite of js/receiver.js with no patch", RED, [{"filename": "js/receiver.js", "changes": 9000}]),
+    ("P3 html without patch", RED, [
+        {"filename": "receiver.html", "changes": 5000}]),
+    ("P3 py without patch", RED, [{"filename": "tools/gen.py", "changes": 4000}]),
+    ("P3 json without patch", RED, [{"filename": "data/cams.json", "changes": 4000}]),
+    ("P3 css without patch", RED, [{"filename": "css/style.css", "changes": 4000}]),
+    ("P3 toml without patch", RED, [{"filename": "config.toml", "changes": 4000}]),
+    ("P3 yml without patch", RED, [{"filename": "deploy/app.yml", "changes": 4000}]),
+    ("P3 yaml without patch", RED, [{"filename": "docs/conf.yaml", "changes": 4000}]),
+    ("P3 md without patch", RED, [{"filename": "docs/notes.md", "changes": 4000}]),
+    ("P3 svg without patch", RED, [{"filename": "icons/logo.svg", "changes": 4000}]),
+    ("P3 sh without patch", RED, [{"filename": "scripts/build.sh", "changes": 4000}]),
+    ("P3 txt without patch", RED, [{"filename": "docs/a.txt", "changes": 4000}]),
+    ("P3 extensionless without patch", RED, [{"filename": "scripts/build", "changes": 4000}]),
+    ("P3 missing patch and unknown changes", RED, [{"filename": "js/sender.js"}]),
+    ("P3 binary under assets/ with no patch", NOT_RED, [{"filename": "assets/hero.png", "changes": 0}]),
+    ("P3 binary jpg with changes and no patch", NOT_RED, [{"filename": "assets/photo.jpg", "changes": 120}]),
+    ("P3 tests/ text file with no patch", NOT_RED, [{"filename": "tests/snapshot_cams.csv", "changes": 9000}]),
+    ("P3 tests/ js file with no patch", NOT_RED, [{"filename": "tests/fake_youtube.js", "changes": 9000}]),
+    ("P3 pure rename (changes 0, no patch)", NOT_RED, [
+        {"filename": "js/cam_menu.js", "previous_filename": "js/menu.js", "changes": 0}]),
+    ("P3 empty patch string on changed text file", RED, [{"filename": "js/x.js", "patch": "", "changes": 10}]),
 
     # Path rules: unchanged and not weakened.
     ("workflow edit", RED, [{"filename": ".github/workflows/ci.yml", "patch": patch("+  run: echo hi")}]),
@@ -175,12 +227,189 @@ process.stdin.on('end', () => {
     sanitized: m.fileReason({ filename: 'js/secret\n::error::x%.js' }),
     leak: m.fileReason({ filename: 'js/x.js', patch: '@@ -1 +1 @@\n+const v = "zzLeakMarker_apiKey_9f8e7d";' }),
     parts: m.identifierParts('APIKey_fooToken2AUTH_TOKEN'),
+    deleteParts: m.DELETE_MATCHES_PARTS,
   };
   process.stdout.write(JSON.stringify({ out, extra }));
 });
 """
 
+# Runs the github-script body of the workflow (extracted from the YAML, so comments cannot satisfy anything) against
+# mocked github/core/context/require objects, one scenario at a time, and records every API call.
+SCRIPT_DRIVER = r"""
+const realPath = require('path');
+const helperFile = process.argv[1];
+let input = '';
+process.stdin.on('data', (d) => { input += d; });
+process.stdin.on('end', async () => {
+  const { script, scenarios } = JSON.parse(input);
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  const WS = '/fake-ws';
+  process.env.GITHUB_WORKSPACE = WS;
+  const helperPath = realPath.join(WS, 'trusted-base', '.github', 'scripts', 'risk_match.js');
+  const results = {};
+  for (const sc of scenarios) {
+    const calls = [];
+    const fail = (status, msg) => { const e = new Error(msg); e.status = status; return e; };
+    const rec = (name, fn) => async (params) => { calls.push([name, params]); return fn ? fn(params) : { data: {} }; };
+    const github = {
+      rest: {
+        pulls: {
+          get: rec('pulls.get', () => ({ data: { changed_files: sc.files.length } })),
+          listFiles: rec('pulls.listFiles'),
+        },
+        issues: {
+          listLabelsOnIssue: rec('issues.listLabelsOnIssue'),
+          addLabels: rec('issues.addLabels', (p) => {
+            if (sc.addRedFails && p.labels.includes('risk:red')) throw fail(500, 'addLabels red 500');
+            return { data: [] };
+          }),
+          removeLabel: rec('issues.removeLabel'),
+          getLabel: rec('issues.getLabel', (p) => {
+            if (sc.holdMissing) throw fail(404, 'label not found');
+            return { data: { name: p.name } };
+          }),
+        },
+      },
+      paginate: async (fn, params) => {
+        if (fn === github.rest.pulls.listFiles) {
+          calls.push(['paginate.listFiles', params]);
+          if (sc.listFilesFails) throw fail(502, 'listFiles 502 Bad Gateway');
+          return sc.files;
+        }
+        if (fn === github.rest.issues.listLabelsOnIssue) {
+          calls.push(['paginate.listLabelsOnIssue', params]);
+          return sc.labels.map((name) => ({ name }));
+        }
+        throw new Error('unexpected paginate');
+      },
+    };
+    const logs = [];
+    const core = {
+      info: (m) => logs.push(['info', m]),
+      warning: (m) => logs.push(['warning', m]),
+      error: (m) => logs.push(['error', m]),
+    };
+    const context = {
+      repo: { owner: 'o', repo: 'r' },
+      payload: {
+        action: sc.action || 'synchronize',
+        label: sc.removedLabel ? { name: sc.removedLabel } : undefined,
+        pull_request: { number: 7, changed_files: sc.files.length },
+      },
+    };
+    const fakeRequire = (id) => {
+      if (id === 'path') return realPath;
+      if (id === helperPath) {
+        if (sc.helper === 'throw') throw new Error("Cannot find module '" + helperPath + "'");
+        if (sc.helper === 'empty') return {};
+        return require(helperFile);
+      }
+      throw new Error('unexpected require: ' + id);
+    };
+    let threw = null;
+    try {
+      await new AsyncFunction('github', 'context', 'core', 'require', script)(github, context, core, fakeRequire);
+    } catch (e) {
+      threw = String((e && e.message) || e);
+    }
+    results[sc.name] = { threw, calls, logs };
+  }
+  process.stdout.write(JSON.stringify(results));
+});
+"""
+
+SCENARIOS = [
+    {"name": "helper require fails", "helper": "throw", "files": [], "labels": ["risk:green"]},
+    {"name": "helper exports nothing", "helper": "empty", "files": [], "labels": []},
+    {"name": "listFiles 5xx", "listFilesFails": True, "files": [], "labels": ["risk:green"]},
+    {"name": "listFiles 5xx, hold label missing", "listFilesFails": True, "holdMissing": True, "files": [],
+     "labels": []},
+    {"name": "listFiles 5xx, adding red fails too", "listFilesFails": True, "addRedFails": True, "files": [],
+     "labels": []},
+    {"name": "red match", "files": [{"filename": "js/shop.js", "patch": "@@ -1 +1 @@\n+loadStripe(pk);", "changes": 1}],
+     "labels": ["risk:green", "risk:yellow"]},
+    {"name": "clean", "files": [{"filename": "js/a.js", "patch": "@@ -1 +1 @@\n+const delay = 1;", "changes": 1}],
+     "labels": ["risk:green"]},
+    {"name": "red removed while still matching", "action": "unlabeled", "removedLabel": "risk:red",
+     "files": [{"filename": ".github/workflows/ci.yml", "patch": "@@ -1 +1 @@\n+x", "changes": 1}],
+     "labels": ["hold"]},
+]
+
 fails = []
+
+
+def extract_script(text):
+    """Return the github-script `script: |` block scalar, dedented. It is executed, so JS comments are inert."""
+    lines = text.splitlines()
+    idx = next(i for i, l in enumerate(lines) if l.strip() == "script: |")
+    key_indent = len(lines[idx]) - len(lines[idx].lstrip())
+    body = []
+    for l in lines[idx + 1:]:
+        if l.strip() and len(l) - len(l.lstrip()) <= key_indent:
+            break
+        body.append(l)
+    block_indent = min(len(l) - len(l.lstrip()) for l in body if l.strip())
+    return "\n".join(l[block_indent:] for l in body)
+
+
+def run_workflow_script(wf):
+    payload = json.dumps({"script": extract_script(wf), "scenarios": SCENARIOS})
+    res = subprocess.run([shutil.which("node"), "-e", SCRIPT_DRIVER, HELPER], input=payload, capture_output=True,
+                         text=True, timeout=60)
+    if res.returncode != 0:
+        print("FAIL workflow script driver exited", res.returncode)
+        print(res.stderr)
+        sys.exit(1)
+    return json.loads(res.stdout)
+
+
+def labels_added(r):
+    return [lab for name, p in r["calls"] if name == "issues.addLabels" for lab in p["labels"]]
+
+
+def labels_removed(r):
+    return [p["name"] for name, p in r["calls"] if name == "issues.removeLabel"]
+
+
+def check_workflow_behavior(wf):
+    res = run_workflow_script(wf)
+    for name in ("helper require fails", "helper exports nothing", "listFiles 5xx"):
+        r = res[name]
+        check(f"fail closed [{name}]: adds risk:red", "risk:red" in labels_added(r), str(labels_added(r)))
+        check(f"fail closed [{name}]: checks hold exists then adds it",
+              any(n == "issues.getLabel" and p["name"] == "hold" for n, p in r["calls"]) and "hold" in labels_added(r))
+        check(f"fail closed [{name}]: rethrows", r["threw"] is not None, str(r["threw"]))
+        check(f"fail closed [{name}]: red added before hold",
+              "risk:red" in labels_added(r) and "hold" in labels_added(r)
+              and labels_added(r).index("risk:red") < labels_added(r).index("hold"))
+    r = res["helper require fails"]
+    check("fail closed: rethrows the original require error", "Cannot find module" in (r["threw"] or ""), r["threw"])
+    r = res["listFiles 5xx"]
+    check("fail closed: rethrows the original 5xx error", r["threw"] == "listFiles 502 Bad Gateway", r["threw"])
+    r = res["listFiles 5xx, hold label missing"]
+    check("hold missing: still adds risk:red", labels_added(r) == ["risk:red"], str(labels_added(r)))
+    check("hold missing: does not create hold", "hold" not in labels_added(r))
+    check("hold missing: rethrows the original error, not the 404", r["threw"] == "listFiles 502 Bad Gateway",
+          r["threw"])
+    r = res["listFiles 5xx, adding red fails too"]
+    check("red add fails: still tries hold", "hold" in labels_added(r), str(labels_added(r)))
+    check("red add fails: rethrows the original error", r["threw"] == "listFiles 502 Bad Gateway", r["threw"])
+    r = res["red match"]
+    check("red match: adds risk:red, no error", labels_added(r) == ["risk:red"] and r["threw"] is None,
+          f"{labels_added(r)} {r['threw']}")
+    check("red match: removes green and yellow", sorted(labels_removed(r)) == ["risk:green", "risk:yellow"],
+          str(labels_removed(r)))
+    check("red match: does not add hold", "hold" not in labels_added(r))
+    r = res["clean"]
+    check("clean: no label changes, no error",
+          not labels_added(r) and not labels_removed(r) and r["threw"] is None)
+    r = res["red removed while still matching"]
+    check("unlabeled red: restores it", labels_added(r) == ["risk:red"] and r["threw"] is None, str(labels_added(r)))
+    check("unlabeled red: logs the restore", any("Restoring it" in m for _, m in r["logs"]))
+    check("no scenario ever removes risk:red or hold",
+          not any(lab in ("risk:red", "hold") for r in res.values() for lab in labels_removed(r)))
+    check("failure logs are sanitized (no raw newlines)",
+          all("\n" not in m and "\r" not in m for r in res.values() for _, m in r["logs"]))
 
 
 def strip_comment(value):
@@ -281,10 +510,16 @@ def main():
     check("workflow never references PR head", not re.search(r"head\.(sha|ref)|head_ref|merge_commit|refs/pull", wf))
     check("workflow keeps no rules of its own", "KEYWORDS" not in wf and ".includes(k)" not in wf
           and "LOCKFILES" not in wf)
+    check("delete stays whole-word only (DELETE_MATCHES_PARTS = false)", data["extra"]["deleteParts"] is False)
     check("workflow keeps cap, restore and downgrade removal",
           "FILE_LIST_CAP = 3000" in wf and "Restoring it" in wf and "DOWNGRADE_LABELS = ['risk:green', 'risk:yellow']" in wf
           and "removeLabel" in wf)
-    check("workflow never removes risk:red or hold", not re.search(r"name:\s*(RED|'risk:red'|'hold')", wf))
+    remove_calls = re.findall(r"removeLabel\(\{(.*?)\}\)", wf, re.S)
+    check("workflow removeLabel calls only take the downgrade loop variable",
+          len(remove_calls) == 1 and all(re.search(r"^\s*name,\s*$", c, re.M) and not re.search(
+              r"RED|HOLD|risk:red|'hold'", c) for c in remove_calls)
+          and "for (const name of DOWNGRADE_LABELS)" in wf, str(len(remove_calls)))
+    check_workflow_behavior(wf)
 
     print(f"\n{len(FIXTURES)} fixtures, {len(fails)} failures")
     if fails:
