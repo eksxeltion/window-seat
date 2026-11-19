@@ -1,0 +1,22 @@
+# gitleaks config for Window Seat (gitleaks v8.30 syntax).
+#
+# PostHog phc_ project keys and the Sentry DSN are public client keys by
+# design: they only allow sending events and ship to every browser anyway
+# (see docs/telemetry.md). The allowlist below is kept narrow: it only
+# skips a phc_ match when it is in js/telemetry-config.js.
+
+title = "Window Seat gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "PostHog public project key in js/telemetry-config.js"
+condition = "AND"
+regexTarget = "secret"
+regexes = [
+  '''^phc_[A-Za-z0-9]{20,64}$''',
+]
+paths = [
+  '''^js/telemetry-config\.js$''',
+]

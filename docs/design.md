@@ -357,7 +357,7 @@ While the feed is paused, a persistent "Paused" pill stays on the TV, and the ni
 
 The cam player runs with `controls=0`, `disablekb=1`, `fs=0`, `iv_load_policy=3`, `modestbranding=1`, `rel=0` and `playsinline=1`. Its iframe is overscaled to 112% and centered, so the title bar and the "More videos" strip fall outside the frame, and it takes no pointer events. The music player stays hidden behind the cam.
 
-When a cam cannot play (a YouTube error such as 100, 101 or 150, no PLAYING within the load timeout, or a stall), the receiver cuts to the night field and shows "This window is closed for now. Next window in 5 seconds." centered, 32/40 Jakarta 500, over any YouTube error card, then moves on to the next cam with the existing skip. The message clears when the next cam is on screen. If every cam failed, it reads "This window is closed for now." while the receiver waits a minute before trying again.
+When a cam cannot play (a YouTube error such as 100, 101 or 150, no PLAYING within the load timeout, or a stall), the receiver cuts to the night field and shows "This window is closed for now. Next window in 5 seconds." centered, 32/40 Jakarta 500, over any YouTube error card, then moves on to the next cam with the existing skip. The message clears when the next cam is on screen. While a cam is still loading (UNSTARTED, BUFFERING or an unseen ad, up to 60s) the field stays dark, and after 3s a quiet "Loading cam..." card (same 32/40 Jakarta 500) shows in place of the black; it is not a failure and "This window is closed" does not appear. If every cam failed, it reads "This window is closed for now." while the receiver waits a minute before trying again.
 
 No debug strip unless Debug mode is on. See Debug mode.
 
