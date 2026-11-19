@@ -8,7 +8,9 @@
 #   not rerun on main for these merges.
 # - The script skips any PR that changes .github/ or .gitleaks.toml, and
 #   requires the ci check to come from .github/workflows/ci.yml on the head
-#   SHA (actions: read is needed for that lookup).
+#   SHA (actions: read is needed for that lookup). It also skips a PR whose
+#   latest Risk labeler workflow run on the head SHA is missing or did not
+#   finish with success.
 # - Scheduled runs are dry runs unless the repo variable AUTOMERGE_LIVE is
 #   exactly 'true'. Manual runs are dry runs unless dry_run is explicitly
 #   unchecked. Anything else is a dry run.

@@ -146,6 +146,20 @@ FIXTURES = [
         {"filename": "tests/test_authMiddleware.py", "patch": patch("+x = 1")},
         {"filename": "tests/fake_stripeCheckout.js", "patch": patch("+x()")},
     ]),
+    # Kent P3: the auth prefix must not match the author family.
+    ("P3 comment containing author", NOT_RED, [
+        {"filename": "js/notes.js", "patch": patch("+// written by the author of this file")},
+    ]),
+    ("P3 authors and authored identifiers", NOT_RED, [
+        {"filename": "js/credits.js", "patch": patch(
+            "+const authors = [];", "+function authoredBy(name) { return name; }")},
+    ]),
+    ("P3 path js/authors.js and authority", NOT_RED, [
+        {"filename": "js/authors.js", "patch": patch("+const authority = 'docs';")},
+    ]),
+    ("P3 authorize and authorization still red", RED, [
+        {"filename": "js/perm.js", "patch": patch("+if (!authorize(user)) return;", "+checkAuthorization();")},
+    ]),
 
     # Kent P3: a changed text file without a patch fails closed.
     ("P3 large rewrite of js/receiver.js with no patch", RED, [{"filename": "js/receiver.js", "changes": 9000}]),

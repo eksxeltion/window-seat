@@ -24,6 +24,9 @@
 //      a. Part keywords: a part equal to payment(s), stripe or secret(s), or a
 //         part starting with auth or oauth (createPaymentIntent, loadStripe,
 //         JWT_SECRET, isAuthenticated, Authorization, authMiddleware, oauth).
+//         The auth prefix does not match the author family (author, authors,
+//         authored, authoring, authority); authorize and authorization still
+//         match.
 //      b. Whole-word keywords, only for the noisy words key, token (and
 //         delete, see DELETE_MATCHES_PARTS): the whole identifier (or path
 //         word) must equal the word, optionally plural. "fooToken", "monkey",
@@ -50,6 +53,20 @@ const DELETE_MATCHES_PARTS = false;
 
 // Matched against single identifier parts.
 const PART_PREFIX_KEYWORDS = ['auth', 'oauth'];
+// "author" and its inflections are not auth. "authorize" / "authorization" are.
+const isAuthorWord = (part) =>
+  part.startsWith('author') &&
+  !part.startsWith('authorize') &&
+  !part.startsWith('authorization');
+
+const partPrefixHit = (part) => {
+  for (const pre of PART_PREFIX_KEYWORDS) {
+    if (!part.startsWith(pre)) continue;
+    if (pre === 'auth' && isAuthorWord(part)) continue;
+    return pre;
+  }
+  return null;
+};
 const PART_EXACT_KEYWORDS = new Map([
   ['payment', 'payment'],
   ['payments', 'payment'],
@@ -207,7 +224,7 @@ const identifierHit = (ident) => {
   for (const part of parts) {
     const k = PART_EXACT_KEYWORDS.get(part);
     if (k) return `keyword "${k}" in identifier part`;
-    const prefix = PART_PREFIX_KEYWORDS.find((pre) => part.startsWith(pre));
+    const prefix = partPrefixHit(part);
     if (prefix) return `keyword "${prefix}" in identifier part`;
   }
   if (parts.length > 0 && TRAILING_CREDENTIAL_NOUNS.has(parts[parts.length - 1])) {
