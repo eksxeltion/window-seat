@@ -323,6 +323,7 @@ export function sendShuffleToTv(on, s = session) {
 
 export function remoteCam(id) {
   const c = CAMS.find((x) => x.id === id);
+  if (c && c.castable === false) return; // web-only: phone only, never sent to the TV (the receiver would ignore it)
   act({ type: "cam", id }, { camId: id, camTitle: c ? c.title : "" });
 }
 
@@ -777,7 +778,8 @@ function pushChoices() {
   const quiet = { silent: true };
   sendConfigToTv(); // first, so the cam filter and picks below refer to the same list on the TV
   if (Array.isArray(local.camIds)) send({ type: "cams", ids: local.camIds, skipSleeping: local.skipSleeping !== false, onlyDaytime: !!local.onlyDaytime, silent: true }, quiet);
-  if (local.camId && CAMS.some((c) => c.id === local.camId)) send({ type: "cam", id: local.camId, silent: true }, quiet);
+  // A web-only cam playing on the phone stays on the phone: the TV starts on its own castable rotation.
+  if (local.camId && CAMS.some((c) => c.id === local.camId && c.castable !== false)) send({ type: "cam", id: local.camId, silent: true }, quiet);
   send({ type: "pin", value: false, silent: true }, quiet);
   send({ type: "interval", value: local.interval, silent: true }, quiet);
   send({ type: "volume", value: local.volume, silent: true }, quiet);

@@ -47,6 +47,9 @@ export const CAMS = [
   { id: "zMCea32gpmg", title: "Abbey Road Crossing", country: "United Kingdom", city: "London", place: "London", region: "England", type: "crossing", tags: ["street"], channel: "EarthCam", channelUrl: "https://www.youtube.com/@earthcam", default: true, timezone: "Europe/London" },
   { id: "MXmzsjABC-U", title: "London Bridge and Thames", country: "United Kingdom", city: "London", place: "London", region: "England", type: "river", tags: ["skyline"], channel: "Beach Life Cams", channelUrl: "https://www.youtube.com/@BeachLifeCams", default: true, timezone: "Europe/London" },
 ];
+// castable: false keeps a cam off the TV (the sheet's `cast` column says web-only); it still plays on the phone.
+// Every built-in cam is castable until the sheet says otherwise (the field is filled here so the shape matches the sheet's).
+for (const c of CAMS) c.castable = c.castable !== false;
 
 export const MUSIC_CHANNEL = { name: "TOKYO CHILL LAB", url: "https://www.youtube.com/channel/UCfsmpGXkHvQzOLAhCPML91Q" };
 

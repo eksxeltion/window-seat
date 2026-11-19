@@ -1,6 +1,10 @@
-"""Receiver pending-load patience (build 2026-11-18.32). A cam that stays UNSTARTED or BUFFERING on its own id (a hidden
-pre-roll ad, a slow live stream) is waited out for CAM_PATIENT_MS (60s) with no playVideo and no reload; it then
-commits (cam_shown, load_ms, no cam_failed, no "window closed") or fails with why=load_timeout. YouTube errors 2 and
+"""Receiver pending-load patience and the no-media fast fail (build 2026-11-19.33). A cam that stays UNSTARTED or
+BUFFERING on its own id while something is loading (loaded fraction above 0, current time advancing, or a hidden
+pre-roll ad) is waited out for CAM_PATIENT_MS (60s) with no playVideo and no reload; it then commits (cam_shown,
+load_ms, no cam_failed, no "window closed") or fails with why=load_timeout. A cam that loads nothing at all (loaded
+fraction 0, time frozen, the server-stitched ad live cams on Cast) fails after CAM_NO_MEDIA_MS (8s) with
+why=no_media_fast_fail and the next cam loads at once, with no "window closed" message. An error 5 reload restarts
+the 8s clock. YouTube errors 2 and
 150 fail at once. Error 5 reloads the same id once after about 2s; a second error 5 fails; it cannot loop. After 3s
 pending the "Loading cam..." card shows in place of the black field. cam_shown and cam_failed carry load_ms, cur_time,
 loaded_frac, states, ad_suspected and err5_retried.
@@ -108,6 +112,7 @@ NEW_FIELDS = ("load_ms", "cur_time", "loaded_frac", "states", "ad_suspected", "e
 
 src = open(os.path.join(ROOT, "js/receiver.js"), encoding="utf-8").read()
 check("CAM_PATIENT_MS_DEFAULT is 60000, CAM_LOAD_MS 12000", "const CAM_PATIENT_MS_DEFAULT = 60000;" in src and "const CAM_LOAD_MS = 12000;" in src)
+check("CAM_NO_MEDIA_MS_DEFAULT is 8000", "const CAM_NO_MEDIA_MS_DEFAULT = 8000;" in src)
 check("no LOAD_NUDGE_MS any more", "LOAD_NUDGE_MS" not in src)
 check("post-commit stall watchdog unchanged (STALL_NUDGE_MS 20000, STALL_SKIP_MS 15000)",
       "const STALL_NUDGE_MS = 20000;" in src and "const STALL_SKIP_MS = 15000;" in src)
@@ -140,11 +145,11 @@ def targets(pg, n):
 with sync_playwright() as p:
     b = p.chromium.launch()
 
-    # ---- a, d, e: a long buffering wait (22s UNSTARTED/BUFFERING on its own id) that then plays
+    # ---- a, d, e: a long buffering wait (22s UNSTARTED/BUFFERING on its own id, slowly loading) that then plays
     pg = new_page(b)
     long_id, = targets(pg, 1)
     until = pg.evaluate("()=>Date.now()+22000")
-    pg.evaluate("([id,u])=>{window.__ytStuck={[id]:{state:-1, until:u}};}", [long_id, until])
+    pg.evaluate("([id,u])=>{window.__ytStuck={[id]:{state:-1, until:u}}; window.__ytMedia={[id]:{loaded:0.03}};}", [long_id, until])
     n0 = mark(pg)
     t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", long_id)
     pg.wait_for_timeout(2000)
@@ -240,10 +245,10 @@ with sync_playwright() as p:
           loads(pg, late5, n0) == 2 and shown.get("err5_retried") == 1 and not queued(pg, "cam_failed", late5))
     pg.close()
 
-    # ---- f: a cam stuck forever fails at about 60s (real wait, no override), with the new fields
+    # ---- f: a cam stuck forever while loading a little fails at about 60s (real wait, no override), with the new fields
     pg = new_page(b)
     dead, = targets(pg, 1)
-    pg.evaluate("(id)=>{window.__ytStuck={[id]:{state:3, until:0}};}", dead)
+    pg.evaluate("(id)=>{window.__ytStuck={[id]:{state:3, until:0}}; window.__ytMedia={[id]:{loaded:0.01}};}", dead)
     n0 = mark(pg)
     t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", dead)
     pg.wait_for_timeout(50000)
@@ -261,6 +266,90 @@ with sync_playwright() as p:
     u = pg.evaluate("()=>document.querySelector('#unavailable-msg').textContent")
     check(f"(f) the failure swaps the card for the message: message visible, Loading card cleared ({vis(pg)})", vis(pg)[0] is True and vis(pg)[1] is False)
     check(f"(f) 'window closed' text only appears on this real failure ({u!r})", u == MSG)
+    pg.close()
+
+    # ---- g: nothing loads at all (loaded fraction 0, time frozen, BUFFERING forever): fast fail at about 8s, straight on
+    pg = new_page(b)
+    nm, = targets(pg, 1)
+    pg.evaluate("(id)=>{window.__ytStuck={[id]:{state:3, until:0}}; window.__ytMedia={[id]:{loaded:0, advance:0}};}", nm)
+    n0 = mark(pg)
+    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", nm)
+    pg.wait_for_timeout(6500)
+    check(f"(g) at 6.5s: still waiting, not failed, no message ({vis(pg)})", not queued(pg, "cam_failed", nm) and vis(pg)[0] is False)
+    # Watch the screen every 100ms from before the fail until the next cam plays: never the 'window closed' message.
+    seen = pg.evaluate("""(id)=>new Promise(res=>{const out={msg:false, failedAt:0, nextAt:0};
+      const iv=setInterval(()=>{ if(!document.querySelector('#unavailable').hidden) out.msg=true;
+        if(!out.failedAt && __receiver.state.failedCams.includes(id)) out.failedAt=Date.now();
+        if(out.failedAt && __receiver.state.camId && __receiver.state.camId!==id && __yt.cam().state===1){out.nextAt=Date.now(); clearInterval(iv); res(out);} },100);
+      setTimeout(()=>{clearInterval(iv); res(out);},9000);})""", nm)
+    f = queued(pg, "cam_failed", nm)
+    f = f[-1] if f else {}
+    print("no-media cam_failed:", f, seen)
+    dt = seen["failedAt"] - t0 if seen["failedAt"] else -1
+    check(f"(g) cam_failed why=no_media_fast_fail at about 8s ({dt} ms)", f.get("why") == "no_media_fast_fail" and 7500 <= dt < 10500)
+    check(f"(g) load_ms about 8s, trace_scope load, loaded_frac 0, ad_suspected 0 ({f.get('load_ms')})",
+          isinstance(f.get("load_ms"), int) and 7500 <= f["load_ms"] < 10500 and f.get("trace_scope") == "load" and f.get("loaded_frac") == 0 and f.get("ad_suspected") == 0)
+    check("(g) no 'reason' field on cam_failed (why carries it, docs/telemetry.md)", "reason" not in f)
+    check(f"(g) the next cam was picked and plays within 2s of the fail ({seen['nextAt'] - seen['failedAt'] if seen['nextAt'] else None} ms)",
+          seen["nextAt"] and seen["nextAt"] - seen["failedAt"] < 2000)
+    check("(g) no 'window closed' message at any point (no long hold)", seen["msg"] is False and vis(pg) == [False, False])
+    check("(g) one load, no playVideo, no reload for the dead cam", loads(pg, nm, n0) == 1 and plays(pg, n0) == 0)
+    check("(g) camDiag logged with why no_media_fast_fail", pg.evaluate("(id)=>__receiver.log.some(e=>e.type==='camDiag' && e.detail.camId===id && e.detail.why==='no_media_fast_fail')", nm))
+    pg.close()
+
+    # ---- h: loaded fraction 0 but current time advancing (media is flowing): no fast fail, it commits at 14s
+    pg = new_page(b)
+    tm, unk = targets(pg, 2)
+    until = pg.evaluate("()=>Date.now()+14000")
+    pg.evaluate("([id,u,k])=>{window.__ytStuck={[id]:{state:3, until:u}, [k]:{state:3, until:0}}; window.__ytMedia={[id]:{loaded:0, advance:1}, [k]:{loaded:null}};}", [tm, until, unk])
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", tm)
+    pg.wait_for_timeout(11000)
+    check(f"(h) time advancing: at 11s still waiting, not failed ({vis(pg)})", not queued(pg, "cam_failed", tm) and vis(pg) == [False, True])
+    shown = wait_for(pg, "cam_shown", tm, 8000) or {}
+    check(f"(h) time advancing: commits at about 14s ({shown.get('load_ms')})", isinstance(shown.get("load_ms"), int) and 13000 <= shown["load_ms"] < 18000 and not queued(pg, "cam_failed", tm))
+    # ---- i: a player that reports no loaded fraction at all (undefined): never fast-failed, the 60s ceiling applies
+    settle(pg)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", unk)
+    pg.wait_for_timeout(12000)
+    check(f"(i) loaded fraction unknown: at 12s still waiting, not failed ({vis(pg)})", not queued(pg, "cam_failed", unk) and vis(pg) == [False, True]
+          and pg.evaluate("(id)=>__receiver.state.camId!==id && !__receiver.state.failedCams.includes(id)", unk))
+    pg.evaluate("()=>__receiver.send({type:'next'})")
+    pg.close()
+
+    # ---- k: no current time reported (undefined) with loaded fraction 0: not proof of a frozen stream, no fast fail.
+    #      l: an ad flashes PLAYING between two watchdog ticks, then the cam's own id buffers with nothing loaded:
+    #         the ad counts as media, so no fast fail either (Codex review).
+    pg = new_page(b)
+    nt, flash = targets(pg, 2)
+    pg.evaluate("([a,f])=>{window.__ytStuck={[a]:{state:3, until:0}, [f]:{state:3, until:0}}; window.__ytMedia={[a]:{loaded:0, time:null}, [f]:{loaded:0}};}", [nt, flash])
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", nt)
+    pg.wait_for_timeout(11000)
+    check(f"(k) current time unknown: at 11s still waiting, not failed ({vis(pg)})", not queued(pg, "cam_failed", nt) and vis(pg) == [False, True])
+    pg.evaluate("()=>__receiver.send({type:'next'})")
+    settle(pg)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", flash)
+    pg.wait_for_function("(id)=>__yt.cam().vid===id", arg=flash, timeout=4000)
+    pg.wait_for_timeout(1500)
+    # A 150ms ad blip (another id PLAYING), back to the cam's own id BUFFERING before the next 1s tick.
+    pg.evaluate("""(id)=>{const c=__yt.cam(); c.vid='AdVideo0001'; c._set(1); setTimeout(()=>{c.vid=id; c._set(3);},150);}""", flash)
+    pg.wait_for_timeout(10000)
+    check(f"(l) an ad seen between ticks: at 11.5s still waiting, not fast-failed ({vis(pg)})", not queued(pg, "cam_failed", flash) and vis(pg) == [False, True])
+    pg.close()
+
+    # ---- j: error 5 at 6s, then the reload loads nothing: the 8s clock restarts at the reload (fail at about 16s)
+    pg = new_page(b)
+    e5, = targets(pg, 1)
+    pg.evaluate("(id)=>{window.__ytErr={[id]:{code:5,times:1,state:-1,delay:6000}}; window.__ytStuck={[id]:{state:3, until:0}}; window.__ytMedia={[id]:{loaded:0}};}", e5)
+    n0 = mark(pg)
+    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", e5)
+    pg.wait_for_timeout(9500)
+    check(f"(j) at 9.5s: the error 5 wait and reload kept it from the 8s fast fail ({loads(pg, e5, n0)} loads)", not queued(pg, "cam_failed", e5) and loads(pg, e5, n0) == 2)
+    f = wait_for(pg, "cam_failed", e5, 12000) or {}
+    dt = pg.evaluate("()=>Date.now()") - t0
+    print("err5 then no-media cam_failed:", f)
+    check(f"(j) then fast fail about 8s after the reload, err5_retried 1 ({dt} ms, load_ms {f.get('load_ms')})",
+          f.get("why") == "no_media_fast_fail" and f.get("err5_retried") == 1 and isinstance(f.get("load_ms"), int) and 15000 <= f["load_ms"] < 19500)
+    check("(j) exactly two loads (no third), no message", loads(pg, e5, n0) == 2 and vis(pg)[0] is False)
     pg.close()
 
     check("nothing left the page", not telemetry_guard.hits)

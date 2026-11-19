@@ -717,6 +717,12 @@ body.casting #panel-cams, body.casting #panel-music { z-index: 55; } /* the Cams
 .badge-now { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .badge-failed { color: var(--color-danger); font-weight: 600; }
 .badge[hidden] { display: none; }
+/* Web-only cams while casting: the row dims a little and says "Phone only" (calm, not danger); the play circle fades. */
+.phone-mark { font-weight: 600; color: var(--color-ink-secondary); white-space: nowrap; }
+.phone-mark[hidden] { display: none; }
+.cam-row.is-phone-only .cam-title { color: var(--color-ink-secondary); }
+.cam-row.is-phone-only .cam-play { cursor: default; }
+.cam-row.is-phone-only .cam-play-dot { opacity: 0.4; }
 
 /* Mix sheet (v2 / Mix picker): the Cams sheet header, Shuffle as a switch row with its caption, a bare volume line,
    a quiet row with Mute, Pause and Next mix, then typographic mix rows (only the playing row has a fill). */

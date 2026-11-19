@@ -23,7 +23,10 @@ with sync_playwright() as p:
     c0=st()['camId']; send('JSON.stringify({type:"next"})'); pg.wait_for_timeout(9000)
     check(f"next via JSON string: {c0} -> {st()['camId']}", st()['camId']!=c0)
     check("on-TV flash shown", pg.evaluate("()=>document.querySelector('#cmd-toast').textContent")=="Next cam")
-    send('{type:"cam", id:"u7kCTaCX_J4"}'); pg.wait_for_timeout(9000); check("cam pick", st()['camId']=="u7kCTaCX_J4")
+    # Castable cams from the list the receiver actually uses (the live sheet marks some cams web-only, build .33).
+    ok=pg.evaluate("async()=>(await import('./js/data.js')).CAMS.filter(c=>c.castable!==false).map(c=>c.id)")
+    pick=[i for i in ok if i!=st()['camId']][0]
+    send(f'{{type:"cam", id:"{pick}"}}'); pg.wait_for_timeout(9000); check(f"cam pick {pick}", st()['camId']==pick)
     send('{type:"interval", value:30}'); check("interval 30", st()['interval']==30)
     send('{type:"pin", value:true}'); check("pin", st()['pinned'] is True)
     send('{type:"volume", value:35}'); pg.wait_for_timeout(500); check("volume 35 applied", pg.evaluate("()=>__receiver.music().vol")==35)
@@ -36,7 +39,8 @@ with sync_playwright() as p:
     check("cam playing again", pg.evaluate("()=>__receiver.cam().state") in (1,3) and st()['paused'] is False and not pg.is_visible("#paused-pill"))
     check("cam still muted", pg.evaluate("()=>__receiver.cam().muted") is True)
     m0=st()['mixId']; send('{type:"nextMix"}'); pg.wait_for_timeout(5000); check("next mix", st()['mixId']!=m0 and pg.evaluate("()=>__receiver.music().state") in (1,3))
-    send('{type:"cams", ids:["u7kCTaCX_J4","VM18f-IIUTw"]}'); check("cams filter", st()['poolIds']==["u7kCTaCX_J4","VM18f-IIUTw"] or st()['poolIds'] is not None)
-    send('{type:"pin", value:false}'); send('{type:"next"}'); pg.wait_for_timeout(9000); check(f"next stays in filter: {st()['camId']}", st()['camId'] in ["u7kCTaCX_J4","VM18f-IIUTw"])
+    two=ok[:2]
+    send(f'{{type:"cams", ids:{two!r}}}'.replace("'", '"')); check("cams filter", st()['poolIds']==two or st()['poolIds'] is not None)
+    send('{type:"pin", value:false}'); send('{type:"next"}'); pg.wait_for_timeout(9000); check(f"next stays in filter: {st()['camId']}", st()['camId'] in two)
     b.close()
 print(logs); sys.exit(1 if fails or logs else 0)
