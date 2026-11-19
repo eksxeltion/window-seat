@@ -43,7 +43,7 @@ def px(v):
 
 
 # The next load on the cam player fails: with a YouTube error code, or (code None) it buffers and never plays, even
-# when nudged with playVideo or reloaded by the receiver's one retry of the same id.
+# when nudged with playVideo or reloaded.
 FAIL_NEXT = """(code) => {
   const yt = __yt.cam();
   const cam = __receiver.state.camId;
@@ -94,7 +94,7 @@ recv_js = re.search(r'BUILD = "([^"]+)"', read("js/receiver.js")).group(1)
 sw = re.search(r'CACHE_VERSION = "([^"]+)"', read("sw.js")).group(1)
 rx_v = set(re.findall(r"\?v=([\d.-]+)", read("receiver.html")))
 check(f"stamp: build.js, receiver.js, sw.js and receiver.html ?v= all {BUILD}", build_js == recv_js == sw == BUILD and rx_v == {BUILD})
-check("receiver.js: CAM_LOAD_MS still 12000", "const CAM_LOAD_MS = 12000;" in read("js/receiver.js"))
+check("receiver.js: CAM_LOAD_MS 12000 and CAM_PATIENT_MS_DEFAULT 60000", "const CAM_LOAD_MS = 12000;" in read("js/receiver.js") and "const CAM_PATIENT_MS_DEFAULT = 60000;" in read("js/receiver.js"))
 pv = re.search(r'camPlayer = new window\.YT\.Player\("cam-player", \{.*?playerVars: \{([^}]*)\}', read("js/receiver.js"), re.S).group(1)
 check("cam playerVars keep controls 0, disablekb 1, fs 0, iv_load_policy 3, modestbranding 1, rel 0, playsinline 1",
       all(k in pv for k in ("controls: 0", "disablekb: 1", "fs: 0", "iv_load_policy: 3", "modestbranding: 1", "rel: 0", "playsinline: 1")))
@@ -243,23 +243,24 @@ with sync_playwright() as p:
               wait_until(rx, "()=>__receiver.state.camId && __receiver.state.camId!==window.__failTarget && __yt.cam().state===1 && document.querySelector('#unavailable').hidden", 6000)
               and not rx.is_visible("#unavailable") and rx.evaluate("()=>__receiverDebug.unavailable") is False)
 
-    # ------------------------------------------------------------ a load that never reaches PLAYING (CAM_LOAD_MS, 12s)
-    # Nudged with playVideo, reloaded once at 12s (no message then), and failed only after the retry window.
+    # ------------------------------------------------------------ a load that never reaches PLAYING (CAM_PATIENT_MS, 60s)
+    # Waited out with no playVideo, no reload and no message; after 3s the "Loading cam..." card replaces the black field.
+    # (The 60s failure itself is covered by test_receiver_stall_retry.py.)
     rx.evaluate(FAIL_NEXT, None)
+    n_calls = rx.evaluate("()=>__yt.cam().calls.length")
     check("never playing: the field is up while it loads, no message yet", wait_until(rx, "()=>window.__failTarget!==null", 3000) and not rx.is_visible("#unavailable"))
     LOADS = "()=>__yt.cam().calls.filter(c=>c[0]==='loadVideoById' && c[1]===window.__failTarget).length"
-    retried = wait_until(rx, LOADS + "===2", 15000)
-    check("never playing: nudged with playVideo before the 12s cutoff", rx.evaluate("()=>__receiver.log.some(e=>e.type==='loadNudge' && e.detail.camId===window.__failTarget)"))
-    check("never playing: at 12s the same id is reloaded once and no message shows",
-          retried and not rx.is_visible("#unavailable") and not rx.evaluate("()=>__receiver.state.failedCams.includes(window.__failTarget)"))
-    ok = wait_until(rx, "()=>!document.querySelector('#unavailable').hidden", 16000)
-    check("never playing: only one retry", rx.evaluate(LOADS) == 2)
-    cv = rx.evaluate(COVER)
-    check(f"never playing: after the load timeout the message shows on the night field ({cv['text']!r}, {cv['top']})",
-          ok and cv["text"] == MSG and cv["top"] in ("unavailable", "unavailable-msg") and rx.evaluate("()=>__receiver.state.failedCams.includes(window.__failTarget)"))
-    rx.evaluate("()=>{ delete __yt.cam().loadVideoById; delete __yt.cam().playVideo; }")
-    check("never playing: the next cam plays and the message is gone",
-          wait_until(rx, "()=>__receiver.state.camId!==window.__failTarget && __yt.cam().state===1 && document.querySelector('#unavailable').hidden", 6000))
+    rx.wait_for_timeout(14000)
+    check("never playing: past the old 12s cutoff: still one load, no nudge, no message, not failed",
+          rx.evaluate(LOADS) == 1 and not rx.evaluate("(n)=>__yt.cam().calls.slice(n).some(c=>c[0]==='playVideo')", n_calls)
+          and not rx.is_visible("#unavailable") and not rx.evaluate("()=>__receiver.state.failedCams.includes(window.__failTarget)"))
+    lc = rx.evaluate("""()=>{const e=document.querySelector('#loading'), m=document.querySelector('#loading-msg'), r=m.getBoundingClientRect(), cs=getComputedStyle(m);
+      return {hidden:e.hidden, text:m.textContent, fs:parseFloat(cs.fontSize), color:cs.color, align:cs.textAlign, w:r.width>0}}""")
+    check(f"never playing: the Loading card shows, large and centered ({lc})",
+          not lc["hidden"] and lc["text"] == "Loading cam..." and near(lc["fs"], 32) and lc["color"] == "rgb(243, 245, 247)" and lc["align"] == "center" and lc["w"])
+    rx.evaluate("()=>{ delete __yt.cam().loadVideoById; __receiver.send({type:'next'}); }")
+    check("never playing: a pick clears the card and the next cam plays",
+          wait_until(rx, "()=>__receiver.state.camId!==window.__failTarget && __yt.cam().state===1 && document.querySelector('#loading').hidden && document.querySelector('#unavailable').hidden", 8000))
     ctx.close()
 
     # ------------------------------------------------------------ 720p and 540p: sizes scale with vh, no 1080p px floors; reduced motion

@@ -71,6 +71,9 @@
   P.getCurrentTime = function () {
     return this.time;
   };
+  P.getVideoLoadedFraction = function () {
+    return this.state === S.PLAYING ? 1 : 0;
+  };
   P.mute = function () {
     this._rec("mute", arguments);
     this.muted = true;

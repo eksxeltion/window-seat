@@ -8,9 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <meta http-equiv="Cache-Control" content="no-cache">
-  <link rel="stylesheet" href="css/receiver.css?v=2026-11-17.31">
+  <link rel="stylesheet" href="css/receiver.css?v=2026-11-18.32">
   <!-- The Cast receiver framework is injected by js/receiver.js (skipped with ?debug=1) so it can never block the page. -->
-  <script type="module" src="js/receiver.js?v=2026-11-17.31"></script>
+  <script type="module" src="js/receiver.js?v=2026-11-18.32"></script>
 </head>
 <body>
   <video id="keepalive" loop muted autoplay playsinline style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none"></video>
@@ -26,6 +26,8 @@
   <div id="pause-cover" aria-hidden="true"></div>
   <!-- Unavailable stream: night field and our own message over any YouTube error card, until the next cam plays. -->
   <div id="unavailable" role="status" hidden><p id="unavailable-msg"></p></div>
+  <!-- Loading card: shown after 3s of a pending cam load (js/receiver.js), cleared when the cam commits. -->
+  <div id="loading" role="status" hidden><p id="loading-msg">Loading cam...</p></div>
   <!-- Launch splash (Shade lockup and "Opening a window" are in the image): shown until the first cam is PLAYING,
        then faded out once by js/receiver.js. Later cam swaps use #blackout only. -->
   <div id="splash">

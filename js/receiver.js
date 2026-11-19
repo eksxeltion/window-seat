@@ -10,17 +10,19 @@ import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-17.31"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-18.32"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
 const YS = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
 
 const FADE_MS = 400;
-const CAM_LOAD_MS = 12000; // a new cam must reach PLAYING by then or it is skipped
+const CAM_LOAD_MS = 12000; // pending cam in a state that is not a wait (not UNSTARTED, BUFFERING or an ad) this long: skipped
+const CAM_PATIENT_MS_DEFAULT = 60000; // pending cam still UNSTARTED or BUFFERING on its own id (or playing an ad): wait this long in total
+const LOADING_CARD_MS = 3000; // pending this long: the "Loading cam..." card replaces the black field
+const ERR5_RETRY_MS = 2000; // error 5 while pending: reload the same id once after this delay
 const STALL_NUDGE_MS = 20000; // visible cam not PLAYING this long: nudge playVideo
 const STALL_SKIP_MS = 15000; // still not PLAYING this long after the nudge: skip it
-const LOAD_NUDGE_MS = 4000; // pending cam still UNSTARTED or BUFFERING this long: nudge playVideo once per load window
 const RETRY_ALL_FAILED_MS = 60000;
 const FLASH_MS = 1800; // on-TV confirmation of a phone command
 const PIN_FLASH_MS = 5000; // the pin-on toast stays longer so it can be read from the couch
@@ -39,6 +41,9 @@ function msParam(name, fallback) {
   const n = Number(PARAMS.get(name));
   return PARAMS.has(name) && Number.isFinite(n) && n > 0 ? n : fallback;
 }
+/* Test override for the pending-load patience: ?camPatientMs=... Only a URL that carries the parameter changes it
+   (the registered receiver URL never does), same pattern as the pause timeout above. */
+const CAM_PATIENT_MS = msParam("camPatientMs", CAM_PATIENT_MS_DEFAULT);
 const $ = (id) => document.getElementById(id);
 const quietly = (fn) => {
   try {
@@ -422,7 +427,7 @@ function isExplicitDisconnect(event) {
 let camPlayer = null;
 let camReady = false;
 let token = 0; // bumps on every load so stale events are ignored
-let pending = null; // { camId, startedAt, loading, nudged, retried, windowNudged }
+let pending = null; // { camId, startedAt, loading, err5 (0 none, 1 retry waiting, 2 reloaded), adSeen, lastPatientAt, cardShown }
 let nextSwapAt = 0;
 let stall = null; // { at, nudged } while the visible cam is not PLAYING
 let retryTimer = 0;
@@ -492,7 +497,10 @@ const blackout = $("blackout");
 /* Lifting the field (a cam is on screen again) also clears the unavailable message. */
 const fadeTo = (on) => {
   blackout.classList.toggle("on", on);
-  if (!on) showUnavailable(false);
+  if (!on) {
+    showUnavailable(false);
+    showLoading(false);
+  }
 };
 
 /* Unavailable stream: our own message on the night field, in place of YouTube's error card. Shown when a cam fails
@@ -510,6 +518,24 @@ function showUnavailable(on, text = UNAVAILABLE_TEXT) {
     hideSplash(); // first-cam failures must not stay under the launch splash
   }
   el.hidden = !on;
+}
+
+/* "Loading cam..." card: after LOADING_CARD_MS of a pending load the black field gets a calm card, so a slow cam (a
+   hidden ad, a live stream that takes its time) does not look like a dead TV. Not over the launch splash (it already
+   says "Opening a window"). Cleared with the field when the cam commits, and swapped for the unavailable message on a
+   real failure. The player itself stays hidden: no YouTube spinner, ad or error card ever shows. */
+function showLoading(on) {
+  const el = $("loading");
+  if (on) {
+    // The previous cam's lower third sits above the card (same z-index, later in the DOM): fade it out now.
+    clearTimeout(lowerThirdTimer);
+    const cap = $("caption");
+    if (cap) {
+      cap.classList.add("quiet");
+      cap.setAttribute("aria-hidden", "true");
+    }
+  }
+  if (el) el.hidden = !on;
 }
 
 /* Pause cover: the night field over the cam while the feed is paused, so YouTube's paused UI never shows. On resume
@@ -601,19 +627,38 @@ function beginLoad(camId, reason = "rotate", origin = reason) {
   rotateReason = reason;
   rotateOrigin = origin;
   shownReason = reason === "cam" ? "pick" : reason;
-  pending = { camId, startedAt: Date.now(), loading: false, nudged: 0, retried: 0, windowNudged: false };
+  pending = { camId, startedAt: Date.now(), loading: false, err5: 0, adSeen: false, lastPatientAt: Date.now(), cardShown: false };
   trace = { at: null, states: [], ignoredPlaying: 0, otherVid: undefined, errors: [] };
   stall = null;
+  showLoading(false);
   fadeTo(true);
   setTimeout(() => {
     if (my !== token) return;
     pending.loading = true;
     pending.startedAt = Date.now();
+    pending.lastPatientAt = pending.startedAt;
     camMute();
     trace.at = Date.now();
     quietly(() => camPlayer.loadVideoById(camId));
     camMute();
   }, s.camId ? FADE_MS : 0);
+}
+
+/* The wait, as telemetry fields for cam_shown and cam_failed (never throws). */
+function loadFields(mine) {
+  const t = fin(quietly(() => camPlayer.getCurrentTime()));
+  const loadedRaw = fin(quietly(() => camPlayer.getVideoLoadedFraction()));
+  const loaded = loadedRaw === undefined ? undefined : Math.min(1, Math.max(0, loadedRaw));
+  return {
+    load_ms: sinceLoad(),
+    cur_time: roundTo(t, 10),
+    loaded_frac: roundTo(loaded, 100),
+    states: trace ? trace.states.join(",") : undefined,
+    ad_suspected: mine && (mine.adSeen || (trace && trace.ignoredPlaying > 0)) ? 1 : 0,
+    err5_retried: mine && mine.err5 === 2 ? 1 : 0, // 2 = the reload was actually made
+    nudged: 0, // no playVideo while pending any more; the field stays for continuity
+    retried: mine && mine.err5 === 2 ? 1 : 0, // the only reload is the error 5 one (same as err5_retried)
+  };
 }
 
 function commitPending() {
@@ -622,11 +667,10 @@ function commitPending() {
     pending = null;
     return;
   }
-  const recovery = { nudged: pending.nudged ? 1 : 0, retried: pending.retried ? 1 : 0 };
+  const loadDiag = { ...loadFields(pending), ignored_playing: trace ? intOr(trace.ignoredPlaying, 0) : undefined };
   s.camId = cam.id;
   pending = null;
   stall = null;
-  const loadDiag = { load_ms: sinceLoad(), ignored_playing: trace ? intOr(trace.ignoredPlaying, 0) : undefined, ...recovery };
   nextSwapAt = Date.now() + s.interval * 1000;
   if (s.paused) {
     // Changed cam while paused: show its first frame, then hold it (no autoplay).
@@ -653,7 +697,7 @@ function commitPending() {
 function failCam(camId, why) {
   note("camError", { camId, why });
   const mine = pending && pending.camId === camId ? pending : null;
-  const recovery = { nudged: mine && mine.nudged ? 1 : 0, retried: mine && mine.retried ? 1 : 0 };
+  const recovery = mine && mine.loading ? quietly(() => loadFields(mine)) : { nudged: 0, retried: 0 };
   const scope = why === "load timeout" && pending && pending.camId === camId ? "load" : "snapshot";
   const diag = why === "load timeout" || why === "stalled" ? quietly(() => camDiag(camId, scope)) : undefined;
   if (diag) {
@@ -675,6 +719,7 @@ function failCam(camId, why) {
   pending = null;
   stall = null;
   const next = pick(camId, 1);
+  showLoading(false);
   showUnavailable(true, next ? UNAVAILABLE_TEXT : ALL_UNAVAILABLE_TEXT);
   if (next) {
     beginLoad(next, "skip", from);
@@ -702,6 +747,7 @@ function onCamState(e) {
     else if (trace) {
       trace.ignoredPlaying++;
       trace.otherVid = vidOr(vid);
+      pending.adSeen = true;
     }
   }
 }
@@ -725,6 +771,24 @@ function onCamError(e) {
     } catch {
       // telemetry never blocks the skip
     }
+    // Error 5 (HTML5 player error) while this cam loads: reload the same id once after a short delay. A second error 5
+    // fails the cam (err5 only ever goes 0 -> 1 -> 2, so it cannot loop). 2, 100, 101, 150, 153 and the rest fail at once.
+    if (code === "5" && pending && pending.loading && pending.camId === camId) {
+      if (pending.err5 === 0) {
+        const mine = pending;
+        mine.err5 = 1;
+        note("err5Retry", { camId, ms: sinceLoad() });
+        setTimeout(() => {
+          if (pending !== mine || mine.err5 !== 1) return;
+          mine.err5 = 2;
+          camMute();
+          quietly(() => camPlayer.loadVideoById(camId));
+          camMute();
+        }, ERR5_RETRY_MS);
+        return;
+      }
+      if (pending.err5 === 1) return; // a repeat while the reload is waiting
+    }
     failCam(camId, "error");
   }
 }
@@ -742,32 +806,35 @@ function pendingStalled() {
   return true;
 }
 
-/* Pending load watchdog. A stuck load is nudged with playVideo after LOAD_NUDGE_MS (checked on every tick, so a
-   brief PAUSED at that moment only delays it), and at CAM_LOAD_MS it is reloaded once with a fresh load timer.
-   The trace clock keeps running from the first loadVideoById, so cam_failed.ms and states span both windows.
-   Anything else, or a second timeout, fails the cam as before. */
+/* An ad (or anything that is not this cam) is playing in the player: it reports another video id while PLAYING or
+   BUFFERING. The player is hidden behind the field, so the ad plays unseen and must be waited out. */
+function pendingOtherVideo() {
+  const st = quietly(() => camPlayer.getPlayerState());
+  if (st !== YS.PLAYING && st !== YS.BUFFERING) return false;
+  const vid = quietly(() => camPlayer.getVideoData().video_id);
+  return !!vid && vid !== pending.camId;
+}
+
+/* Pending load watchdog. No playVideo while pending (it kills the pre-roll ad some live cams start with). A load that
+   is UNSTARTED or BUFFERING on its own id, or playing an ad, is waited out for CAM_PATIENT_MS in total, measured from
+   the first loadVideoById (the trace clock). A load in any other state (PAUSED, ENDED, CUED, PLAYING on its own id
+   is a commit already) for CAM_LOAD_MS in a row is not going to recover and fails at once. No timeout reload: it
+   would restart the ad and the buffering; the only reload is the single error 5 one in onCamError. */
 function pendingTick(now) {
   if (!pending.loading) return;
   const age = now - pending.startedAt;
-  if (age > CAM_LOAD_MS) {
-    if (!pending.retried && pendingStalled()) {
-      pending.retried = 1;
-      pending.windowNudged = false;
-      pending.startedAt = now;
-      note("loadRetry", { camId: pending.camId, ms: sinceLoad() });
-      camMute();
-      quietly(() => camPlayer.loadVideoById(pending.camId));
-      camMute();
-    } else {
-      failCam(pending.camId, "load timeout");
-    }
+  const ad = pendingOtherVideo();
+  if (ad) pending.adSeen = true;
+  // A scheduled error 5 reload has priority over the state cutoff (it must get to run); the total cap still applies.
+  if (ad || pending.err5 === 1 || pendingStalled()) pending.lastPatientAt = now;
+  if (age > CAM_PATIENT_MS || now - pending.lastPatientAt > Math.min(CAM_LOAD_MS, CAM_PATIENT_MS)) {
+    failCam(pending.camId, "load timeout");
     return;
   }
-  if (!pending.windowNudged && age >= LOAD_NUDGE_MS && pendingStalled()) {
-    pending.windowNudged = true;
-    pending.nudged = 1;
-    note("loadNudge", { camId: pending.camId, ms: sinceLoad() });
-    camPlay();
+  if (!pending.cardShown && age >= LOADING_CARD_MS && splashDone) {
+    pending.cardShown = true;
+    showUnavailable(false);
+    showLoading(true);
   }
 }
 

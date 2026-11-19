@@ -1,8 +1,9 @@
-"""Receiver pending-load recovery: a cam load that stalls in UNSTARTED or BUFFERING on its own video id (no player
-error) is nudged with playVideo at about 4s, reloaded once (same id, fresh load timer) at CAM_LOAD_MS instead of
-failing, committed if PLAYING arrives in the retry window (cam_shown retried=1 nudged=1), and failed after the retry
-window if it never plays (cam_failed why=load_timeout retried=1, unavailable message, skip). A real YouTube error for
-the cam still fails at once with no retry.
+"""Receiver pending-load patience (build 2026-11-18.32). A cam that stays UNSTARTED or BUFFERING on its own id (a hidden
+pre-roll ad, a slow live stream) is waited out for CAM_PATIENT_MS (60s) with no playVideo and no reload; it then
+commits (cam_shown, load_ms, no cam_failed, no "window closed") or fails with why=load_timeout. YouTube errors 2 and
+150 fail at once. Error 5 reloads the same id once after about 2s; a second error 5 fails; it cannot loop. After 3s
+pending the "Loading cam..." card shows in place of the black field. cam_shown and cam_failed carry load_ms, cur_time,
+loaded_frac, states, ad_suspected and err5_retried.
 Runs against receiver.html?debug=1&telemetry=1 with the stubbed YouTube API (tests/fake_youtube.js). No telemetry
 message is sent, so events stay in the receiver buffer (window.__telemetry.queue()) and nothing leaves the page;
 telemetry_guard aborts the real hosts anyway.
@@ -22,36 +23,36 @@ if base.endswith(".html"):
     base = base.rsplit("/", 1)[0]
 
 # Test behaviours on the cam player, on top of the fake:
-#   window.__ytStuck[id] = { state, loads }: the first `loads` loadVideoById calls of id stay in `state` (-1 or 3)
-#     and playVideo does nothing while that id is stuck; later loads play normally.
-#   window.__ytErr[id] = code: loading id fires onError(code) for it.
+#   window.__ytStuck[id] = { state, until }: loads of id stay in `state` (-1 or 3) until Date.now() >= until (then PLAYING).
+#     playVideo does nothing while stuck. until 0 means forever.
+#   window.__ytErr[id] = { code, times, state, delay }: the first `times` loads of id go to `state` (default -1) and fire
+#     onError(code) after `delay` ms (default 200), later loads play.
 PATCH = """
 (function () {
   const P = window.YT.Player.prototype, load = P.loadVideoById, play = P.playVideo;
-  const stuckNow = (p) => p.kind === "cam" && p.__stuck && p.__stuck === p.vid;
   P.loadVideoById = function (arg) {
     const id = typeof arg === "object" && arg ? arg.videoId : arg;
     const st = this.kind === "cam" && (window.__ytStuck || {})[id];
     const err = this.kind === "cam" ? (window.__ytErr || {})[id] : undefined;
-    this.__stuck = null;
-    if (err !== undefined) {
+    if (err && err.times > 0) {
+      err.times--;
       this._rec("loadVideoById", arguments);
       this.vid = id;
-      this._set(-1);
-      setTimeout(() => this.vid === id && this.opts.events.onError({ data: err, target: this }), 200);
+      this._set(err.state === undefined ? -1 : err.state);
+      setTimeout(() => this.vid === id && this.opts.events.onError({ data: err.code, target: this }), err.delay || 200);
       return;
     }
-    if (!st || st.loads <= 0) return load.apply(this, arguments);
-    st.loads--;
+    if (!st) return load.apply(this, arguments);
     window.__firstLoadAt = window.__firstLoadAt || {};
     if (!window.__firstLoadAt[id]) window.__firstLoadAt[id] = Date.now();
     this._rec("loadVideoById", arguments);
     this.vid = id;
-    this.__stuck = id;
     this._set(st.state);
+    if (st.until) setTimeout(() => this.vid === id && this._set(1), Math.max(0, st.until - Date.now()));
   };
   P.playVideo = function () {
-    if (stuckNow(this)) return this._rec("playVideo", arguments);
+    const st = this.kind === "cam" && (window.__ytStuck || {})[this.vid];
+    if (st && (!st.until || Date.now() < st.until)) return this._rec("playVideo", arguments);
     return play.apply(this, arguments);
   };
 })();
@@ -82,149 +83,185 @@ def wait_for(pg, name, cam_id, ms):
 
 
 def mark(pg):
-    """Baseline for loads(): the cam player's call count now."""
     return pg.evaluate("()=>__yt.cam().calls.length")
 
 
 def loads(pg, cam_id, since=0):
-    """loadVideoById calls for cam_id on the cam player since the baseline from mark()."""
     return pg.evaluate("([id,n])=>__yt.cam().calls.slice(n).filter(c=>c[0]==='loadVideoById' && c[1]===id).length", [cam_id, since])
 
 
-# Index of each call on the cam player, to order playVideo against the loads of one id.
-CALLS = "(id)=>__yt.cam().calls.map((c,i)=>[c[0], c[1], i]).filter(c=>c[0]==='playVideo' || (c[0]==='loadVideoById' && c[1]===id)).map(c=>c[0])"
+def plays(pg, since=0):
+    return pg.evaluate("(n)=>__yt.cam().calls.slice(n).filter(c=>c[0]==='playVideo').length", since)
 
 
 def settle(pg):
-    pg.wait_for_function("()=>__receiver.state.camId && __yt.cam().state===1 && document.querySelector('#unavailable').hidden", timeout=10000)
+    pg.wait_for_function("()=>__receiver.state.camId && __yt.cam().state===1 && document.querySelector('#unavailable').hidden && document.querySelector('#loading').hidden", timeout=15000)
     pg.wait_for_timeout(500)
 
 
+def vis(pg):
+    """(unavailable visible, loading card visible)"""
+    return pg.evaluate("()=>[!document.querySelector('#unavailable').hidden, !document.querySelector('#loading').hidden]")
+
+
+NEW_FIELDS = ("load_ms", "cur_time", "loaded_frac", "states", "ad_suspected", "err5_retried")
+
 src = open(os.path.join(ROOT, "js/receiver.js"), encoding="utf-8").read()
-check("CAM_LOAD_MS still 12000", "const CAM_LOAD_MS = 12000;" in src)
+check("CAM_PATIENT_MS_DEFAULT is 60000, CAM_LOAD_MS 12000", "const CAM_PATIENT_MS_DEFAULT = 60000;" in src and "const CAM_LOAD_MS = 12000;" in src)
+check("no LOAD_NUDGE_MS any more", "LOAD_NUDGE_MS" not in src)
 check("post-commit stall watchdog unchanged (STALL_NUDGE_MS 20000, STALL_SKIP_MS 15000)",
       "const STALL_NUDGE_MS = 20000;" in src and "const STALL_SKIP_MS = 15000;" in src)
 check("no em dashes in receiver.js or this test", all(chr(0x2014) not in open(os.path.join(ROOT, f), encoding="utf-8").read()
                                                        for f in ("js/receiver.js", "tests/test_receiver_stall_retry.py")))
 
-with sync_playwright() as p:
-    b = p.chromium.launch()
+
+def new_page(b, query=""):
     pg = b.new_page(viewport={"width": 1280, "height": 720})
     pg.route("**/iframe_api", lambda r: r.fulfill(status=200, content_type="text/javascript", body=FAKE_YT))
     pg.route("**/cast_receiver_framework.js", lambda r: r.abort())
     pg.route("https://fonts.googleapis.com/**", lambda r: r.abort())
     pg.route("**/gviz/tq*", lambda r: r.abort())
     pg.on("pageerror", lambda e: logs.append(f"PAGEERROR: {e}"))
-    pg.goto(base + "/receiver.html?debug=1&telemetry=1")
+    pg.goto(base + "/receiver.html?debug=1&telemetry=1" + query)
     pg.wait_for_function("()=>window.__receiver && __receiver.state.camId", timeout=15000)
     settle(pg)
-    # Unavailable watcher: the first time the message is visible after window.__uFrom.
-    pg.evaluate("""()=>{window.__uFrom=0; window.__uAt=0; const tick=()=>{const u=document.querySelector('#unavailable');
-      if(window.__uFrom && !window.__uAt && !u.hidden){window.__uAt=Date.now(); window.__uText=document.querySelector('#unavailable-msg').textContent;}
-      requestAnimationFrame(tick)}; tick();}""")
+    return pg
 
+
+def targets(pg, n):
     ids = pg.evaluate("async()=>(await import('./js/data.js')).CAMS.map(c=>c.id)")
     cur = pg.evaluate("()=>__receiver.state.camId")
-    rec, dead, err, left = [i for i in ids if i != cur][:4]
-    pg.evaluate("([r,d,l])=>{window.__ytStuck={[r]:{state:-1, loads:1}, [d]:{state:3, loads:99}, [l]:{state:3, loads:1}};}", [rec, dead, left])
-    # Controlled rotation pool without the three targets: the automatic skip after a failure never loads one of
-    # them, so every target is loaded only by the explicit pick of its own case.
-    safe = [i for i in ids if i not in (rec, dead, err, left)]
-    pg.evaluate("(ids)=>__receiver.send({type:'cams', ids, skipSleeping:false, onlyDaytime:false})", safe)
-    check("controlled pool excludes the targets", pg.evaluate("(t)=>!t.includes(__receiver.state.camId)", [rec, dead, err, left]))
+    t = [i for i in ids if i != cur][:n]
+    # Controlled pool without the targets: the automatic skip after a failure never loads one of them.
+    pg.evaluate("(ids)=>__receiver.send({type:'cams', ids, skipSleeping:false, onlyDaytime:false})", [i for i in ids if i not in t])
+    return t
 
-    # 1-3: stuck UNSTARTED on the first load, nudged before 12s, retried at 12s, plays in the retry window
-    n0 = mark(pg)
-    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", rec)
-    pg.wait_for_function("(id)=>__receiver.log.some(e=>e.type==='loadNudge' && e.detail.camId===id)", arg=rec, timeout=9000)
-    nudge = pg.evaluate("(id)=>__receiver.log.find(e=>e.type==='loadNudge' && e.detail.camId===id)", rec)
-    first = pg.evaluate("(id)=>window.__firstLoadAt[id]", rec)
-    print("nudge:", nudge, "first load at", first)
-    # LOAD_NUDGE_MS is 4000 and camTick runs every 1000 ms, so the nudge lands 4000-5000 ms after the first load
-    # (6000 allows for timer jitter); a regression to a later nudge, for example 8s, fails here.
-    check(f"(1) nudged about 4s after the first loadVideoById ({nudge['t'] - first} ms, trace {nudge['detail'].get('ms')} ms)",
-          4000 <= nudge["t"] - first <= 6000 and 4000 <= nudge["detail"].get("ms", 0) <= 6000)
-    seq = pg.evaluate(CALLS.replace("__yt.cam().calls.map", "__yt.cam().calls.slice(" + str(n0) + ").map"), rec)
-    check(f"(1) playVideo recorded on the fake player after the first load ({seq})", seq[:2] == ["loadVideoById", "playVideo"])
-    check("(1) still pending, not failed, no message", not queued(pg, "cam_failed", rec) and pg.evaluate("()=>__receiver.state.camId") != rec
-          and pg.evaluate("()=>document.querySelector('#unavailable').hidden"))
-    shown = wait_for(pg, "cam_shown", rec, 12000) or {}
-    print("recovered cam_shown:", shown)
-    t_shown = pg.evaluate("()=>Date.now()")
-    check(f"(2) the same id was reloaded once at the cutoff ({loads(pg, rec, n0)} loads)", loads(pg, rec, n0) == 2)
-    retry = pg.evaluate("(id)=>__receiver.log.find(e=>e.type==='loadRetry' && e.detail.camId===id)", rec)
-    check(f"(2) retry happened at CAM_LOAD_MS, not before ({retry and retry['t'] - t0} ms)", bool(retry) and 12000 <= retry["t"] - t0 < 15000)
-    check("(3) cam_shown for the recovered cam, reason pick, retried=1 nudged=1",
-          shown.get("reason") == "pick" and shown.get("retried") == 1 and shown.get("nudged") == 1 and isinstance(shown.get("load_ms"), int) and shown["load_ms"] >= 12000)
-    check("(3) committed: it is the current cam and PLAYING", pg.evaluate("(id)=>__receiver.state.camId===id && __yt.cam().state===1", rec))
-    check("(3) no cam_failed for it, not in failedCams, no message", not queued(pg, "cam_failed", rec)
-          and not pg.evaluate("(id)=>__receiver.state.failedCams.includes(id)", rec) and pg.evaluate("()=>document.querySelector('#unavailable').hidden"))
-    check(f"(3) recovered within the retry window ({t_shown - t0} ms)", t_shown - t0 < 26000)
 
-    # 4: stuck BUFFERING across the retry: one retry, then load_timeout and the unavailable / skip path
-    settle(pg)
-    n0 = mark(pg)
-    t0 = pg.evaluate("(id)=>{window.__uAt=0; window.__uFrom=Date.now(); __receiver.send({type:'cam', id}); return Date.now();}", dead)
-    pg.wait_for_timeout(14000)
-    check(f"(4) at 12s: reloaded once, not failed, no message ({loads(pg, dead, n0)} loads)",
-          loads(pg, dead, n0) == 2 and not queued(pg, "cam_failed", dead) and pg.evaluate("()=>window.__uAt") == 0)
-    f = wait_for(pg, "cam_failed", dead, 16000) or {}
-    print("dead cam_failed:", f)
-    check("(4) cam_failed why=load_timeout, trace_scope load, retried=1 nudged=1",
-          f.get("why") == "load_timeout" and f.get("trace_scope") == "load" and f.get("retried") == 1 and f.get("nudged") == 1)
-    check(f"(4) ms is total time across both windows ({f.get('ms')})", isinstance(f.get("ms"), int) and 24000 <= f["ms"] < 28000)
-    check(f"(4) one states timeline, BUFFERING in both windows ({f.get('states')})",
-          isinstance(f.get("states"), str) and len(re.findall(r"(?:^|,)3@", f["states"])) >= 2)
-    check("(4) last_state BUFFERING, vid_match true", f.get("last_state") == 3 and f.get("vid_match") is True)
-    check("(4) nudged in both windows", pg.evaluate("(id)=>__receiver.log.filter(e=>e.type==='loadNudge' && e.detail.camId===id).length", dead) == 2)
-    u = pg.evaluate("()=>({at: window.__uAt, text: window.__uText})")
-    check(f"(4) the unavailable message shows only after the retry window ({u['at'] - t0 if u['at'] else None} ms, {u['text']!r})",
-          u["at"] and u["at"] - t0 >= 24000 and u["text"] == MSG)
-    check("(4) failed and skipped: in failedCams, the next cam plays", pg.evaluate("(id)=>__receiver.state.failedCams.includes(id)", dead))
-    settle(pg)
-    check("(4) next cam is another one", pg.evaluate("()=>__receiver.state.camId") != dead)
-    check(f"(4) only one retry, not two ({loads(pg, dead, n0)} loads)", loads(pg, dead, n0) == 2)
-    check("(4) one cam_failed for it", len(queued(pg, "cam_failed", dead)) == 1)
+with sync_playwright() as p:
+    b = p.chromium.launch()
 
-    # 5: a real YouTube error (150) for the cam: fails at once, no nudge, no retry
-    pg.evaluate("(id)=>{window.__ytErr={[id]:150};}", err)
-    check("(5) err is not the current cam (the pool kept the skip away from it), so the pick loads it",
-          pg.evaluate("(id)=>__receiver.state.camId!==id", err) and not queued(pg, "cam_failed", err) and not queued(pg, "player_error", err))
+    # ---- a, d, e: a long buffering wait (22s UNSTARTED/BUFFERING on its own id) that then plays
+    pg = new_page(b)
+    long_id, = targets(pg, 1)
+    until = pg.evaluate("()=>Date.now()+22000")
+    pg.evaluate("([id,u])=>{window.__ytStuck={[id]:{state:-1, until:u}};}", [long_id, until])
     n0 = mark(pg)
-    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", err)
-    f = wait_for(pg, "cam_failed", err, 4000) or {}
-    t_fail = pg.evaluate("()=>Date.now()")
-    pe = queued(pg, "player_error", err)
-    print("error cam_failed:", f, pe)
-    check(f"(5) player_error code 150 and cam_failed why=error at once ({t_fail - t0} ms)",
-          f.get("why") == "error" and pe and pe[-1].get("code") == "150" and t_fail - t0 < 4000)
-    check(f"(5) exactly one loadVideoById for it at the failure ({loads(pg, err, n0)})", loads(pg, err, n0) == 1)
-    check("(5) no retry or nudge on a real error", f.get("retried") == 0 and f.get("nudged") == 0)
+    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", long_id)
+    pg.wait_for_timeout(2000)
+    check("(e) at 2s: black field (blackout opaque), no Loading card yet, no message",
+          vis(pg) == [False, False] and pg.evaluate("()=>getComputedStyle(document.querySelector('#blackout')).opacity") == "1")
+    pg.wait_for_timeout(3000)
+    check(f"(e) at about 5s: the Loading card shows, no 'window closed' ({vis(pg)})", vis(pg) == [False, True])
+    lc = pg.evaluate("""()=>{const m=document.querySelector('#loading-msg'), cs=getComputedStyle(m), r=document.querySelector('#loading').getBoundingClientRect();
+      return {text:m.textContent, fs:parseFloat(cs.fontSize), z:getComputedStyle(document.querySelector('#loading')).zIndex, w:r.width, h:r.height}}""")
+    check(f"(e) card text 'Loading cam...', large, over the whole screen ({lc})", lc["text"] == "Loading cam..." and lc["fs"] >= 32 and lc["w"] == 1280 and lc["h"] == 720 and lc["z"] == "3")
     pg.wait_for_timeout(13000)
-    check(f"(5) still one loadVideoById for it after the cutoff ({loads(pg, err, n0)})", loads(pg, err, n0) == 1)
-    check("(5) no load nudge or retry logged for it",
-          not pg.evaluate("(id)=>__receiver.log.some(e=>(e.type==='loadNudge' || e.type==='loadRetry') && e.detail.camId===id)", err))
+    check(f"(a) at 17s: still waiting, not failed, not skipped, card up, no message ({vis(pg)})",
+          vis(pg) == [False, True] and not queued(pg, "cam_failed", long_id) and pg.evaluate("(id)=>__receiver.state.camId!==id", long_id))
+    check("(d) no playVideo and no second loadVideoById during the whole wait", plays(pg, n0) == 0 and loads(pg, long_id, n0) == 1)
+    shown = wait_for(pg, "cam_shown", long_id, 12000) or {}
+    print("long wait cam_shown:", shown)
+    check("(a) cam_shown for it, reason pick, committed and PLAYING", shown.get("reason") == "pick" and pg.evaluate("(id)=>__receiver.state.camId===id && __yt.cam().state===1", long_id))
+    check(f"(a) load_ms reflects the wait ({shown.get('load_ms')})", isinstance(shown.get("load_ms"), int) and 21000 <= shown["load_ms"] < 27000)
+    check("(a) all new fields present, err5_retried 0, ad_suspected 0, nudged 0, retried 0",
+          all(k in shown for k in NEW_FIELDS) and shown.get("err5_retried") == 0 and shown.get("ad_suspected") == 0 and shown.get("nudged") == 0 and shown.get("retried") == 0)
+    check("(a) states starts UNSTARTED and ends PLAYING", isinstance(shown.get("states"), str) and shown["states"].startswith("-1@") and re.search(r"1@\d+$", shown["states"]) is not None)
+    check("(a) no cam_failed, not in failedCams, no message ever", not queued(pg, "cam_failed", long_id) and not pg.evaluate("(id)=>__receiver.state.failedCams.includes(id)", long_id)
+          and not pg.evaluate("()=>__receiver.log.some(e=>e.type==='camError')"))
+    pg.wait_for_timeout(600)
+    check("(e) the normal view takes over: card and message hidden", vis(pg) == [False, False])
+    check("(d) still no playVideo after the commit", plays(pg, n0) == 0)
+    pg.close()
 
-    # 6: a leftover error for ANOTHER video id (a late error from the previous cam) is in the load trace before the
-    # stall; the cam then stalls BUFFERING on its own id. The error must not veto the nudge or the retry.
-    settle(pg)
-    prev = pg.evaluate("()=>__receiver.state.camId")
-    pe0 = len(queued(pg, "player_error"))
+    # ---- b: errors 2 and 150 fail at once, no wait, no retry
+    pg = new_page(b)
+    e2, e150 = targets(pg, 2)
+    pg.evaluate("([a,c])=>{window.__ytErr={[a]:{code:2,times:99}, [c]:{code:150,times:99}};}", [e2, e150])
+    for cid, code in ((e2, "2"), (e150, "150")):
+        settle(pg)
+        n0 = mark(pg)
+        t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", cid)
+        f = wait_for(pg, "cam_failed", cid, 4000) or {}
+        dt = pg.evaluate("()=>Date.now()") - t0
+        pe = queued(pg, "player_error", cid)
+        print("error cam_failed:", f)
+        check(f"(b) error {code}: cam_failed why=error at once ({dt} ms), player_error code {code}", f.get("why") == "error" and pe and pe[-1].get("code") == code and dt < 4000)
+        check(f"(b) error {code}: no reload, no wait", loads(pg, cid, n0) == 1)
+        check(f"(b) error {code}: fields present, err5_retried 0", all(k in f for k in NEW_FIELDS) and f.get("err5_retried") == 0 and f.get("retried") == 0 and f.get("nudged") == 0)
+        pg.wait_for_timeout(3500)
+        check(f"(b) error {code}: still one load after the err5 delay", loads(pg, cid, n0) == 1 and pg.evaluate("(id)=>__receiver.state.failedCams.includes(id)", cid))
+    pg.close()
+
+    # ---- c: error 5 during pending: one reload of the same id after about 2s
+    pg = new_page(b)
+    ok5, bad5, sw5, late5 = targets(pg, 4)
+    pg.evaluate("([a,c,d,l])=>{window.__ytErr={[a]:{code:5,times:1}, [c]:{code:5,times:99}, [d]:{code:5,times:99}, [l]:{code:5,times:1,state:2,delay:11000}};}", [ok5, bad5, sw5, late5])
     n0 = mark(pg)
-    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", left)
-    pg.wait_for_function("(id)=>__yt.cam().vid===id", arg=left, timeout=5000)
-    # Late error for the previous cam while the new cam is loading: the player reports another id, so it is ignored
-    # by onCamError (not a player_error, no failCam) and only recorded in the trace.
-    pg.evaluate("([p])=>{const c=__yt.cam(), v=c.vid; c.vid=p; c.opts.events.onError({data:2, target:c}); c.vid=v;}", [prev])
-    check("(6) the leftover other-id error is ignored: no cam_failed, no player_error, still pending",
-          not queued(pg, "cam_failed", left) and len(queued(pg, "player_error")) == pe0 and pg.evaluate("(id)=>__receiver.state.camId!==id", left))
-    pg.wait_for_function("(id)=>__receiver.log.some(e=>e.type==='loadNudge' && e.detail.camId===id)", arg=left, timeout=9000)
-    shown = wait_for(pg, "cam_shown", left, 14000) or {}
-    print("leftover-error cam_shown:", shown)
-    check(f"(6) retried once despite the leftover error ({loads(pg, left, n0)} loads)", loads(pg, left, n0) == 2)
-    check("(6) loadRetry logged for it", pg.evaluate("(id)=>__receiver.log.some(e=>e.type==='loadRetry' && e.detail.camId===id)", left))
-    check("(6) recovered: cam_shown retried=1 nudged=1, no cam_failed",
-          shown.get("retried") == 1 and shown.get("nudged") == 1 and not queued(pg, "cam_failed", left))
+    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", ok5)
+    pg.wait_for_function("(id)=>__receiver.log.some(e=>e.type==='err5Retry' && e.detail.camId===id)", arg=ok5, timeout=4000)
+    check("(c) error 5: not failed at once, no message", not queued(pg, "cam_failed", ok5) and vis(pg)[0] is False and loads(pg, ok5, n0) == 1)
+    shown = wait_for(pg, "cam_shown", ok5, 8000) or {}
+    print("err5 cam_shown:", shown)
+    t_shown = pg.evaluate("()=>Date.now()")
+    check(f"(c) the same id was loaded a second time ({loads(pg, ok5, n0)})", loads(pg, ok5, n0) == 2)
+    check(f"(c) recovered cam_shown err5_retried=1 retried=1 nudged=0 ({t_shown - t0} ms)",
+          shown.get("err5_retried") == 1 and shown.get("retried") == 1 and shown.get("nudged") == 0 and 1500 <= shown.get("load_ms", 0) < 5000)
+    check("(c) the reload came after a short delay, not at once (second load gap)", shown.get("load_ms", 0) >= 2000 and shown.get("load_ms", 0) < 4000)
+    check("(c) no cam_failed for it, one player_error recorded", not queued(pg, "cam_failed", ok5) and len(queued(pg, "player_error", ok5)) == 1)
+    # second error 5 fails: exactly two loads, then failure, no loop
+    settle(pg)
+    n0 = mark(pg)
+    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", bad5)
+    f = wait_for(pg, "cam_failed", bad5, 9000) or {}
+    dt = pg.evaluate("()=>Date.now()") - t0
+    print("err5 twice cam_failed:", f)
+    check(f"(c) a second error 5 fails: cam_failed why=error, err5_retried=1 ({dt} ms)", f.get("why") == "error" and f.get("err5_retried") == 1 and f.get("retried") == 1 and 2000 <= dt < 5500)
+    check("(c) exactly two loadVideoById for it", loads(pg, bad5, n0) == 2)
+    pg.wait_for_timeout(5000)
+    check("(c) no third load (cannot loop), failed once, the next cam plays",
+          loads(pg, bad5, n0) == 2 and len(queued(pg, "cam_failed", bad5)) == 1 and pg.evaluate("(id)=>__receiver.state.camId!==id", bad5))
+
+    # switching cams during the retry delay: the old cam's reload timer never loads it again
+    settle(pg)
+    n0 = mark(pg)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", sw5)
+    pg.wait_for_function("(id)=>__receiver.log.some(e=>e.type==='err5Retry' && e.detail.camId===id)", arg=sw5, timeout=4000)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", ok5)
+    pg.wait_for_timeout(4000)
+    check(f"(c) a pick during the retry delay: the old cam is not reloaded ({loads(pg, sw5, n0)} loads)", loads(pg, sw5, n0) == 1)
+    settle(pg)
+
+    # an error 5 at 11s while PAUSED: the 12s state cutoff must not cancel the scheduled reload
+    n0 = mark(pg)
+    pg.evaluate("(id)=>__receiver.send({type:'cam', id})", late5)
+    shown = wait_for(pg, "cam_shown", late5, 20000) or {}
+    print("late err5 cam_shown:", shown)
+    check(f"(c) error 5 at 11s in PAUSED: still reloaded once and plays, not failed ({loads(pg, late5, n0)} loads)",
+          loads(pg, late5, n0) == 2 and shown.get("err5_retried") == 1 and not queued(pg, "cam_failed", late5))
+    pg.close()
+
+    # ---- f: a cam stuck forever fails at about 60s (real wait, no override), with the new fields
+    pg = new_page(b)
+    dead, = targets(pg, 1)
+    pg.evaluate("(id)=>{window.__ytStuck={[id]:{state:3, until:0}};}", dead)
+    n0 = mark(pg)
+    t0 = pg.evaluate("(id)=>{__receiver.send({type:'cam', id}); return Date.now();}", dead)
+    pg.wait_for_timeout(50000)
+    check(f"(f) at 50s: still waiting, card up, no message, no nudge, one load ({vis(pg)})",
+          vis(pg) == [False, True] and not queued(pg, "cam_failed", dead) and plays(pg, n0) == 0 and loads(pg, dead, n0) == 1)
+    f = wait_for(pg, "cam_failed", dead, 20000) or {}
+    dt = pg.evaluate("()=>Date.now()") - t0
+    print("stuck cam_failed:", f)
+    check(f"(f) cam_failed why=load_timeout at about 60s ({dt} ms)", f.get("why") == "load_timeout" and 59000 <= dt < 66000)
+    check(f"(f) load_ms about 60s ({f.get('load_ms')}), trace_scope load", isinstance(f.get("load_ms"), int) and 59500 <= f["load_ms"] < 65000 and f.get("trace_scope") == "load")
+    check("(f) new fields present: cur_time, loaded_frac, states, ad_suspected 0, err5_retried 0",
+          all(k in f for k in NEW_FIELDS) and f.get("ad_suspected") == 0 and f.get("err5_retried") == 0 and f.get("nudged") == 0)
+    check("(f) one load, no playVideo, then the message on the night field and the card gone",
+          loads(pg, dead, n0) == 1 and plays(pg, n0) == 0 and pg.evaluate("(id)=>__receiver.state.failedCams.includes(id)", dead))
+    u = pg.evaluate("()=>document.querySelector('#unavailable-msg').textContent")
+    check(f"(f) the failure swaps the card for the message: message visible, Loading card cleared ({vis(pg)})", vis(pg)[0] is True and vis(pg)[1] is False)
+    check(f"(f) 'window closed' text only appears on this real failure ({u!r})", u == MSG)
+    pg.close()
 
     check("nothing left the page", not telemetry_guard.hits)
     telemetry_guard.assert_no_leaks()
