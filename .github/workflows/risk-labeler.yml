@@ -1,10 +1,15 @@
 # Risk labeler
 #
 # Runs on pull_request_target, so the workflow definition always comes from the
-# default branch, not from the pull request. It never checks out, downloads, or
-# runs pull request code. It only reads PR metadata and diffs through the
-# GitHub API and applies the risk:red label when sensitive paths or content are
-# touched.
+# trusted base / default branch, not from the pull request. It never checks
+# out, downloads, or runs pull request code. It only reads PR metadata and
+# diffs through the GitHub API and applies the risk:red label when sensitive
+# paths or content are touched.
+#
+# The matching rules live in .github/scripts/risk_match.js so that
+# tests/test_risk_labeler.py exercises the same code. That file is checked out
+# from github.sha, which on pull_request_target is the trusted base / default
+# branch commit the workflow itself comes from, never the PR head.
 #
 # Stephane merges the PR that adds or changes this workflow himself.
 
@@ -24,56 +29,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Trusted ref only. Do not change this to the PR head ref or sha.
+      - name: Check out matching rules from the trusted base ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          path: trusted-base
+
       - name: Apply risk:red when sensitive files or content change
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
+            const path = require('path');
+            const { fileReason, sanitizeLog } = require(
+              path.join(process.env.GITHUB_WORKSPACE, 'trusted-base', '.github', 'scripts', 'risk_match.js'),
+            );
+
             const RED = 'risk:red';
             const DOWNGRADE_LABELS = ['risk:green', 'risk:yellow'];
             const FILE_LIST_CAP = 3000;
 
-            const LOCKFILES = new Set([
-              'package-lock.json',
-              'yarn.lock',
-              'pnpm-lock.yaml',
-              'bun.lockb',
-              'npm-shrinkwrap.json',
-            ]);
-            const KEYWORDS = ['auth', 'key', 'secret', 'token', 'payment', 'stripe', 'delete'];
-
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
             const pull_number = pr.number;
-
-            const basename = (p) => {
-              const parts = p.split('/');
-              return parts[parts.length - 1];
-            };
-
-            // Escape untrusted text so it cannot inject workflow commands via logs.
-            const sanitizeLog = (text) =>
-              String(text).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
-
-            const findKeyword = (text) => {
-              const lower = String(text).toLowerCase();
-              return KEYWORDS.find((k) => lower.includes(k));
-            };
-
-            // Returns a short reason string if the path matches a rule, else null.
-            const checkPath = (p) => {
-              if (!p) return null;
-              const base = basename(p);
-              if (p === 'vercel.json' || base === 'vercel.json') return 'vercel.json';
-              if (p.startsWith('.github/')) return '.github path';
-              if (base === 'package.json') return 'package.json';
-              if (LOCKFILES.has(base)) return 'lockfile';
-              if (base === '.env' || base.startsWith('.env.') || base.endsWith('.env')) {
-                return 'env file';
-              }
-              const kw = findKeyword(p);
-              if (kw) return `keyword "${kw}" in path`;
-              return null;
-            };
 
             // Decide whether the PR matches.
             let reason = null;
@@ -116,23 +96,11 @@ jobs:
                 reason = `file list returned ${files.length} files (cap ${FILE_LIST_CAP})`;
               }
 
+              // Matching rules (whole-word keywords, credential identifiers,
+              // tests/ skip, path rules) live in risk_match.js.
               for (const f of files) {
                 if (reason) break;
-                for (const p of [f.filename, f.previous_filename]) {
-                  const r = checkPath(p);
-                  if (r) {
-                    reason = `${r}: ${sanitizeLog(p)}`;
-                    break;
-                  }
-                }
-                if (reason) break;
-                // Patch may be missing for binary or very large files.
-                if (f.patch) {
-                  const kw = findKeyword(f.patch);
-                  if (kw) {
-                    reason = `keyword "${kw}" in patch of ${sanitizeLog(f.filename)}`;
-                  }
-                }
+                reason = fileReason(f);
               }
             }
 
