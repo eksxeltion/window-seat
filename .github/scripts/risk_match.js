@@ -26,10 +26,11 @@
 //      b. credential identifier: an identifier whose camelCase / snake_case
 //         parts contain a credential qualifier immediately followed
 //         by a credential noun ("apiKey", "api_key", "access_token",
-//         "AUTH_TOKEN", "clientSecret", "GITHUB_TOKEN"), or a part that is such
-//         a pair glued together ("apikey", "APIKEY"). Generic names such as
-//         "fooToken", "playerToken" or "keyFrame" have no qualifier and do not
-//         match.
+//         "AUTH_TOKEN", "clientSecret", "GITHUB_TOKEN"), also when glued or
+//         split oddly ("apikey", "APIkey", "GitHubToken"; see credentialIn).
+//         Generic names such as "fooToken", "playerToken" or "keyFrame" have
+//         no qualifier and do not match. The reason names only the matched
+//         qualifier+noun pair, never the text from the patch.
 
 'use strict';
 
@@ -87,12 +88,17 @@ const CREDENTIAL_NOUNS = [
   'tokens',
 ];
 
-const QUALIFIER_SET = new Set(CREDENTIAL_QUALIFIERS);
-const NOUN_SET = new Set(CREDENTIAL_NOUNS);
-const GLUED_SET = new Set();
+// "apikey" -> "api+key". Values come only from the fixed lists above, so they
+// are safe to log.
+const GLUED = new Map();
 for (const q of CREDENTIAL_QUALIFIERS) {
-  for (const n of CREDENTIAL_NOUNS) GLUED_SET.add(q + n);
+  for (const n of CREDENTIAL_NOUNS) {
+    if (!GLUED.has(q + n)) GLUED.set(q + n, `${q}+${n}`);
+  }
 }
+// Longest window of consecutive identifier parts joined when looking for a
+// qualifier + noun pair ("GitHubToken" -> git, hub, token).
+const MAX_WINDOW = 4;
 
 const KEYWORD_FORMS = new Map();
 for (const k of KEYWORDS) {
@@ -126,13 +132,22 @@ const identifierParts = (ident) => {
   return parts;
 };
 
-// Returns a description if the identifier looks like a credential, else null.
+// Returns the matched "qualifier+noun" pair if the identifier looks like a
+// credential, else null. Any window of up to MAX_WINDOW consecutive parts is
+// joined and compared with the glued pairs, so "apiKey" (api, key), "AUTH_TOKEN"
+// (auth, token), "apikey" (apikey), "GitHubToken" (git, hub, token) and
+// "APIkey" (ap, ikey) all match, while "fooToken" (footoken, token),
+// "playerToken", "monkey" and "keyFrame" do not.
+// The identifier itself is never returned: it may be a credential value
+// copied from a string literal, and the reason ends up in workflow logs.
 const credentialIn = (ident) => {
   const parts = identifierParts(ident);
   for (let i = 0; i < parts.length; i++) {
-    if (GLUED_SET.has(parts[i])) return ident;
-    if (i + 1 < parts.length && QUALIFIER_SET.has(parts[i]) && NOUN_SET.has(parts[i + 1])) {
-      return ident;
+    let joined = '';
+    for (let j = i; j < parts.length && j < i + MAX_WINDOW; j++) {
+      joined += parts[j];
+      const pair = GLUED.get(joined);
+      if (pair) return pair;
     }
   }
   return null;
@@ -147,8 +162,8 @@ const scanText = (text, wordSplit) => {
     if (k) return `keyword "${k}"`;
   }
   for (const ident of s.match(/[A-Za-z0-9_$]+/g) || []) {
-    const c = credentialIn(ident);
-    if (c) return `credential identifier "${c}"`;
+    const pair = credentialIn(ident);
+    if (pair) return `credential-like identifier (${pair})`;
   }
   return null;
 };

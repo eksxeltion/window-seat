@@ -97,6 +97,9 @@ FIXTURES = [
     ("js clientSecret", RED, [{"filename": "js/d.js", "patch": patch("+opts.clientSecret = s;")}]),
     ("js GITHUB_TOKEN", RED, [{"filename": "js/e.js", "patch": patch("+const t = GITHUB_TOKEN;")}]),
     ("js glued apikey", RED, [{"filename": "js/f.js", "patch": patch("+url += '&apikey=' + k;")}]),
+    ("js GitHubToken", RED, [{"filename": "js/m.js", "patch": patch("+const GitHubToken = t;")}]),
+    ("js APIkey", RED, [{"filename": "js/n.js", "patch": patch("+cfg.APIkey = k;")}]),
+    ("js myApiKey", RED, [{"filename": "js/o.js", "patch": patch("+let myApiKey;")}]),
     ("js stripeSecretKey", RED, [{"filename": "js/g.js", "patch": patch("+const stripeSecretKey = k;")}]),
     ("removed apiKey line also counts", RED, [
         {"filename": "js/config.js", "patch": patch("-const apiKey = 'abc';", "+const x = 1;")},
@@ -170,6 +173,7 @@ process.stdin.on('end', () => {
   });
   const extra = {
     sanitized: m.fileReason({ filename: 'js/secret\n::error::x%.js' }),
+    leak: m.fileReason({ filename: 'js/x.js', patch: '@@ -1 +1 @@\n+const v = "zzLeakMarker_apiKey_9f8e7d";' }),
     parts: m.identifierParts('APIKey_fooToken2AUTH_TOKEN'),
   };
   process.stdout.write(JSON.stringify({ out, extra }));
@@ -177,6 +181,47 @@ process.stdin.on('end', () => {
 """
 
 fails = []
+
+
+def strip_comment(value):
+    """Drop a trailing ' # comment' from a YAML scalar (values here never contain ' #')."""
+    return value.split(" #", 1)[0].strip()
+
+
+def workflow_steps(text):
+    """Minimal parser for the single job's steps: returns dicts with step keys, a 'with' dict and the raw text.
+    Comment lines are ignored, so a commented-out key can not satisfy a check."""
+    lines = [l for l in text.splitlines() if not l.strip().startswith("#")]
+    try:
+        start = next(i for i, l in enumerate(lines) if l.strip() == "steps:")
+    except StopIteration:
+        return []
+    indent = len(lines[start]) - len(lines[start].lstrip()) + 2
+    steps, cur, in_with = [], None, False
+    for l in lines[start + 1:]:
+        if not l.strip():
+            continue
+        ind = len(l) - len(l.lstrip())
+        if ind < indent:
+            break
+        if ind == indent and l.lstrip().startswith("- "):
+            cur = {"with": {}, "raw": ""}
+            steps.append(cur)
+            l = " " * (indent + 2) + l.lstrip()[2:]
+            ind = indent + 2
+        if cur is None:
+            continue
+        cur["raw"] += l + "\n"
+        body = l.strip()
+        if ind == indent + 2 and ":" in body:
+            key, _, val = body.partition(":")
+            in_with = key == "with"
+            if not in_with:
+                cur[key.strip()] = strip_comment(val)
+        elif in_with and ind == indent + 4 and ":" in body:
+            key, _, val = body.partition(":")
+            cur["with"][key.strip()] = strip_comment(val)
+    return steps
 
 
 def check(name, cond, detail=""):
@@ -208,6 +253,9 @@ def main():
     sanitized = data["extra"]["sanitized"]
     check("reason is log-sanitized", sanitized is not None and "\n" not in sanitized and "%0A" in sanitized
           and "%25" in sanitized, sanitized or "")
+    leak = data["extra"]["leak"]
+    check("credential reason names the pair, not the patch text",
+          leak is not None and "(api+key)" in leak and "zzLeakMarker" not in leak and "9f8e7d" not in leak, leak or "")
     check("identifier parts split", data["extra"]["parts"] == ["api", "key", "foo", "token", "auth", "token"],
           str(data["extra"]["parts"]))
 
@@ -215,7 +263,21 @@ def main():
     check("workflow is pull_request_target", re.search(r"^\s+pull_request_target:", wf, re.M) is not None)
     check("workflow loads risk_match.js from trusted checkout",
           "'trusted-base', '.github', 'scripts', 'risk_match.js'" in wf and "fileReason(f)" in wf)
-    check("workflow checks out github.sha only", "ref: ${{ github.sha }}" in wf and "persist-credentials: false" in wf)
+    steps = workflow_steps(wf)
+    checkouts = [st for st in steps if st.get("uses", "").startswith("actions/checkout@")]
+    check("workflow has exactly one checkout step", len(checkouts) == 1, str(len(checkouts)))
+    if checkouts:
+        w = checkouts[0]["with"]
+        check("checkout ref is github.sha", w.get("ref") == "${{ github.sha }}", str(w.get("ref")))
+        check("checkout is this repository", "repository" not in w, str(w.get("repository")))
+        check("checkout does not persist credentials", w.get("persist-credentials") == "false")
+        check("checkout path is trusted-base", w.get("path") == "trusted-base", str(w.get("path")))
+        check("checkout is sparse to .github/scripts", w.get("sparse-checkout") == ".github/scripts")
+        check("checkout runs before the labeler script", steps.index(checkouts[0]) < next(
+            (i for i, st in enumerate(steps) if st.get("uses", "").startswith("actions/github-script@")), -1))
+    check("no step writes into trusted-base other than the checkout",
+          sum(1 for st in steps if "trusted-base" in st["raw"]) == 2 and not any(
+              "run" in st for st in steps), str([st.get("name") for st in steps]))
     check("workflow never references PR head", not re.search(r"head\.(sha|ref)|head_ref|merge_commit|refs/pull", wf))
     check("workflow keeps no rules of its own", "KEYWORDS" not in wf and ".includes(k)" not in wf
           and "LOCKFILES" not in wf)
