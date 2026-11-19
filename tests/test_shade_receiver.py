@@ -42,20 +42,26 @@ def px(v):
     return float(str(v).rstrip("px"))
 
 
-# The next load on the cam player fails: with a YouTube error code, or (code None) it buffers and never plays.
+# The next load on the cam player fails: with a YouTube error code, or (code None) it buffers and never plays, even
+# when nudged with playVideo or reloaded by the receiver's one retry of the same id.
 FAIL_NEXT = """(code) => {
   const yt = __yt.cam();
   const cam = __receiver.state.camId;
   window.__failTarget = null;
   yt.loadVideoById = function (arg) {
     const v = typeof arg === 'object' && arg ? arg.videoId : arg;
-    if (window.__failTarget !== null || v === cam) return Object.getPrototypeOf(this).loadVideoById.apply(this, arguments);
+    const again = code === null && v === window.__failTarget;
+    if (!again && (window.__failTarget !== null || v === cam)) return Object.getPrototypeOf(this).loadVideoById.apply(this, arguments);
     window.__failTarget = v;
     this._rec('loadVideoById', arguments);
     this.vid = v;
     if (code === null) { this._set(3); return; }
     this.state = -1;
     setTimeout(() => { delete yt.loadVideoById; this.opts.events.onError({ data: code }); }, 0);
+  };
+  yt.playVideo = function () {
+    if (code === null && this.vid === window.__failTarget) return this._rec('playVideo', arguments);
+    return Object.getPrototypeOf(this).playVideo.apply(this, arguments);
   };
   __receiver.send({ type: 'next' });
   return cam;
@@ -238,13 +244,20 @@ with sync_playwright() as p:
               and not rx.is_visible("#unavailable") and rx.evaluate("()=>__receiverDebug.unavailable") is False)
 
     # ------------------------------------------------------------ a load that never reaches PLAYING (CAM_LOAD_MS, 12s)
+    # Nudged with playVideo, reloaded once at 12s (no message then), and failed only after the retry window.
     rx.evaluate(FAIL_NEXT, None)
     check("never playing: the field is up while it loads, no message yet", wait_until(rx, "()=>window.__failTarget!==null", 3000) and not rx.is_visible("#unavailable"))
-    ok = wait_until(rx, "()=>!document.querySelector('#unavailable').hidden", 15000)
+    LOADS = "()=>__yt.cam().calls.filter(c=>c[0]==='loadVideoById' && c[1]===window.__failTarget).length"
+    retried = wait_until(rx, LOADS + "===2", 15000)
+    check("never playing: nudged with playVideo before the 12s cutoff", rx.evaluate("()=>__receiver.log.some(e=>e.type==='loadNudge' && e.detail.camId===window.__failTarget)"))
+    check("never playing: at 12s the same id is reloaded once and no message shows",
+          retried and not rx.is_visible("#unavailable") and not rx.evaluate("()=>__receiver.state.failedCams.includes(window.__failTarget)"))
+    ok = wait_until(rx, "()=>!document.querySelector('#unavailable').hidden", 16000)
+    check("never playing: only one retry", rx.evaluate(LOADS) == 2)
     cv = rx.evaluate(COVER)
     check(f"never playing: after the load timeout the message shows on the night field ({cv['text']!r}, {cv['top']})",
           ok and cv["text"] == MSG and cv["top"] in ("unavailable", "unavailable-msg") and rx.evaluate("()=>__receiver.state.failedCams.includes(window.__failTarget)"))
-    rx.evaluate("()=>{ delete __yt.cam().loadVideoById; }")
+    rx.evaluate("()=>{ delete __yt.cam().loadVideoById; delete __yt.cam().playVideo; }")
     check("never playing: the next cam plays and the message is gone",
           wait_until(rx, "()=>__receiver.state.camId!==window.__failTarget && __yt.cam().state===1 && document.querySelector('#unavailable').hidden", 6000))
     ctx.close()

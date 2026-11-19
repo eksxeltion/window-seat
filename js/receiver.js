@@ -10,16 +10,17 @@ import { applyConfig, refreshFromSheet, listInfo } from "./config.js";
 import { camLocalTime, placeLine, rotationPool } from "./localtime.js";
 import { initTelemetry, capture, captureError, receiverTelemetryMessage, flushTelemetry, telemetryActive } from "./telemetry.js";
 
-export const BUILD = "2026-11-17.30"; // shown on the TV; bump on every receiver change
+export const BUILD = "2026-11-17.31"; // shown on the TV; bump on every receiver change
 const NAMESPACE = "urn:x-cast:com.windowseat";
 const CAF_URL = "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js";
 const YT_URL = "https://www.youtube.com/iframe_api";
-const YS = { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
+const YS = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
 
 const FADE_MS = 400;
 const CAM_LOAD_MS = 12000; // a new cam must reach PLAYING by then or it is skipped
 const STALL_NUDGE_MS = 20000; // visible cam not PLAYING this long: nudge playVideo
 const STALL_SKIP_MS = 15000; // still not PLAYING this long after the nudge: skip it
+const LOAD_NUDGE_MS = 4000; // pending cam still UNSTARTED or BUFFERING this long: nudge playVideo once per load window
 const RETRY_ALL_FAILED_MS = 60000;
 const FLASH_MS = 1800; // on-TV confirmation of a phone command
 const PIN_FLASH_MS = 5000; // the pin-on toast stays longer so it can be read from the couch
@@ -421,7 +422,7 @@ function isExplicitDisconnect(event) {
 let camPlayer = null;
 let camReady = false;
 let token = 0; // bumps on every load so stale events are ignored
-let pending = null; // { camId, startedAt, loading }
+let pending = null; // { camId, startedAt, loading, nudged, retried, windowNudged }
 let nextSwapAt = 0;
 let stall = null; // { at, nudged } while the visible cam is not PLAYING
 let retryTimer = 0;
@@ -600,7 +601,7 @@ function beginLoad(camId, reason = "rotate", origin = reason) {
   rotateReason = reason;
   rotateOrigin = origin;
   shownReason = reason === "cam" ? "pick" : reason;
-  pending = { camId, startedAt: Date.now(), loading: false };
+  pending = { camId, startedAt: Date.now(), loading: false, nudged: 0, retried: 0, windowNudged: false };
   trace = { at: null, states: [], ignoredPlaying: 0, otherVid: undefined, errors: [] };
   stall = null;
   fadeTo(true);
@@ -621,10 +622,11 @@ function commitPending() {
     pending = null;
     return;
   }
+  const recovery = { nudged: pending.nudged ? 1 : 0, retried: pending.retried ? 1 : 0 };
   s.camId = cam.id;
   pending = null;
   stall = null;
-  const loadDiag = { load_ms: sinceLoad(), ignored_playing: trace ? intOr(trace.ignoredPlaying, 0) : undefined };
+  const loadDiag = { load_ms: sinceLoad(), ignored_playing: trace ? intOr(trace.ignoredPlaying, 0) : undefined, ...recovery };
   nextSwapAt = Date.now() + s.interval * 1000;
   if (s.paused) {
     // Changed cam while paused: show its first frame, then hold it (no autoplay).
@@ -650,6 +652,8 @@ function commitPending() {
 
 function failCam(camId, why) {
   note("camError", { camId, why });
+  const mine = pending && pending.camId === camId ? pending : null;
+  const recovery = { nudged: mine && mine.nudged ? 1 : 0, retried: mine && mine.retried ? 1 : 0 };
   const scope = why === "load timeout" && pending && pending.camId === camId ? "load" : "snapshot";
   const diag = why === "load timeout" || why === "stalled" ? quietly(() => camDiag(camId, scope)) : undefined;
   if (diag) {
@@ -661,7 +665,7 @@ function failCam(camId, why) {
   }
   if (!s.failed.has(camId)) {
     try {
-      capture("cam_failed", { ...diag, cam_id: camId, why: /^error/.test(why) ? "error" : String(why).replace(/\s+/g, "_") });
+      capture("cam_failed", { ...diag, ...recovery, cam_id: camId, why: /^error/.test(why) ? "error" : String(why).replace(/\s+/g, "_") });
     } catch {
       // diagnostics never block the skip
     }
@@ -725,11 +729,53 @@ function onCamError(e) {
   }
 }
 
+/* A pending load that is stuck rather than broken: the player is UNSTARTED or BUFFERING on this cam's own video id
+   (or reports none). Seen on the TV for some live cams that never leave BUFFERING or UNSTARTED until poked.
+   PLAYING for another id (an ad) and other states do not qualify. An error for this cam's own id fails the cam at
+   once in onCamError, so it never gets here; trace.errors only holds errors for OTHER ids (a late error from the
+   previous cam) and must not veto the retry. */
+function pendingStalled() {
+  const st = quietly(() => camPlayer.getPlayerState());
+  if (st !== YS.UNSTARTED && st !== YS.BUFFERING) return false;
+  const vid = quietly(() => camPlayer.getVideoData().video_id);
+  if (vid && vid !== pending.camId) return false;
+  return true;
+}
+
+/* Pending load watchdog. A stuck load is nudged with playVideo after LOAD_NUDGE_MS (checked on every tick, so a
+   brief PAUSED at that moment only delays it), and at CAM_LOAD_MS it is reloaded once with a fresh load timer.
+   The trace clock keeps running from the first loadVideoById, so cam_failed.ms and states span both windows.
+   Anything else, or a second timeout, fails the cam as before. */
+function pendingTick(now) {
+  if (!pending.loading) return;
+  const age = now - pending.startedAt;
+  if (age > CAM_LOAD_MS) {
+    if (!pending.retried && pendingStalled()) {
+      pending.retried = 1;
+      pending.windowNudged = false;
+      pending.startedAt = now;
+      note("loadRetry", { camId: pending.camId, ms: sinceLoad() });
+      camMute();
+      quietly(() => camPlayer.loadVideoById(pending.camId));
+      camMute();
+    } else {
+      failCam(pending.camId, "load timeout");
+    }
+    return;
+  }
+  if (!pending.windowNudged && age >= LOAD_NUDGE_MS && pendingStalled()) {
+    pending.windowNudged = true;
+    pending.nudged = 1;
+    note("loadNudge", { camId: pending.camId, ms: sinceLoad() });
+    camPlay();
+  }
+}
+
 function camTick() {
   if (!camReady || awaitingRetry) return;
   const now = Date.now();
   if (pending) {
-    if (pending.loading && now - pending.startedAt > CAM_LOAD_MS) failCam(pending.camId, "load timeout");
+    pendingTick(now);
     return;
   }
   if (!s.camId) return;
