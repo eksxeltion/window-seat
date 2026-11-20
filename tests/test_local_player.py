@@ -13,7 +13,7 @@ if base.endswith(".html"):
 here = os.path.dirname(os.path.abspath(__file__))
 FAKE_YT = open(os.path.join(here, "fake_youtube.js")).read()
 MOCK = open(os.path.join(here, "mock_cast_sender.js")).read()
-BUILD = "2026-11-19.33"
+BUILD = "2026-11-20.34"
 TAGLINE = "Live windows onto the world, with soft music, made for your TV."
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 # Every page denies the Fullscreen API: the player must stay full bleed and keep playing anyway.

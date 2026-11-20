@@ -18,8 +18,8 @@
   <!-- Web fonts (Fraunces, Plus Jakarta Sans, Noto Sans JP) are added by js/app.js after load, so a failed or slow
        font request never blocks the page. The CSS stacks fall back to Source Serif 4 and system-ui. Roboto Mono is
        requested only when Debug is turned on. -->
-  <link rel="stylesheet" href="css/style.css?v=2026-11-19.33">
-  <script type="module" src="js/app.js?v=2026-11-19.33"></script>
+  <link rel="stylesheet" href="css/style.css?v=2026-11-20.34">
+  <script type="module" src="js/app.js?v=2026-11-20.34"></script>
 </head>
 <body class="is-starting kbd">
   <!-- Icon sprite: 24px line icons, 2px stroke, round caps and joins. The Cast glyphs are the official Material
@@ -129,7 +129,12 @@
         <h3 class="cams-label" id="cams-quick-title">Quick picks</h3>
         <div class="cams-quick" id="cams-quick" role="group" aria-labelledby="cams-quick-title"></div>
       </section>
-      <ul class="cam-list" id="cams-list" aria-label="All cams"></ul>
+      <div class="cams-search" role="search">
+        <label class="visually-hidden" for="cams-search">Search cams</label>
+        <input class="cams-search-input" id="cams-search" type="search" placeholder="Search cams" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+      </div>
+      <div class="cam-countries" id="cams-list" role="group" aria-label="All cams"></div>
+      <p class="cams-empty" id="cams-empty" role="status" hidden></p>
       <section class="cams-section cams-secondary" aria-labelledby="cams-more-title">
         <h3 class="cams-label" id="cams-more-title">Playback</h3>
         <div class="cams-switches">
@@ -139,6 +144,7 @@
       </section>
     </div>
     <p class="panel-foot"><span class="list-status" role="status"></span></p>
+    <div class="snackbar" id="cams-snack" role="status" hidden><span class="snackbar-text" id="cams-snack-text"></span><button class="snackbar-undo" type="button" data-action="undo-bulk">Undo</button></div>
   </section>
 
   <!-- Mix sheet (v2 / Mix picker): header, Shuffle with its caption, the music volume, a quiet row with Mute, Pause
