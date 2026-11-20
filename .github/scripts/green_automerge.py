@@ -11,7 +11,13 @@ rule ends evaluation and is logged as `PR #N: SKIP <reason>`.
 1. Draft: the PR must not be a draft.
 2. Labels: the PR must carry `risk:green` and must not carry `hold`,
    `risk:yellow` or `risk:red`.
-3. Files: the file list (pulls/{n}/files, paginated) must be complete: its
+3. Risk labeler: among workflow runs of `.github/workflows/risk-labeler.yml`
+   whose head_sha equals the PR head SHA, the one with the highest id (the
+   latest) must exist, be completed, and have conclusion success. A missing
+   run, a pending run, or a non-success conclusion is a skip. This is so a
+   risk:green label is not trusted when the labeler failed or has not run
+   on this SHA.
+4. Files: the file list (pulls/{n}/files, paginated) must be complete: its
    length must equal the PR's `changed_files` (taken from the single-PR GET
    pulls/{n}, which is fetched when the list payload lacks it) and must be
    below 3000, the API's cap on that endpoint. Otherwise the PR is skipped
@@ -19,12 +25,12 @@ rule ends evaluation and is logged as `PR #N: SKIP <reason>`.
    previous_filename for renames) may start with `.github/` or equal
    `.gitleaks.toml`. Defense in depth: otherwise a PR could edit the ci
    workflow it is judged by.
-4. CI: check runs on the head SHA are requested with filter=all and
+5. CI: check runs on the head SHA are requested with filter=all and
    check_name=ci. Among runs named `ci` from the `github-actions` app, the one
    with the highest id (ids are monotonic) is selected; an older success never
    overrides a newer failure or a pending rerun. It must be completed with
    conclusion success.
-5. CI provenance: the workflow run behind the selected check run (looked up
+6. CI provenance: the workflow run behind the selected check run (looked up
    via actions/runs?check_suite_id=<check_run.check_suite.id>) must be exactly
    one run that is tied to this PR:
      - path, with any `@ref` suffix stripped, is `.github/workflows/ci.yml`,
@@ -34,7 +40,7 @@ rule ends evaluation and is logged as `PR #N: SKIP <reason>`.
      - its pull_requests array contains an entry whose number is this PR's
        number. GitHub leaves that array empty for fork PRs, so those are
        skipped with "ci run not linked to this PR".
-6. Head arrival time T: the latest of
+7. Head arrival time T: the latest of
      - the head commit committer date,
      - the LATEST check suite created_at for the head SHA (a suite is created
        when the SHA is pushed, so a re-push of the same SHA moves T forward),
@@ -42,7 +48,7 @@ rule ends evaluation and is logged as `PR #N: SKIP <reason>`.
    If there are no check suites for the head SHA, the PR is skipped with
    "cannot establish head push time". T and the source that set it are
    logged.
-7. SHIP comment: at least one issue comment must
+8. SHIP comment: at least one issue comment must
      - have a body that, after leading whitespace is stripped, starts with
        `SHIP` (case-sensitive),
      - come from an OWNER, MEMBER or COLLABORATOR whose user type is not Bot,
@@ -50,9 +56,9 @@ rule ends evaluation and is logged as `PR #N: SKIP <reason>`.
      - have an effective time at least 60 minutes ago.
    Editing an old comment into SHIP therefore restarts the 60 minute clock.
    When none qualify, the most specific reason is reported.
-8. Merge: in dry run, log `PR #N: WOULD MERGE (squash, sha=<sha>)`. In live
+9. Merge: in dry run, log `PR #N: WOULD MERGE (squash, sha=<sha>)`. In live
    mode, first re-check: re-fetch the PR (pulls/{n}), its labels, files,
-   comments, check runs, workflow run and timing data, and re-run rules 1 to 7
+   comments, check runs, workflow run and timing data, and re-run rules 1 to 8
    on the fresh data. Merge only if the re-check passes and the head SHA is
    unchanged. Then, as a final guard immediately before merging, re-fetch the
    PR and its labels one last time and re-run only rule 1, rule 2 and the head
@@ -95,6 +101,7 @@ CI_CHECK_NAME = "ci"
 CI_APP_SLUG = "github-actions"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 CI_WORKFLOW_EVENT = "pull_request"
+LABELER_WORKFLOW_PATH = ".github/workflows/risk-labeler.yml"
 PR_FILES_API_CAP = 3000
 SHIP_PREFIX = "SHIP"
 MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -142,6 +149,32 @@ def check_labels(pr: dict) -> Optional[str]:
     return None
 
 
+def select_labeler_run(workflow_runs: Iterable[dict], head_sha: str) -> Optional[dict]:
+    """Pick the latest Risk labeler workflow run on the head SHA (highest id)."""
+    candidates = [
+        wr
+        for wr in workflow_runs
+        if _workflow_path(wr) == LABELER_WORKFLOW_PATH
+        and wr.get("head_sha") == head_sha
+        and isinstance(wr.get("id"), int)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda wr: wr["id"])
+
+
+def check_labeler(run: Optional[dict]) -> Optional[str]:
+    """Rule 3. Returns a skip reason, or None if the latest labeler run succeeded."""
+    if run is None:
+        return "no Risk labeler run on head SHA"
+    if run.get("status") != "completed":
+        return "Risk labeler not completed"
+    conclusion = run.get("conclusion")
+    if conclusion != "success":
+        return f"Risk labeler concluded {conclusion}"
+    return None
+
+
 def _is_protected_path(path: Optional[str]) -> bool:
     if not path:
         return False
@@ -149,7 +182,7 @@ def _is_protected_path(path: Optional[str]) -> bool:
 
 
 def check_file_list_complete(files: list[dict], changed_files: Any) -> Optional[str]:
-    """Rule 3, completeness. The fetched list must match the PR's changed_files
+    """Rule 4, completeness. The fetched list must match the PR's changed_files
     count and stay below the API cap, otherwise unseen files could be protected."""
     if not isinstance(changed_files, int) or isinstance(changed_files, bool):
         return "file list incomplete"
@@ -159,7 +192,7 @@ def check_file_list_complete(files: list[dict], changed_files: Any) -> Optional[
 
 
 def check_files(files: Iterable[dict]) -> Optional[str]:
-    """Rule 3, protected paths. Returns a skip reason, or None if the rule passes."""
+    """Rule 4, protected paths. Returns a skip reason, or None if the rule passes."""
     for f in files:
         if _is_protected_path(f.get("filename")) or _is_protected_path(f.get("previous_filename")):
             return "PR changes .github or .gitleaks.toml"
@@ -185,7 +218,7 @@ def select_ci_run(check_runs: Iterable[dict]) -> Optional[dict]:
 
 
 def check_ci(run: Optional[dict]) -> Optional[str]:
-    """Rule 4, on the run chosen by select_ci_run. Returns a skip reason or None."""
+    """Rule 5, on the run chosen by select_ci_run. Returns a skip reason or None."""
     if run is None:
         return "no ci check run on head SHA"
     if run.get("status") != "completed":
@@ -209,7 +242,7 @@ def _workflow_path(workflow_run: dict) -> str:
 def check_ci_provenance(
     workflow_runs: list[dict], head_sha: str, pr_number: int
 ) -> Optional[str]:
-    """Rule 5. The ci check suite must belong to exactly one successful
+    """Rule 6. The ci check suite must belong to exactly one successful
     pull_request workflow run of .github/workflows/ci.yml on the PR head SHA,
     linked to this PR number."""
     if len(workflow_runs) != 1:
@@ -243,7 +276,7 @@ def compute_threshold(
     timeline: Iterable[dict],
     head_sha: str,
 ) -> Optional[Threshold]:
-    """Rule 6. T = latest of commit date, latest suite creation, last force push.
+    """Rule 7. T = latest of commit date, latest suite creation, last force push.
 
     Returns None when there is no check suite for the head SHA, since push time
     cannot then be established.
@@ -292,7 +325,7 @@ def comment_effective_time(comment: dict) -> datetime:
 
 
 def check_ship(comments: Iterable[dict], threshold: datetime, now: datetime) -> Optional[str]:
-    """Rule 7. Returns the most specific skip reason, or None if a SHIP qualifies."""
+    """Rule 8. Returns the most specific skip reason, or None if a SHIP qualifies."""
     ship = [c for c in comments if _is_ship(c)]
     if not ship:
         return "no SHIP comment"
@@ -408,6 +441,14 @@ def fetch_workflow_runs_for_suite(repo: str, check_suite_id: int) -> list[dict]:
     )
 
 
+def fetch_labeler_runs(repo: str, sha: str) -> list[dict]:
+    """Workflow runs of risk-labeler.yml on this head SHA, paginated."""
+    return gh_get_list(
+        f"repos/{repo}/actions/workflows/risk-labeler.yml/runs?head_sha={sha}&per_page=100",
+        key="workflow_runs",
+    )
+
+
 def fetch_commit(repo: str, sha: str) -> dict:
     return gh_get(f"repos/{repo}/commits/{sha}")
 
@@ -448,7 +489,7 @@ def log(line: str) -> None:
 
 
 def evaluate(repo: str, pr: dict, now: datetime, tag: str) -> Optional[str]:
-    """Run rules 1 to 7 for one PR, fetching only what each rule needs.
+    """Run rules 1 to 8 for one PR, fetching only what each rule needs.
 
     Returns a skip reason, or None if every rule passes. Raises GhError on
     API failure. `tag` prefixes log lines (e.g. "PR #7" or "PR #7 re-check").
@@ -462,6 +503,10 @@ def evaluate(repo: str, pr: dict, now: datetime, tag: str) -> Optional[str]:
     sha = (pr.get("head") or {}).get("sha")
     if not sha:
         return "no head SHA"
+
+    reason = check_labeler(select_labeler_run(fetch_labeler_runs(repo, sha), sha))
+    if reason:
+        return reason
 
     files = fetch_files(repo, n)
     changed_files = pr.get("changed_files")
