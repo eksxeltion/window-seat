@@ -625,7 +625,7 @@ body:not(.lp-on) #tuning { display: none; }
 .panel-cams .panel-head h2 { font-size: 1.375rem; line-height: 1.75rem; font-weight: 600; }
 .panel-cams .cams-count { margin-top: var(--space-4); font-size: 0.8125rem; line-height: 1.125rem; font-weight: 500; color: var(--color-ink-secondary); }
 .panel-cams .btn-done { min-height: 2.75rem; margin: calc(-1 * var(--space-8)) calc(-1 * var(--space-12)) 0 0; padding: 0 var(--space-12); font-size: 1rem; line-height: 1.25rem; font-weight: 600; color: var(--color-accent); }
-.panel-cams .panel-body { padding: var(--space-8) var(--space-24) var(--space-24); }
+.panel-cams .panel-body { padding: var(--space-8) var(--space-24) var(--space-24); scroll-padding-top: 4rem; /* a focused row clears the sticky country header */ }
 .panel-cams .cams-section { padding: var(--space-8) 0; }
 .panel-cams .cams-section + .cams-section { border-top: 0; padding-top: var(--space-8); }
 .panel-cams .cams-label { margin: 0 0 var(--space-8); font-size: 0.75rem; line-height: 1rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-ink-tertiary); }
@@ -652,7 +652,117 @@ body:not(.lp-on) #tuning { display: none; }
 .panel-cams .cams-secondary { margin-top: var(--space-16); border-top: 1px solid var(--color-line); padding-top: var(--space-16); }
 .panel-cams .cams-secondary .cams-switches .btn, .panel-cams .cams-secondary .switch { min-height: 2.75rem; font-size: 0.875rem; }
 
-.cam-list { list-style: none; margin: var(--space-8) calc(-1 * var(--space-12)) 0; padding: 0; }
+/* Cams sheet: search, then one collapsible group per country. Tokens first, so they are easy to change. */
+.cams-search { margin: var(--space-16) 0 var(--space-8); }
+.cams-search-input {
+  display: block;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0 var(--space-16);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 1rem;
+  appearance: none;
+}
+.cams-search-input::placeholder { color: var(--color-ink-tertiary); opacity: 1; }
+.cams-search-input:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+.cams-empty { margin: var(--space-24) 0; text-align: center; font-size: 0.875rem; line-height: 1.25rem; color: var(--color-ink-secondary); overflow-wrap: anywhere; }
+
+.cam-countries {
+  --cam-head-h: 3.5rem;
+  --cam-section-gap: var(--space-24);
+  --cam-radius: var(--radius-md);
+  --cam-dur: 200ms;
+  --cam-ease: cubic-bezier(0.05, 0.7, 0.1, 1); /* emphasized decelerate */
+  margin: var(--space-8) 0 0;
+}
+.cam-country {
+  border: 1px solid var(--color-line);
+  border-radius: var(--cam-radius);
+  background: var(--color-surface);
+}
+.cam-country[hidden], .cam-row[hidden], .cams-empty[hidden], .snackbar[hidden] { display: none; }
+.cam-country + .cam-country { margin-top: var(--cam-section-gap); }
+.cam-country-title { position: sticky; top: 0; z-index: 2; margin: 0; border-radius: var(--cam-radius); background: var(--color-surface); }
+.cam-country[data-open="true"] .cam-country-title { border-radius: var(--cam-radius) var(--cam-radius) 0 0; box-shadow: 0 1px 0 var(--color-line); }
+.cam-country-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  width: 100%;
+  height: var(--cam-head-h);
+  padding: 0 var(--space-12) 0 var(--space-16);
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cam-country-head:focus-visible { outline: 3px solid var(--color-focus); outline-offset: -3px; }
+.cc-name { flex: 1; min-width: 0; font-family: var(--font-ui); font-size: 1rem; line-height: 1.5rem; font-weight: 600; color: var(--color-ink); overflow-wrap: anywhere; }
+.cc-meta { display: inline-flex; align-items: center; gap: var(--space-8); font-size: 0.875rem; line-height: 1.25rem; font-weight: 500; color: var(--color-ink-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cc-count.is-zero { color: var(--color-ink-tertiary); }
+.cc-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--color-accent); }
+.cc-dot[hidden] { display: none; }
+.cc-chevron { flex: none; width: 1.5rem; height: 1.5rem; transition: transform var(--cam-dur) var(--cam-ease); }
+.cam-country[data-open="true"] .cc-chevron { transform: rotate(180deg); }
+.cam-country-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition: grid-template-rows var(--cam-dur) var(--cam-ease), visibility 0s linear var(--cam-dur);
+}
+.cam-country[data-open="true"] .cam-country-body { grid-template-rows: 1fr; visibility: visible; transition-delay: 0s; }
+.cam-country-inner { min-height: 0; overflow: hidden; padding: 0 var(--space-4); }
+.cc-bulk { display: flex; padding: var(--space-4) var(--space-12) 0; }
+.cc-bulk-btn {
+  min-height: 2.75rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cc-bulk-btn:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; border-radius: var(--radius-sm); }
+.cc-bulk[hidden], .cc-bulk-btn[hidden] { display: none; }
+.cam-rows { list-style: none; margin: 0; padding: 0 0 var(--space-4); }
+.cam-rows .cam-row { scroll-margin-top: calc(var(--cam-head-h) + var(--space-16)); }
+@media (prefers-reduced-motion: reduce) {
+  .cam-country-body, .cc-chevron { transition: none; }
+}
+.lite .cam-country-body, .lite .cc-chevron { transition: none; }
+
+/* Snackbar with Undo: inside the Cams sheet, above its footer. One at a time. */
+.snackbar {
+  position: absolute;
+  left: var(--space-16);
+  right: var(--space-16);
+  bottom: calc(var(--safe-bottom) + var(--space-48, 3rem));
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-16);
+  padding: var(--space-4) var(--space-8) var(--space-4) var(--space-16);
+  border-radius: var(--radius-md);
+  background: var(--color-ink);
+  color: var(--color-primary-ink);
+  box-shadow: var(--shadow-3);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 500;
+}
+.snackbar-undo { min-height: 2.75rem; padding: 0 var(--space-12); border: 0; background: transparent; color: var(--color-accent-night); font: inherit; font-weight: 600; cursor: pointer; }
+.snackbar-undo:focus-visible { outline: 3px solid var(--color-accent-night); outline-offset: -3px; border-radius: var(--radius-sm); }
 .cam-row {
   display: flex;
   align-items: center;

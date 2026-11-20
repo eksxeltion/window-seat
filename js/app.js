@@ -193,6 +193,10 @@ const el = {
   noticeBtn: $("#notice-btn"),
   toast: $("#toast"),
   camsList: $("#cams-list"),
+  camsSearch: $("#cams-search"),
+  camsEmpty: $("#cams-empty"),
+  snack: $("#cams-snack"),
+  snackText: $("#cams-snack-text"),
   mixList: $("#mix-list"),
   volume: $("#music-volume"),
   volumeOut: $("#music-volume-out"),
@@ -1339,10 +1343,12 @@ function renderCamsPanel(now = new Date()) {
   $("#cams-only-daytime").setAttribute("aria-pressed", String(state.onlyDaytime));
   for (const c of $$('[data-action="pick-group"]', $("#cams-quick"))) c.setAttribute("aria-pressed", String(groupFilled(c.dataset.group)));
 
+  const q = camsUI.query;
   for (const row of $$(".cam-row", el.camsList)) {
     const id = row.dataset.id;
     const cam = camById(id);
     const on = isEnabled(id);
+    row.hidden = !!q && !camMatches(cam, q);
     const failed = state.failed.has(id);
     const current = id === showing;
     const asleep = isSleeping(cam, now);
@@ -1367,6 +1373,132 @@ function renderCamsPanel(now = new Date()) {
     badge.className = "badge " + (failed ? "badge-failed" : "badge-now");
     badge.textContent = failed ? "Unavailable right now" : "Now showing";
   }
+  renderCountrySections(showing, q);
+}
+
+/* ---- Cams sheet: collapsible country sections, search, bulk add or remove with Undo ---- */
+
+// Open or closed per country is saved (windowSeat.camsOpen). `session` holds the open-menu override (the Playing
+// cam's section opens each time the sheet does) without saving it. `temp` is a header tap made while searching.
+const camsUI = { saved: {}, session: {}, temp: {}, query: "", groups: [], undo: null };
+{
+  const raw = store.get("camsOpen", {});
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) for (const k of Object.keys(raw)) if (typeof raw[k] === "boolean") camsUI.saved[k] = raw[k];
+}
+
+const countryOf = (cam) => (cam && cam.country) || "Other";
+
+/** Cams grouped by country in list order (first seen), with an Other section last for a blank country. */
+function groupByCountry() {
+  const map = new Map();
+  for (const cam of CAMS) {
+    const name = countryOf(cam);
+    if (!map.has(name)) map.set(name, []);
+    map.get(name).push(cam);
+  }
+  const out = Array.from(map, ([name, cams]) => ({ name, cams }));
+  const other = out.findIndex((g) => g.name === "Other");
+  if (other > -1 && other < out.length - 1) out.push(out.splice(other, 1)[0]);
+  return out;
+}
+
+function camMatches(cam, q) {
+  if (!cam) return false;
+  const hay = [cam.title, cam.city, cam.region, cam.country, cam.type, ...(cam.tags || [])].join(" ").toLowerCase();
+  return q.split(/\s+/).every((word) => hay.includes(word));
+}
+
+/** Search wins over the saved state: sections with matches are open, the others are hidden. */
+function countryOpen(name, matches) {
+  if (camsUI.query) return matches > 0 && camsUI.temp[name] !== false;
+  if (name in camsUI.session) return camsUI.session[name];
+  if (name in camsUI.saved) return camsUI.saved[name];
+  return name === "Japan";
+}
+
+function renderCountrySections(showing, q) {
+  let shown = 0;
+  for (const g of camsUI.groups) {
+    const cams = g.cams;
+    const on = cams.filter((c) => isEnabled(c.id)).length;
+    const matches = q ? cams.filter((c) => camMatches(c, q)).length : cams.length;
+    const open = countryOpen(g.name, matches);
+    const sec = g.section;
+    sec.hidden = !!q && !matches;
+    if (!sec.hidden) shown += matches;
+    sec.dataset.open = String(open);
+    g.region.inert = !open; // a collapsed section's rows leave the tab order at once (CSS hides them after the animation)
+    g.head.setAttribute("aria-expanded", String(open));
+    const playing = !!showing && cams.some((c) => c.id === showing);
+    g.dot.hidden = !(playing && !open && !q);
+    g.count.textContent = q ? (matches === 1 ? "1 match" : `${matches} matches`) : `${on} of ${cams.length} in rotation`;
+    g.count.classList.toggle("is-zero", !q && on === 0);
+    g.bulk.hidden = !!q;
+    const all = on === cams.length;
+    g.bulk.textContent = all ? "Remove all" : "Add all to rotation";
+    g.bulk.setAttribute("aria-label", all ? `Remove all ${g.name} cams from rotation` : `Add all ${g.name} cams to rotation`);
+  }
+  el.camsEmpty.hidden = !(q && !shown);
+  el.camsEmpty.textContent = q && !shown ? `No cams match "${el.camsSearch.value.trim()}"` : "";
+}
+
+function toggleCountry(name) {
+  const g = camsUI.groups.find((x) => x.name === name);
+  if (!g) return;
+  const q = camsUI.query;
+  const open = countryOpen(name, q ? g.cams.filter((c) => camMatches(c, q)).length : g.cams.length);
+  if (q) camsUI.temp[name] = !open;
+  else {
+    camsUI.saved[name] = !open;
+    delete camsUI.session[name];
+    store.set("camsOpen", camsUI.saved);
+  }
+  renderCamsPanel();
+}
+
+function setCamsQuery(text) {
+  camsUI.query = String(text || "").trim().toLowerCase();
+  camsUI.temp = {};
+  renderCamsPanel();
+}
+
+/** Check or uncheck every cam in one country through setManyEnabled; Undo restores exactly the cams that changed. */
+function bulkCountry(name) {
+  const g = camsUI.groups.find((x) => x.name === name);
+  if (!g) return;
+  const on = !g.cams.every((c) => isEnabled(c.id));
+  const ids = g.cams.filter((c) => isEnabled(c.id) !== on).map((c) => c.id);
+  if (!ids.length) return;
+  setManyEnabled(ids, on, "shortcut", "country");
+  const n = ids.length;
+  showSnack(`${n} ${name} ${n === 1 ? "cam" : "cams"} ${on ? "added" : "removed"}.`, () => setManyEnabled(ids, !on, "shortcut", "undo"));
+}
+
+function showSnack(text, undo) {
+  clearTimeout(camsUI.undoTimer);
+  camsUI.undo = undo;
+  camsUI.undoFrom = document.activeElement && document.activeElement.dataset.action === "bulk-country" ? document.activeElement : null;
+  el.snackText.textContent = text;
+  el.snack.hidden = false;
+  camsUI.undoTimer = setTimeout(hideSnack, 6000);
+}
+
+function hideSnack() {
+  clearTimeout(camsUI.undoTimer);
+  camsUI.undo = null;
+  const hadFocus = el.snack.contains(document.activeElement);
+  el.snack.hidden = true;
+  // Focus was on Undo: hand it back to the button that made the change, else Done.
+  if (hadFocus && state.openPanel === "cams") {
+    const back = camsUI.undoFrom && camsUI.undoFrom.isConnected && isVisible(camsUI.undoFrom) ? camsUI.undoFrom : $('#panel-cams [data-action="close-panel"]');
+    back.focus({ preventScroll: true });
+  }
+}
+
+function undoBulk() {
+  const undo = camsUI.undo;
+  hideSnack();
+  if (undo) undo();
 }
 
 const capital = (t) => (t ? t[0].toUpperCase() + t.slice(1) : "");
@@ -1400,69 +1532,130 @@ function buildCamsPanel() {
   for (const country of topValues("country", 4)) quick.append(chip(`country:${country}`, country));
   for (const type of topValues("type", 3)) quick.append(chip(`type:${type}`, capital(type)));
 
+  camsUI.groups = groupByCountry();
   const frag = document.createDocumentFragment();
-  for (const cam of CAMS) {
-    const li = document.createElement("li");
-    li.className = "cam-row";
-    li.dataset.id = cam.id;
-
-    const check = document.createElement("button");
-    check.type = "button";
-    check.className = "cam-check";
-    check.setAttribute("role", "checkbox");
-    check.setAttribute("aria-checked", "false");
-    check.dataset.action = "toggle-cam";
-    check.dataset.id = cam.id;
-    const box = document.createElement("span");
-    box.className = "check-box";
-    box.setAttribute("aria-hidden", "true");
-
-    const info = document.createElement("span");
-    info.className = "cam-info";
-    const title = document.createElement("span");
-    title.className = "cam-title";
-    title.textContent = cam.title;
-    const sub = document.createElement("span");
-    sub.className = "cam-sub";
-    const where = document.createElement("span");
-    where.className = "cam-where";
-    where.textContent = [cam.country, capital(cam.type)].filter(Boolean).join(" · ");
-    // Now showing is spoken only (the row's soft highlight shows it); Unavailable right now is a short line.
-    const badge = document.createElement("span");
-    badge.className = "badge";
-    badge.hidden = true;
-    // Web-only cams while casting (set in renderCamsPanel): a calm label, the TV cannot play them.
-    const phone = document.createElement("span");
-    phone.className = "phone-mark";
-    phone.textContent = "Phone only";
-    phone.hidden = true;
-    sub.append(where, badge, phone);
-    info.append(title, sub);
-    // Right-hand time stack: local time, with Sleeping under it.
-    const time = document.createElement("span");
-    time.className = "cam-time";
-    const clock = document.createElement("span");
-    clock.className = "cam-clock";
-    const sleep = document.createElement("span");
-    sleep.className = "sleep-mark";
-    sleep.textContent = "Sleeping";
-    sleep.hidden = true;
-    time.append(clock, sleep);
-    check.append(box, info, time);
-
-    // A 32px play circle (icon only) inside a 44px tap target. It plays the cam now and never changes the check.
-    const play = document.createElement("button");
-    play.type = "button";
-    play.className = "cam-play";
-    play.dataset.action = "watch";
-    play.dataset.id = cam.id;
-    play.setAttribute("aria-label", `Play ${cam.title} now`);
-    play.innerHTML = '<span class="cam-play-dot" aria-hidden="true"><svg class="icon"><use href="#i-play"></use></svg></span>';
-
-    li.append(check, play);
-    frag.append(li);
-  }
+  camsUI.groups.forEach((g, gi) => {
+    const sec = document.createElement("section");
+    sec.className = "cam-country";
+    sec.dataset.country = g.name;
+    const h = document.createElement("h3");
+    h.className = "cam-country-title";
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "cam-country-head";
+    head.id = `cc-head-${gi}`;
+    head.dataset.action = "toggle-country";
+    head.dataset.country = g.name;
+    head.setAttribute("aria-expanded", "false");
+    head.setAttribute("aria-controls", `cc-body-${gi}`);
+    const nm = document.createElement("span");
+    nm.className = "cc-name";
+    nm.textContent = g.name;
+    const meta = document.createElement("span");
+    meta.className = "cc-meta";
+    const dot = document.createElement("span");
+    dot.className = "cc-dot";
+    dot.hidden = true;
+    dot.setAttribute("role", "img");
+    dot.setAttribute("aria-label", "Playing now");
+    const count = document.createElement("span");
+    count.className = "cc-count";
+    meta.append(dot, count);
+    const chev = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    chev.setAttribute("class", "icon cc-chevron");
+    chev.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "#i-chevron-down");
+    chev.append(use);
+    head.append(nm, meta, chev);
+    h.append(head);
+    const region = document.createElement("div");
+    region.className = "cam-country-body";
+    region.id = `cc-body-${gi}`;
+    region.setAttribute("role", "region");
+    region.setAttribute("aria-labelledby", head.id);
+    const inner = document.createElement("div");
+    inner.className = "cam-country-inner";
+    const bulkRow = document.createElement("div");
+    bulkRow.className = "cc-bulk";
+    const bulk = document.createElement("button");
+    bulk.type = "button";
+    bulk.className = "cc-bulk-btn";
+    bulk.dataset.action = "bulk-country";
+    bulk.dataset.country = g.name;
+    bulkRow.append(bulk);
+    const ul = document.createElement("ul");
+    ul.className = "cam-rows";
+    inner.append(bulkRow, ul);
+    region.append(inner);
+    sec.append(h, region);
+    Object.assign(g, { section: sec, head, dot, count, bulk, region });
+    frag.append(sec);
+    for (const cam of g.cams) ul.append(buildCamRow(cam));
+  });
   el.camsList.append(frag);
+}
+
+function buildCamRow(cam) {
+  const li = document.createElement("li");
+  li.className = "cam-row";
+  li.dataset.id = cam.id;
+
+  const check = document.createElement("button");
+  check.type = "button";
+  check.className = "cam-check";
+  check.setAttribute("role", "checkbox");
+  check.setAttribute("aria-checked", "false");
+  check.dataset.action = "toggle-cam";
+  check.dataset.id = cam.id;
+  const box = document.createElement("span");
+  box.className = "check-box";
+  box.setAttribute("aria-hidden", "true");
+
+  const info = document.createElement("span");
+  info.className = "cam-info";
+  const title = document.createElement("span");
+  title.className = "cam-title";
+  title.textContent = cam.title;
+  const sub = document.createElement("span");
+  sub.className = "cam-sub";
+  const where = document.createElement("span");
+  where.className = "cam-where";
+  where.textContent = [cam.country, capital(cam.type)].filter(Boolean).join(" · ");
+  // Now showing is spoken only (the row's soft highlight shows it); Unavailable right now is a short line.
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.hidden = true;
+  // Web-only cams while casting (set in renderCamsPanel): a calm label, the TV cannot play them.
+  const phone = document.createElement("span");
+  phone.className = "phone-mark";
+  phone.textContent = "Phone only";
+  phone.hidden = true;
+  sub.append(where, badge, phone);
+  info.append(title, sub);
+  // Right-hand time stack: local time, with Sleeping under it.
+  const time = document.createElement("span");
+  time.className = "cam-time";
+  const clock = document.createElement("span");
+  clock.className = "cam-clock";
+  const sleep = document.createElement("span");
+  sleep.className = "sleep-mark";
+  sleep.textContent = "Sleeping";
+  sleep.hidden = true;
+  time.append(clock, sleep);
+  check.append(box, info, time);
+
+  // A 32px play circle (icon only) inside a 44px tap target. It plays the cam now and never changes the check.
+  const play = document.createElement("button");
+  play.type = "button";
+  play.className = "cam-play";
+  play.dataset.action = "watch";
+  play.dataset.id = cam.id;
+  play.setAttribute("aria-label", `Play ${cam.title} now`);
+  play.innerHTML = '<span class="cam-play-dot" aria-hidden="true"><svg class="icon"><use href="#i-play"></use></svg></span>';
+
+  li.append(check, play);
+  return li;
 }
 
 function buildMusicPanel() {
@@ -1695,6 +1888,14 @@ function openPanel(name, opener) {
   if (state.openPanel) closePanel(false);
   const panel = el.panels[name];
   if (!panel) return;
+  if (name === "cams") {
+    // Each time the sheet opens: no search, and the Playing cam's section is open (not saved).
+    el.camsSearch.value = "";
+    camsUI.query = "";
+    camsUI.temp = {};
+    const playing = camById(showingCamId());
+    camsUI.session = playing ? { [countryOf(playing)]: true } : {};
+  }
   panelOpener = opener || null;
   state.openPanel = name;
   panel.hidden = false;
@@ -1707,9 +1908,13 @@ function openPanel(name, opener) {
   if (name === "phone") renderPhoneQr();
   const target = $(FOCUSABLE, panel);
   if (name === "cams" || name === "music") {
-    // The Cams and Mix sheets open at the top so Time of day and Quick picks, or Shuffle and the volume, show:
-    // focus Done, no scroll to the current cam or the Playing mix.
+    // The Mix sheet opens at the top (focus Done, no scroll to the Playing mix). The Cams sheet scrolls the Playing
+    // cam's section into view instead; Time of day and Quick picks may scroll away.
     $(".panel-body", panel).scrollTop = 0;
+    if (name === "cams") {
+      const cur = $(".cam-row.is-current", el.camsList);
+      if (cur) quietly(() => cur.scrollIntoView({ block: "center" }));
+    }
     if (target) target.focus({ preventScroll: true });
   } else if (target) {
     target.focus();
@@ -1757,6 +1962,7 @@ function closePanel(restoreFocus = true) {
   const name = state.openPanel;
   if (!name) return;
   el.panels[name].hidden = true;
+  if (name === "cams") hideSnack();
   state.openPanel = null;
   body.classList.remove("panel-open");
   setBackgroundInert(false);
@@ -2218,6 +2424,7 @@ const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), [tabi
 
 function isVisible(node) {
   if (!node || node.closest("[hidden]")) return false;
+  if (getComputedStyle(node).visibility === "hidden") return false; // a collapsed country section
   const r = node.getBoundingClientRect();
   return r.width > 0 && r.height > 0;
 }
@@ -2333,6 +2540,9 @@ function onKeyDown(e) {
     else togglePause();
     return;
   }
+
+  // Typing in the Cams search keeps its keys (letters, arrows, Backspace); Tab and Escape still work.
+  if (e.target === el.camsSearch && key !== "Tab" && key !== "Escape") return;
 
   // Any key while playing locally keeps the chrome up (and restarts the 6 second hold).
   const local = localPlayerOn();
@@ -2472,6 +2682,12 @@ function handleAction(action, btn) {
       return toggleTimeRule("onlyDaytime");
     case "pick-group":
       return pickGroup(btn.dataset.group);
+    case "toggle-country":
+      return toggleCountry(btn.dataset.country);
+    case "bulk-country":
+      return bulkCountry(btn.dataset.country);
+    case "undo-bulk":
+      return undoBulk();
     case "play-mix":
       return playMix(id, { userChoice: true });
     case "next-mix":
@@ -2493,6 +2709,7 @@ function bindInput() {
     handleAction(btn.dataset.action, btn);
   });
 
+  el.camsSearch.addEventListener("input", () => setCamsQuery(el.camsSearch.value));
   el.startBtn.addEventListener("click", start);
   el.tapMusic.addEventListener("click", tapToPlay);
   el.noticeBtn.addEventListener("click", () => noticeAction && noticeAction());

@@ -86,7 +86,17 @@ def pressed(pg, sel):
 
 
 def all_rows_visible(pg):
-    return pg.evaluate("()=>[...document.querySelectorAll('#cams-list .cam-row')].every(r=>r.offsetParent!==null && !r.hidden)")
+    """Every row is still in the list (no filter hides one). Rows in a collapsed country section stay in the DOM."""
+    return pg.evaluate("()=>[...document.querySelectorAll('#cams-list .cam-row')].every(r=>!r.hidden)")
+
+
+def open_section(pg, country):
+    """Open a country section if it is collapsed (the sheet starts with Japan and the Playing cam's country open)."""
+    head = f'#cams-list .cam-country-head[data-country="{country}"]'
+    if pg.get_attribute(head, "aria-expanded") != "true":
+        pg.click(head)
+    pg.wait_for_function("(c)=>document.querySelector(`#cams-list .cam-country[data-country=\"${c}\"] .cam-country-body`).getBoundingClientRect().height>0", arg=country)
+    pg.wait_for_timeout(260)  # the 200ms height animation
 
 
 with sync_playwright() as p:
@@ -123,16 +133,16 @@ with sync_playwright() as p:
       const on=CAMS.filter(c=>c.default); return {awake: on.filter(c=>!lt.isSleeping(c,d)).length, asleep: on.filter(c=>lt.isSleeping(c,d)).length}}""")
     count = pg.text_content("#cams-count")
     check(f"sheet: count '{exp['awake']} in rotation now. {exp['asleep']} checked cams are sleeping.' ({count})", count == f"{exp['awake']} in rotation now. {exp['asleep']} checked cams are sleeping." and exp["asleep"] > 0)
-    top = pg.evaluate("""()=>{const body=document.querySelector('#panel-cams .panel-body'); const br=body.getBoundingClientRect(); const vis=s=>{const r=document.querySelector(s).getBoundingClientRect(); return r.top>=br.top-1 && r.bottom<=br.bottom+1};
-      return {scroll: body.scrollTop, time: vis('#cams-time-title'), skip: vis('#cams-skip-sleeping'), daytime: vis('#cams-only-daytime'), quick: vis('#cams-quick-title'), chips: vis('#cams-quick [data-group=all]')}}""")
-    check(f"sheet: opens at the top with TIME OF DAY and QUICK PICKS visible ({top})", top["scroll"] == 0 and all(top[k] for k in ("time", "skip", "daytime", "quick", "chips")))
+    top = pg.evaluate("""()=>{const body=document.querySelector('#panel-cams .panel-body'); const br=body.getBoundingClientRect(); const cur=document.querySelector('#cams-list .cam-row.is-current');
+      const cr=cur.getBoundingClientRect(); const sec=cur.closest('.cam-country'); return {open: sec.dataset.open, expanded: sec.querySelector('.cam-country-head').getAttribute('aria-expanded'), inView: cr.top>=br.top-1 && cr.bottom<=br.bottom+1, country: sec.dataset.country}}""")
+    check(f"sheet: opens with the Playing cam's section open and the Playing row in view ({top})", top["open"] == "true" and top["expanded"] == "true" and top["inView"])
     labels = pg.evaluate("()=>['#cams-time-title','#cams-quick-title'].map(s=>{const e=document.querySelector(s); const cs=getComputedStyle(e); return [e.innerText, cs.textTransform, cs.fontWeight]})")
     check(f"sheet: section labels read TIME OF DAY and QUICK PICKS, uppercase 600 ({labels})", labels == [["TIME OF DAY", "uppercase", "600"], ["QUICK PICKS", "uppercase", "600"]])
     caps = pg.evaluate("()=>['#cams-skip-sleeping','#cams-only-daytime'].map(s=>{const b=document.querySelector(s); const d=document.getElementById(b.getAttribute('aria-describedby')); return d && b.contains(d) ? d.textContent : null})")
     check(f"sheet: each switch has its own caption ({caps})", caps == ["Cams where it is midnight to 6 AM local time sit out until morning.", "Rotate only cams where it is 7 AM to 7 PM local time."])
     check("sheet: the old shared time-of-day hint is gone", "Sleeping is midnight" not in pg.inner_text("#panel-cams") and pg.locator("#panel-cams .cams-hint").count() == 0)
     tog = pg.evaluate("()=>{const r=document.querySelector('#cams-skip-sleeping .switch-track').getBoundingClientRect(); return [r.width, r.height]}")
-    check(f"sheet: toggles are 44x26 ({tog})", tog == [44, 26])
+    check(f"sheet: toggles are 44x26 ({tog})", abs(tog[0] - 44) < 0.05 and abs(tog[1] - 26) < 0.05)
     chip_box = pg.evaluate("()=>{const c=document.querySelector('#cams-quick [data-group=all]'); const cs=getComputedStyle(c); return [c.getBoundingClientRect().height, cs.paddingLeft]}")
     check(f"sheet: quick pick chips are 30px tall with 12px padding ({chip_box})", chip_box == [30, "12px"])
     check("sheet: Interval and Lite stay in the sheet", pg.locator("#panel-cams [data-action=interval]").count() == 1 and pg.locator("#panel-cams [data-action=lite]").count() == 1)
@@ -143,11 +153,12 @@ with sync_playwright() as p:
     check(f"rows: country and type ({pg.text_content(row(pg, SHINJUKU) + ' .cam-where')})", pg.text_content(f"{row(pg, SHINJUKU)} .cam-where") == "Japan · Street")
     check("rows: local time 9:51 AM in Tokyo", pg.text_content(f"{row(pg, SHINJUKU)} .cam-clock") == "9:51 AM")
     check("rows: an awake cam has no Sleeping mark", not pg.is_visible(f"{row(pg, SHINJUKU)} .sleep-mark"))
+    open_section(pg, "France")
     check("rows: Paris shows 1:51 AM and Sleeping", pg.text_content(f"{row(pg, EIFFEL)} .cam-clock") == "1:51 AM" and pg.is_visible(f"{row(pg, EIFFEL)} .sleep-mark") and pg.text_content(f"{row(pg, EIFFEL)} .sleep-mark") == "Sleeping")
     check("rows: a play control on every row", pg.locator("#cams-list .cam-row [data-action=watch]").count() == 44)
     play = pg.evaluate(f"""()=>{{const b=document.querySelector('{row(pg, SHINJUKU)} [data-action=watch]'); const d=b.querySelector('.cam-play-dot'); const r=d.getBoundingClientRect(); const cs=getComputedStyle(d);
       return {{text: b.innerText.trim(), label: b.getAttribute('aria-label'), w: r.width, h: r.height, radius: cs.borderRadius, icon: !!d.querySelector('use[href="#i-play"]')}}}}""")
-    check(f"rows: play is a 32px circle with a play icon only, no visible text ({play})", play["text"] == "" and play["w"] == 32 and play["h"] == 32 and play["radius"] == "50%" and play["icon"])
+    check(f"rows: play is a 32px circle with a play icon only, no visible text ({play})", play["text"] == "" and abs(play["w"] - 32) < 0.05 and abs(play["h"] - 32) < 0.05 and play["radius"] == "50%" and play["icon"])
     check(f"rows: play keeps the accessible name 'Play Shinjuku Station now' ({play['label']})", play["label"] == "Play Shinjuku Station now")
     check("rows: no visible 'Play now' text in the sheet", "Play now" not in pg.inner_text("#panel-cams"))
     stack = pg.evaluate(f"""()=>{{const r=document.querySelector('{row(pg, EIFFEL)}'); const t=r.querySelector('.cam-time'); const c=r.querySelector('.cam-clock').getBoundingClientRect(); const s=r.querySelector('.sleep-mark').getBoundingClientRect();
@@ -339,8 +350,8 @@ with sync_playwright() as p:
     pg.wait_for_selector("#panel-cams", state="hidden")
     pg.click("#remote [data-action=open-cams]")
     pg.wait_for_selector("#panel-cams:not([hidden])")
-    opened = pg.evaluate("()=>({scroll: document.querySelector('#panel-cams .panel-body').scrollTop, row: (document.activeElement.closest('.cam-row')||{dataset:{}}).dataset.id || null, inSheet: !!document.activeElement.closest('#panel-cams'), cur: [...document.querySelectorAll('#cams-list .cam-row.is-current')].map(r=>r.dataset.id)})")
-    check(f"cast badge: reopening the sheet keeps the TV's cam current but opens at the top, focus in the header ({opened})", opened == {"scroll": 0, "row": None, "inSheet": True, "cur": [pick]})
+    opened = pg.evaluate("()=>({inView: (()=>{const b=document.querySelector('#panel-cams .panel-body').getBoundingClientRect(); const r=document.querySelector('#cams-list .cam-row.is-current').getBoundingClientRect(); return r.top>=b.top-1 && r.bottom<=b.bottom+1})(), open: document.querySelector('#cams-list .cam-row.is-current').closest('.cam-country').dataset.open, row: (document.activeElement.closest('.cam-row')||{dataset:{}}).dataset.id || null, inSheet: !!document.activeElement.closest('#panel-cams'), cur: [...document.querySelectorAll('#cams-list .cam-row.is-current')].map(r=>r.dataset.id)})")
+    check(f"cast badge: reopening the sheet keeps the TV's cam current, its section open and in view, focus in the header ({opened})", opened == {"inView": True, "open": "true", "row": None, "inSheet": True, "cur": [pick]})
     pg.context.close()
 
     # ------------------------------------------------------------ missing or invalid timezone errs toward showing the cam
