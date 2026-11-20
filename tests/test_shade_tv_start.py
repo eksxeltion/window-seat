@@ -14,7 +14,7 @@ if base.endswith(".html"):
 HERE = os.path.dirname(os.path.abspath(__file__))
 SENDER = open(os.path.join(HERE, "mock_cast_sender.js")).read()
 FAKE_YT = open(os.path.join(HERE, "fake_youtube.js")).read()
-BUILD = "2026-11-20.34"
+BUILD = "2026-11-20.35"
 # 1x1 PNG served for every cam still, so #hero-img loads without the network.
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 fails, logs = [], []

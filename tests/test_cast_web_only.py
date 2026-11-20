@@ -10,6 +10,7 @@ the IFrame player on Cast, so the sheet marks them `web-only` and the TV never t
       to the TV; the local phone player still plays them.
 Runs against the stubbed YouTube API (tests/fake_youtube.js) and the mock Cast sender. telemetry_guard aborts the real
 telemetry hosts. Usage: test_cast_web_only.py BASE_URL"""
+import re
 import json
 import os
 import sys
@@ -260,7 +261,7 @@ with sync_playwright() as p:
     count = pg.text_content("#cams-count") or ""
     print("count with only the web-only cam checked:", count)
     check(f"(3) casting: only a Phone only cam checked, the count shows the TV's castable fallback, not 0 ({count!r})",
-          count.endswith("in rotation now.") and not count.startswith("0 ") and int(count.split()[0]) > 0)
+          re.fullmatch(r"\d+ in rotation now(\. \d+ checked cams? (is|are) sleeping\.)?", count) and not count.startswith("0 ") and int(count.split()[0]) > 0)
     pg.click('#cams-quick [data-group="all"]')
     pg.wait_for_timeout(200)
     pg.evaluate("()=>__mockCast.sent.length=0")

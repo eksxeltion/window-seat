@@ -625,7 +625,7 @@ body:not(.lp-on) #tuning { display: none; }
 .panel-cams .panel-head h2 { font-size: 1.375rem; line-height: 1.75rem; font-weight: 600; }
 .panel-cams .cams-count { margin-top: var(--space-4); font-size: 0.8125rem; line-height: 1.125rem; font-weight: 500; color: var(--color-ink-secondary); }
 .panel-cams .btn-done { min-height: 2.75rem; margin: calc(-1 * var(--space-8)) calc(-1 * var(--space-12)) 0 0; padding: 0 var(--space-12); font-size: 1rem; line-height: 1.25rem; font-weight: 600; color: var(--color-accent); }
-.panel-cams .panel-body { padding: var(--space-8) var(--space-24) var(--space-24); scroll-padding-top: 4rem; /* a focused row clears the sticky country header */ }
+.panel-cams .panel-body { padding: 0 var(--space-24) var(--space-24); /* no top padding: the pinned search sits flush at the scrollport edge */ --cams-search-h: 3.75rem; /* pinned search: 8 + 44 + 8 */ scroll-padding-top: calc(var(--cams-search-h) + 3.5rem); /* a focused row clears the pinned search and the country header */ }
 .panel-cams .cams-section { padding: var(--space-8) 0; }
 .panel-cams .cams-section + .cams-section { border-top: 0; padding-top: var(--space-8); }
 .panel-cams .cams-label { margin: 0 0 var(--space-8); font-size: 0.75rem; line-height: 1rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-ink-tertiary); }
@@ -653,7 +653,8 @@ body:not(.lp-on) #tuning { display: none; }
 .panel-cams .cams-secondary .cams-switches .btn, .panel-cams .cams-secondary .switch { min-height: 2.75rem; font-size: 0.875rem; }
 
 /* Cams sheet: search, then one collapsible group per country. Tokens first, so they are easy to change. */
-.cams-search { margin: var(--space-16) 0 var(--space-8); }
+/* Pinned under the Cams title for as long as the sheet is scrolled; opaque so rows never show through. */
+.cams-search { position: sticky; top: 0; z-index: 3; margin: 0; padding: var(--space-8) 0; background: var(--color-canvas); }
 .cams-search-input {
   display: block;
   width: 100%;
@@ -680,14 +681,20 @@ body:not(.lp-on) #tuning { display: none; }
   margin: var(--space-8) 0 0;
 }
 .cam-country {
+  position: relative;
   border: 1px solid var(--color-line);
   border-radius: var(--cam-radius);
   background: var(--color-surface);
 }
 .cam-country[hidden], .cam-row[hidden], .cams-empty[hidden], .snackbar[hidden] { display: none; }
 .cam-country + .cam-country { margin-top: var(--cam-section-gap); }
-.cam-country-title { position: sticky; top: 0; z-index: 2; margin: 0; border-radius: var(--cam-radius); background: var(--color-surface); }
-.cam-country[data-open="true"] .cam-country-title { border-radius: var(--cam-radius) var(--cam-radius) 0 0; box-shadow: 0 1px 0 var(--color-line); }
+.cam-sentinel { position: absolute; top: 0; left: 0; width: 1px; height: 1px; pointer-events: none; visibility: hidden; }
+.cam-country-title { position: sticky; top: var(--cams-search-h); z-index: 2; margin: 0; border-radius: var(--cam-radius); background: var(--color-surface); }
+.cam-country[data-open="true"] .cam-country-title { border-radius: var(--cam-radius) var(--cam-radius) 0 0; }
+/* Stuck: opaque sheet-canvas header (it also covers the card's side borders), square corners, and a hairline that
+   appears only while pinned. */
+.cam-country.is-stuck { border-radius: 0; }
+.cam-country.is-stuck .cam-country-title { margin: 0 -1px; border-radius: 0; background: var(--color-canvas); box-shadow: 0 1px 0 var(--color-line); }
 .cam-country-head {
   display: flex;
   align-items: center;
@@ -766,16 +773,16 @@ body:not(.lp-on) #tuning { display: none; }
 .cam-row {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: 0 var(--space-4) 0 0;
+  gap: 0;
+  padding: 0;
   border-radius: var(--radius-sm);
   transition: background 200ms ease-out;
 }
-.cam-row + .cam-row { margin-top: var(--space-4); }
 .cam-row.is-current { border-radius: 0.75rem; background: var(--color-accent-soft); }
 .cam-row.is-failed .cam-info { opacity: 0.55; }
 .cam-check {
   flex: 1;
+  align-self: stretch; /* the whole row minus the play button is the toggle */
   min-width: 0;
   display: flex;
   align-items: center;
@@ -797,20 +804,20 @@ body:not(.lp-on) #tuning { display: none; }
 .cam-title { display: block; font-size: 0.875rem; line-height: 1.125rem; font-weight: 600; color: var(--color-ink); overflow-wrap: anywhere; }
 .cam-sub { display: flex; flex-wrap: wrap; column-gap: var(--space-8); font-size: 0.75rem; line-height: 1rem; font-weight: 500; color: var(--color-ink-secondary); }
 .cam-time { flex: none; display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
-.cam-clock { font-size: 0.8125rem; line-height: 1rem; font-weight: 600; color: var(--color-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cam-clock { font-size: 0.875rem; line-height: 1.25rem; font-weight: 400; color: var(--color-ink-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cam-clock:empty { display: none; }
 .sleep-mark { font-size: 0.6875rem; line-height: 0.875rem; font-weight: 500; color: var(--color-sleeping); white-space: nowrap; }
 .sleep-mark[hidden] { display: none; }
-.cam-row.is-sleeping .cam-clock { font-weight: 500; color: var(--color-ink-tertiary); }
+.cam-row.is-sleeping .cam-clock { font-weight: 400; color: var(--color-ink-tertiary); }
 /* Unchecked cams stay in the list and look off. */
 .cam-row.is-off .cam-title, .cam-row.is-off .cam-sub, .cam-row.is-off .cam-clock { color: var(--color-ink-tertiary); }
-.cam-row.is-off .cam-clock { font-weight: 500; }
+.cam-row.is-off .cam-clock { font-weight: 400; }
 .cam-play {
   flex: none;
   display: grid;
   place-items: center;
-  width: 2.75rem;
-  height: 2.75rem;
+  width: 3rem;
+  height: 3rem;
   padding: 0;
   border: 0;
   border-radius: 50%;
