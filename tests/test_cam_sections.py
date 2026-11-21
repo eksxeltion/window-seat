@@ -157,6 +157,8 @@ with sync_playwright() as p:
     check("Japan counts 27 of 28 (one archive cam is off by default) and Italy 3 of 3", count_text(pg, "Japan") == "27 of 28 in rotation" and count_text(pg, "Italy") == "3 of 3 in rotation")
     pg.click(f"{head('Japan')}")
     settle(pg)
+    pg.evaluate("()=>document.querySelector('#panel-cams .panel-body').scrollTop=0")
+    pg.wait_for_timeout(250)
     chrome = pg.evaluate("""()=>{const h=document.querySelector('#cams-list .cam-country-head[data-country=Japan]'); const cs=getComputedStyle(h); const n=getComputedStyle(h.querySelector('.cc-name')); const c=getComputedStyle(h.querySelector('.cc-meta'));
       const secs=[...document.querySelectorAll('#cams-list .cam-country')]; const a=secs[0].getBoundingClientRect(), b2=secs[1].getBoundingClientRect(); const cr=getComputedStyle(secs[0]).borderRadius;
       return {h: h.getBoundingClientRect().height, w: h.getBoundingClientRect().width===secs[0].getBoundingClientRect().width-2, tag: h.tagName, name: [n.fontSize, n.fontWeight, n.lineHeight], meta: [c.fontSize, c.fontWeight, c.lineHeight, c.fontVariantNumeric], gap: b2.top-a.bottom, radius: cr,
@@ -263,6 +265,7 @@ with sync_playwright() as p:
     pg = phone()
     check("search: started", start(pg))
     open_cams(pg)
+    pg.evaluate("()=>document.querySelector('#panel-cams .panel-body').scrollTop=0")
     check("search: the field sits above the sections", pg.evaluate("()=>document.querySelector('#cams-search').getBoundingClientRect().bottom <= document.querySelector('#cams-list').getBoundingClientRect().top"))
     open_section(pg, "Italy")  # saved open, to be ignored while searching and back afterwards
     pg.click(head("Italy"))
@@ -349,22 +352,102 @@ with sync_playwright() as p:
     check("bulk: Undo is a no-op once it is gone, checks stay", not checked(pg, EIFFEL))
     pg.context.close()
 
-    # ------------------------------------------------------------ 7. screenshots (3)
+    # ------------------------------------------------------------ 6b. whole-row toggle, play does not toggle, type-only subtitles
+    pg = phone()
+    check("rowtap: started", start(pg))
+    open_cams(pg)
+    open_section(pg, "Japan")
+    tgl = f'{row(SHINJUKU)} [data-action="toggle-cam"]'
+    box = lambda sel: pg.locator(sel).bounding_box()
+    r0 = box(row(SHINJUKU))
+    for label, pos in (("title", None), ("clock", None), ("left edge", {"x": 1, "y": r0["height"] / 2})):
+        before = checked(pg, SHINJUKU)
+        sel = {"title": f"{row(SHINJUKU)} .cam-title", "clock": f"{row(SHINJUKU)} .cam-clock"}.get(label, row(SHINJUKU))
+        pg.locator(sel).click(position=pos) if pos else pg.locator(sel).click()
+        check(f"rowtap: a tap on the {label} flips the check", checked(pg, SHINJUKU) != before)
+    pb = box(f"{row(SHINJUKU)} [data-action=watch]")
+    check(f"rowtap: the play hit area is 48dp ({pb['width']}x{pb['height']})", abs(pb["width"] - 48) < 0.6 and abs(pb["height"] - 48) < 0.6)
+    dot = box(f"{row(SHINJUKU)} .cam-play-dot")
+    check(f"rowtap: the visual play circle stays 32px ({dot['width']})", abs(dot["width"] - 32) < 0.6)
+    check("rowtap: one toggle control per row, play is not nested in it", pg.evaluate("(s)=>{const r=document.querySelector(s);return r.querySelectorAll('[data-action=toggle-cam]').length===1 && !r.querySelector('[data-action=toggle-cam] [data-action=watch]')}", row(SHINJUKU)))
+    before = checked(pg, SHINJUKU)
+    pg.click(f"{row(SHINJUKU)} [data-action=watch]")
+    ok = wait_until(pg, f"()=>__windowSeat.currentCamId()==='{SHINJUKU}' && !__windowSeat.state.pending", 6000)
+    open_cams(pg)
+    check("rowtap: play plays the cam and leaves the check alone", ok and checked(pg, SHINJUKU) == before)
+    for c in ("Japan", "France"):
+        open_section(pg, c)
+    wh = pg.evaluate("()=>[...document.querySelectorAll('#cams-list .cam-where')].map(x=>x.textContent)")
+    check("subtitle: inside a section it is the type only, no country", wh and all("·" not in w for w in wh) and "Street" in wh and "Harbor" in wh)
+    check("subtitle: Japan Street and France Harbor never appear", "Japan · Street" not in wh and "France · Harbor" not in wh)
+    check("copy: standalone count has no trailing period", not pg.text_content("#cams-count").endswith("."))
+    pg.context.close()
+
+    # ------------------------------------------------------------ 6c. pinned search, stuck headers
+    pg = phone()
+    check("stuck: started", start(pg))
+    open_cams(pg)
+    pg.evaluate("()=>document.querySelector('#panel-cams .panel-body').scrollTop=0")
+    wait_until(pg, "()=>!document.querySelector('.cam-country.is-stuck')", 3000)
+    check("stuck: at the top no section is stuck, 16px radius, no hairline", pg.evaluate("()=>[...document.querySelectorAll('.cam-country')].every(s=>!s.classList.contains('is-stuck') && ['16px','16px 16px 16px 16px'].includes(getComputedStyle(s).borderRadius) && getComputedStyle(s.querySelector('.cam-country-title')).boxShadow==='none')"))
+    pg.evaluate("()=>{const b=document.querySelector('#panel-cams .panel-body'); b.scrollTo(0, document.querySelector('#cams-list').offsetTop + 300)}")
+    pg.wait_for_timeout(400)
+    st = pg.evaluate("""()=>{const s=document.querySelector('.cam-country.is-stuck'); if(!s) return null; const t=s.querySelector('.cam-country-title'); const cs=getComputedStyle(t);
+      const sr=document.querySelector('.cams-search').getBoundingClientRect(); return {bg:cs.backgroundColor, shadow:cs.boxShadow, tr:cs.borderRadius, sr:getComputedStyle(s).borderRadius, below: Math.abs(t.getBoundingClientRect().top-sr.bottom)<2.5,
+        canvas:getComputedStyle(document.documentElement).getPropertyValue('--color-canvas').trim()}}""")
+    check(f"stuck: a scrolled section is stuck, opaque canvas, hairline, square ({st})", st and st["bg"] == "rgb(243, 245, 247)" and st["shadow"] != "none" and st["tr"] == "0px" and st["sr"] == "0px" and st["below"])
+    sb = pg.evaluate("()=>document.querySelector('.cams-search').getBoundingClientRect().top - document.querySelector('#panel-cams .panel-body').getBoundingClientRect().top")
+    check(f"search: still pinned at the top of the scrolled sheet ({sb})", abs(sb) < 1.5 and pg.is_visible("#cams-search"))
+    pg.fill("#cams-search", "harbor")
+    pg.evaluate("()=>{const b=document.querySelector('#panel-cams .panel-body'); b.scrollTo(0, b.scrollHeight)}")
+    pg.wait_for_timeout(300)
+    check("search: the field and its query stay visible after scrolling matches", pg.is_visible("#cams-search") and pg.input_value("#cams-search") == "harbor" and in_view(pg, "#cams-search"))
+    # a header that is sliding out under the search (section end closer than a title height) is no longer stuck
+    pg.evaluate("""()=>{const b=document.querySelector('#panel-cams .panel-body'); const s=[...document.querySelectorAll('.cam-country')].find(x=>x.classList.contains('is-stuck')) || document.querySelector('.cam-country'); const p=document.querySelector('.cams-search').getBoundingClientRect().bottom; b.scrollTop += s.getBoundingClientRect().bottom - p - 20}""")
+    pg.wait_for_timeout(200)
+    check("stuck: a section ending within a title height of the pin is not stuck", pg.evaluate("""()=>[...document.querySelectorAll('.cam-country.is-stuck')].every(s=>Math.abs(s.querySelector('.cam-country-title').getBoundingClientRect().top-document.querySelector('.cams-search').getBoundingClientRect().bottom)<=1)"""))
+    pg.context.close()
+
+    # ------------------------------------------------------------ 7. screenshots (4, optional: WS_SHOT_DIR)
     pg = phone()
     check("shots: started", start(pg))
+    shot_dir = os.environ.get("WS_SHOT_DIR")
+    shot = lambda name: shot_dir and pg.screenshot(path=os.path.join(shot_dir, name))  # opt-in, so CI never needs a path
+    body_js = "document.querySelector('#panel-cams .panel-body')"
     open_cams(pg)
     pg.wait_for_timeout(400)
-    shot = lambda name: os.environ.get("WS_SHOT_DIR") and pg.screenshot(path=os.path.join(os.environ["WS_SHOT_DIR"], name))  # opt-in, so CI never needs a path
-    shot("cams-sections-collapsed-390x844.png")
-    open_section(pg, "Australia")
-    open_section(pg, "Italy")
-    pg.evaluate("()=>document.querySelector('#panel-cams .panel-body').scrollTo(0, document.querySelector('#cams-list').offsetTop - 120)")
+    cur = ws(pg, "currentCamId()")
+    cc = pg.evaluate("(id)=>document.querySelector(`#cams-list .cam-row[data-id=\"${id}\"]`).closest('.cam-country').dataset.country", cur)
+    # collapsed-scrolled: the other sections are collapsed; scroll so one open section's header is pinned with its first row
+    # sliding under the opaque header
+    scroll_into = lambda c, dy: pg.evaluate("([c,dy])=>{const b=document.querySelector('#panel-cams .panel-body'); const s=document.querySelector(`#cams-list .cam-country[data-country=\"${c}\"]`); b.scrollTop += s.getBoundingClientRect().top - document.querySelector('.cams-search').getBoundingClientRect().bottom + dy}", [c, dy])
+    scroll_into(cc, 78)
+    ok = wait_until(pg, "()=>document.querySelectorAll('.cam-country.is-stuck').length===1", 3000)
+    check("shots: exactly one stuck header after scrolling", ok)
+    shot("cams-rams34-collapsed-scrolled.png")
+    # playing-collapsed: collapse the cam that is actually playing
+    pg.evaluate(f"()=>{body_js}.scrollTop=0")
+    check("shots: scrolling back to the top clears the stuck header", wait_until(pg, "()=>!document.querySelector('.cam-country.is-stuck')", 3000))
+    if is_open(pg, cc):
+        pg.click(head(cc)); settle(pg)
+    check("shots: playing country collapsed with its Playing dot visible", not is_open(pg, cc) and pg.evaluate("(c)=>!document.querySelector(`#cams-list .cam-country-head[data-country=\"${c}\"] .cc-dot`).hidden", cc))
+    pg.evaluate("(c)=>document.querySelector(`#cams-list .cam-country-head[data-country=\"${c}\"]`).scrollIntoView({block:'center'})", cc)
     pg.wait_for_timeout(300)
-    shot("cams-sections-expanded-390x844.png")
+    shot("cams-rams34-playing-collapsed.png")
+    # searching
     pg.fill("#cams-search", "harbor")
-    pg.evaluate("()=>document.querySelector('#panel-cams .panel-body').scrollTo(0, document.querySelector('#cams-search').offsetTop - 16)")
     pg.wait_for_timeout(300)
-    shot("cams-sections-searching-390x844.png")
+    scroll_into("Australia", 70)
+    wait_until(pg, "()=>document.querySelectorAll('.cam-country.is-stuck').length===1", 2000)
+    pg.wait_for_timeout(300)
+    check("shots: searching, field visible with its query", pg.input_value("#cams-search") == "harbor" and in_view(pg, "#cams-search"))
+    shot("cams-rams34-searching.png")
+    # empty
+    pg.fill("#cams-search", "zzzz")
+    pg.evaluate(f"()=>{body_js}.scrollTop=0")
+    pg.wait_for_timeout(300)
+    check("shots: empty state quotes the query", pg.text_content("#cams-empty") == 'No cams match "zzzz"')
+    shot("cams-rams34-empty.png")
     pg.context.close()
     b.close()
 

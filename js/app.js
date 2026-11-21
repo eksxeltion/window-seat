@@ -1335,8 +1335,9 @@ function renderCamsPanel(now = new Date()) {
   let count;
   if (!checked.length) count = "No cams checked. Rotation uses every cam.";
   else {
-    count = `${inRotation} in rotation now.`;
-    if (sleeping) count += sleeping === 1 ? " 1 checked cam is sleeping." : ` ${sleeping} checked cams are sleeping.`;
+    count = `${inRotation} in rotation now`;
+    // A sentence break only when a second sentence follows; the standalone line has no trailing period.
+    if (sleeping) count += sleeping === 1 ? ". 1 checked cam is sleeping." : `. ${sleeping} checked cams are sleeping.`;
   }
   setText($("#cams-count"), count);
   $("#cams-skip-sleeping").setAttribute("aria-pressed", String(state.skipSleeping));
@@ -1538,6 +1539,10 @@ function buildCamsPanel() {
     const sec = document.createElement("section");
     sec.className = "cam-country";
     sec.dataset.country = g.name;
+    // 1px sentinel at the top of the section: when it scrolls under the pinned search, the header is stuck.
+    const sentinel = document.createElement("span");
+    sentinel.className = "cam-sentinel";
+    sentinel.setAttribute("aria-hidden", "true");
     const h = document.createElement("h3");
     h.className = "cam-country-title";
     const head = document.createElement("button");
@@ -1588,15 +1593,17 @@ function buildCamsPanel() {
     ul.className = "cam-rows";
     inner.append(bulkRow, ul);
     region.append(inner);
-    sec.append(h, region);
+    sec.append(sentinel, h, region);
+    g.sentinel = sentinel;
     Object.assign(g, { section: sec, head, dot, count, bulk, region });
     frag.append(sec);
-    for (const cam of g.cams) ul.append(buildCamRow(cam));
+    for (const cam of g.cams) ul.append(buildCamRow(cam, true));
   });
   el.camsList.append(frag);
 }
 
-function buildCamRow(cam) {
+// inSection: the row sits under its country header, so its subtitle is the type only.
+function buildCamRow(cam, inSection = false) {
   const li = document.createElement("li");
   li.className = "cam-row";
   li.dataset.id = cam.id;
@@ -1621,7 +1628,7 @@ function buildCamRow(cam) {
   sub.className = "cam-sub";
   const where = document.createElement("span");
   where.className = "cam-where";
-  where.textContent = [cam.country, capital(cam.type)].filter(Boolean).join(" · ");
+  where.textContent = [inSection ? "" : cam.country, capital(cam.type)].filter(Boolean).join(" · ");
   // Now showing is spoken only (the row's soft highlight shows it); Unavailable right now is a short line.
   const badge = document.createElement("span");
   badge.className = "badge";
@@ -1645,7 +1652,7 @@ function buildCamRow(cam) {
   time.append(clock, sleep);
   check.append(box, info, time);
 
-  // A 32px play circle (icon only) inside a 44px tap target. It plays the cam now and never changes the check.
+  // A 32px play circle (icon only) inside a 48dp tap target. It plays the cam now and never changes the check.
   const play = document.createElement("button");
   play.type = "button";
   play.className = "cam-play";
@@ -1880,6 +1887,44 @@ function setBackgroundInert(on) {
   [el.bar, el.top, el.chromeToggle, el.notice, el.tapMusic, el.start].forEach((n) => n && (n.inert = on));
 }
 
+// Sticky country headers: a section is "stuck" (is-stuck) only while its header is really pinned: the section top is
+// above the pin line (the bottom of the pinned search) and its bottom is still below it. At most one section is stuck.
+// CSS squares the corners, makes the header opaque and draws the hairline only then. Computed from the section's own
+// box on every scroll (plus an IntersectionObserver on the sentinels), so a programmatic scrollTop = 0 always clears it.
+let stuckIO = null;
+let stuckOff = null;
+function updateStuckHeaders() {
+  const search = el.camsSearch && el.camsSearch.closest(".cams-search");
+  const secs = [...el.camsList.querySelectorAll(".cam-country")];
+  if (!search || !secs.length) return;
+  const pin = search.getBoundingClientRect().bottom;
+  let stuck = null;
+  for (const s of secs) {
+    const r = s.getBoundingClientRect();
+    const t = s.querySelector(".cam-country-title");
+    // Pinned: the section top is above the pin line, the title sits on it (it slides up under the search once the
+    // section's end is closer than a title height, and then it is no longer stuck), and the section still reaches it.
+    if (r.top < pin - 0.5 && r.bottom > pin + 0.5 && t && Math.abs(t.getBoundingClientRect().top - pin) <= 1) stuck = s;
+  }
+  for (const s of secs) s.classList.toggle("is-stuck", s === stuck);
+}
+function watchStuckHeaders() {
+  if (stuckIO) stuckIO.disconnect();
+  if (stuckOff) stuckOff();
+  stuckIO = stuckOff = null;
+  const body = $(".panel-body", el.panels.cams);
+  const search = el.camsSearch.closest(".cams-search");
+  if (!body || !search) return;
+  body.addEventListener("scroll", updateStuckHeaders, { passive: true });
+  stuckOff = () => body.removeEventListener("scroll", updateStuckHeaders);
+  if (typeof IntersectionObserver === "function" && camsUI.groups) {
+    const pin = Math.round(search.getBoundingClientRect().height);
+    stuckIO = new IntersectionObserver(updateStuckHeaders, { root: body, rootMargin: `-${pin}px 0px 0px 0px`, threshold: 0 });
+    for (const g of camsUI.groups) stuckIO.observe(g.sentinel);
+  }
+  updateStuckHeaders();
+}
+
 function openPanel(name, opener) {
   if (state.openPanel === name) {
     closePanel();
@@ -1906,6 +1951,7 @@ function openPanel(name, opener) {
   render();
   if (name === "tv") renderTvQr();
   if (name === "phone") renderPhoneQr();
+  if (name === "cams") watchStuckHeaders();
   const target = $(FOCUSABLE, panel);
   if (name === "cams" || name === "music") {
     // The Mix sheet opens at the top (focus Done, no scroll to the Playing mix). The Cams sheet scrolls the Playing
@@ -1914,6 +1960,7 @@ function openPanel(name, opener) {
     if (name === "cams") {
       const cur = $(".cam-row.is-current", el.camsList);
       if (cur) quietly(() => cur.scrollIntoView({ block: "center" }));
+      updateStuckHeaders();
     }
     if (target) target.focus({ preventScroll: true });
   } else if (target) {
